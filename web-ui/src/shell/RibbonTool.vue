@@ -26,11 +26,14 @@ onUnmounted(() => clearTimeout(tipTimer));
 const on = computed(() => !notYet.value && (vue.value
   ? (props.tool.page ? currentPage.value === props.tool.page : props.tool.panel ? currentPanel.value === props.tool.panel : currentDialog.value === props.tool.dialog)
   : state.value?.pressed === true));
-const off = computed(() => !notYet.value && !vue.value && !state.value?.enabled);
+// VIEWSHEET: a dialog tool with an action is as enabled as its action (the core says when: a sheet shown, a plan shown).
+const gated = computed(() => !!props.tool.dialog && props.tool.action !== null);
+const off = computed(() => !notYet.value && (!vue.value || gated.value) && !state.value?.enabled);
 // Before the first `actions` refresh the list is empty: unavailable, not missing.
 const missing = computed(() => vue.value ? undefined :
   props.tool.action === null ? "action" : state.value || !actions.value.length ? undefined : `action ${props.tool.action}`);
-const title = computed(() => (notYet.value ? t("na.tooltip", { name: t(props.tool.key) }) : undefined));
+const title = computed(() => (notYet.value ? t("na.tooltip", { name: t(props.tool.key) })
+  : off.value && props.tool.offTip ? `${t(props.tool.key)}: ${t(props.tool.offTip)}` : undefined)); // VIEWSHEET: why it is off
 
 // ---- KEY1 ---- the tooltip: the tool's name and its key (the key table's, Rust's), when it has one.
 const keyTip = computed(() => { const k = shortcutFor(props.tool.action); return k ? `${t(props.tool.key)} (${k})` : undefined; });
@@ -43,7 +46,7 @@ const longTip = computed(() => {
 // ---- end KEY1 ----
 
 function run(): void {
-  if (notYet.value) { // the tooltip, shown on a click too (a touch screen has no hover)
+  if (notYet.value || (off.value && props.tool.offTip)) { // the tooltip, shown on a click too (a touch screen has no hover); VIEWSHEET: the reason it is off
     tip.value = true;
     clearTimeout(tipTimer);
     tipTimer = window.setTimeout(() => (tip.value = false), 2500);
@@ -51,7 +54,10 @@ function run(): void {
   }
   if (props.tool.page) send(on.value ? { do: "back" } : { do: "showPage", page: props.tool.page });
   else if (props.tool.panel) currentPanel.value = on.value ? null : props.tool.panel;
-  else if (props.tool.dialog) currentDialog.value = props.tool.dialog;
+  else if (props.tool.dialog) { // VIEWSHEET: the action first (the palette's recent list), then the dialog
+    if (gated.value && props.tool.action) runAction(props.tool.action);
+    currentDialog.value = on.value ? null : props.tool.dialog;
+  }
   else if (props.tool.action && !off.value) runAction(props.tool.action);
 }
 </script>
@@ -65,7 +71,7 @@ function run(): void {
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
          stroke-linejoin="round" aria-hidden="true" v-html="tool.icon" />
     <span>{{ t(tool.key) }}</span>
-    <span v-if="tip" class="tip" role="tooltip" data-bb="not-yet-tip">{{ title }}</span>
+    <span v-if="tip && title" class="tip" role="tooltip" :data-bb="notYet ? 'not-yet-tip' : 'off-tip'">{{ title }}</span>
   </component>
 </template>
 

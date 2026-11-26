@@ -55,6 +55,7 @@ interface Exports {
   call(op: number, on: number, np: number, nn: number, bp: number, bn: number, res: number): number;
   change_json(res: number): number;
   host_mesh(flags: number, res: number): number;
+  host_proxies(budget: number, res: number): number; // 3D2
   host_saved(res: number): number;
   host_saved_path(res: number): number;
   host_open(flags: number, np: number, nn: number, bp: number, bn: number, res: number): number;
@@ -101,6 +102,19 @@ export interface CcoreClient {
   bytes(op: string, name: string, body: string): Promise<Uint8Array>;
   on_change(cb: (json: string) => void): void;
   default: () => Promise<unknown>;
+}
+
+/** DEAD1 (ADR 0074): a call the core refused (status 400), as the native host's answer shows in the
+ *  browser's console and network log: told on the console (info level: a refusal is often the
+ *  expected answer to a value typed) and kept, the last 100, in `window.__bbRefused` for the tools
+ *  (ccore/tools/ux.mjs, the lab tests). */
+export interface Refusal { op: string; name: string; status: number; text: string; at: number }
+function refused(op: string, name: string | null, status: number, text: string): void {
+  const w = window as unknown as { __bbRefused?: Refusal[] };
+  const list = (w.__bbRefused ??= []);
+  list.push({ op, name: name ?? "-", status, text: text.slice(0, 300), at: performance.now() });
+  if (list.length > 100) list.splice(0, list.length - 100);
+  console.info(`ccore: ${op} ${name ?? "-"} refused (${status}): ${text.slice(0, 300)}`);
 }
 
 let module: { X: Exports; res: number } | null = null;
@@ -161,7 +175,7 @@ async function warm(X: Exports, steps: OpenSteps = {}): Promise<void> {
   try { run(X.call.bind(X), [enc.encode("query"), enc.encode("status"), enc.encode("{}")]); } catch { /* asked again by the page */ }
   await yieldTask();
   steps.step?.("mesh");
-  try { run(X.host_mesh.bind(X), [], [0]); } catch { /* asked again by the viewport */ }
+  try { run(X.host_mesh.bind(X), [], [2 | 4]); } catch { /* asked again by the viewport (3D1: BMSH version 3; 3D2: bit 2, no copy) */ }
   await yieldTask();
 }
 // ---- end PERF2 ----
@@ -172,12 +186,20 @@ function hostLog(): void {
   for (const line of t.split("\n")) if (line) console.info(line);
 }
 
-/** The BMSH bytes of the session's scene (native GET /mesh) and the revision they show. */
+/** The BMSH bytes of the session's scene (native GET /mesh?shapes=1: version 3) and the revision they show. */
 export function ccoreMesh(): { bytes: ArrayBuffer; rev: number } {
   if (!module) throw new Error("ccore: not loaded");
-  const r = run(module.X.host_mesh.bind(module.X), [], [0]);
+  const r = run(module.X.host_mesh.bind(module.X), [], [2]); // 3D1 (ADR 0078): BMSH version 3, shapes once
   if (r.status !== 200) throw new Error(`mesh: ${r.status} ${dec.decode(r.bytes)}`);
   return { bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
+}
+
+/** 3D2 (ADR 0078): the HLOD proxies in steps (host_proxies, session/mesh.h cc_mesh_proxies): `budget`
+ *  triangles more a call; 202 while building, then 200 with the BPRX bytes (ccore/src/hlod.h). */
+export function ccoreProxies(budget: number): { status: number; bytes: ArrayBuffer; rev: number } {
+  if (!module) throw new Error("ccore: not loaded");
+  const r = run(module.X.host_proxies.bind(module.X), [], [budget]);
+  return { status: r.status, bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
 }
 
 /** Opens a file's bytes in the session: .bimble v1/v2 and .json as an editable model, .ifc and
@@ -256,7 +278,7 @@ export async function ccoreWarmMesh(): Promise<void> {
   if (!module) return;
   await yieldTask();
   const { X } = module;
-  try { run(X.host_mesh.bind(X), [], [0]); } catch { /* asked again by the viewport */ }
+  try { run(X.host_mesh.bind(X), [], [2 | 4]); } catch { /* asked again by the viewport (3D1: BMSH version 3; 3D2: no copy) */ }
 }
 
 /** The bytes the module wrote last and their file name (host_saved, host_saved_path). */
@@ -406,7 +428,10 @@ export async function ccoreClient(params: URLSearchParams, steps: OpenSteps = {}
     hostLog();
     emit();
     const t = dec.decode(r.bytes);
-    if (r.status !== 200) throw t || `ccore ${op}: ${r.status}`; // as wasm: the error text as a string
+    if (r.status !== 200) { // as wasm: the error text as a string
+      refused(op, name, r.status, t); // DEAD1: seen, as the native host's 400 is (the browser logs it)
+      throw t || `ccore ${op}: ${r.status}`;
+    }
     return t;
   };
   callHost = call;

@@ -27,16 +27,21 @@ static double round_rs(double x) {
     return t;
 }
 
-int cc_georef_is_default(const cc_georef *g) {
-    return g->rotation_deg == 0.0 && !g->has_crs && g->east_m == 0.0 && g->north_m == 0.0 && g->height_m == 0.0 &&
-           g->map_rotation_deg == 0.0;
+int cc_georef_places(const cc_georef *g) {
+    return !(g->rotation_deg == 0.0 && !g->has_crs && g->east_m == 0.0 && g->north_m == 0.0 && g->height_m == 0.0 &&
+             g->map_rotation_deg == 0.0);
 }
+
+int cc_georef_is_default(const cc_georef *g) { return !cc_georef_places(g) && !g->has_survey_point; }
 
 int cc_georef_eq(const cc_georef *a, const cc_georef *b) {
     return a->rotation_deg == b->rotation_deg && a->has_crs == b->has_crs &&
            (!a->has_crs || (a->crs.n == b->crs.n && (!a->crs.n || !memcmp(a->crs.p, b->crs.p, a->crs.n)))) &&
            a->east_m == b->east_m && a->north_m == b->north_m && a->height_m == b->height_m &&
-           a->map_rotation_deg == b->map_rotation_deg;
+           a->map_rotation_deg == b->map_rotation_deg && a->has_survey_point == b->has_survey_point &&
+           (!a->has_survey_point || (a->survey_point_mm[0] == b->survey_point_mm[0] &&
+                                     a->survey_point_mm[1] == b->survey_point_mm[1] &&
+                                     a->survey_point_mm[2] == b->survey_point_mm[2]));
 }
 
 static int is_lv95(const cc_georef *g) {
@@ -374,6 +379,7 @@ int cc_georef_text(Buf *b, const cc_georef *g, const double w[3], cc_coords_targ
 /* ---- file form ---- */
 
 static const char *const F[] = {"rotation_deg", "crs", "east_m", "north_m", "height_m", "map_rotation_deg"};
+#define SURVEY_POINT "survey_point_mm" /* SETOUT: the C core's seventh key (ADR 0075) */
 
 static void json_escape_(Buf *b, cc_str s) {
     JsonW w;
@@ -394,12 +400,22 @@ void cc_georef_json(Buf *b, const cc_georef *g) {
         if (i == 1) json_escape_(b, g->crs);
         else fmt_f64_json(b, v[i]);
     }
+    if (g->has_survey_point) { /* SETOUT: after Rust's six */
+        if (!first) buf_putc(b, ',');
+        buf_puts(b, "\"" SURVEY_POINT "\":[");
+        for (int k = 0; k < 3; k++) {
+            if (k) buf_putc(b, ',');
+            fmt_f64_json(b, g->survey_point_mm[k]);
+        }
+        buf_putc(b, ']');
+    }
     buf_putc(b, '}');
 }
 
 size_t cc_georef_nfields(const cc_georef *g) {
     return (size_t)(g->rotation_deg != 0.0) + (size_t)(g->has_crs != 0) + (size_t)(g->east_m != 0.0) +
-           (size_t)(g->north_m != 0.0) + (size_t)(g->height_m != 0.0) + (size_t)(g->map_rotation_deg != 0.0);
+           (size_t)(g->north_m != 0.0) + (size_t)(g->height_m != 0.0) + (size_t)(g->map_rotation_deg != 0.0) +
+           (size_t)(g->has_survey_point != 0);
 }
 
 void cc_em_georef(cc_em *e, const cc_georef *g) {
@@ -416,6 +432,16 @@ void cc_em_georef(cc_em *e, const cc_georef *g) {
             cb_text(e->c, F[i], strlen(F[i]));
             if (i == 1) cb_text(e->c, g->crs.n ? g->crs.p : "", g->crs.n);
             else cb_f64(e->c, v[i]);
+        }
+    }
+    if (g->has_survey_point) { /* SETOUT (ADR 0075): after Rust's six */
+        if (e->j) {
+            jw_key(e->j, SURVEY_POINT), jw_arr_begin(e->j);
+            for (int k = 0; k < 3; k++) jw_f64(e->j, g->survey_point_mm[k]);
+            jw_arr_end(e->j);
+        } else {
+            cb_text(e->c, SURVEY_POINT, strlen(SURVEY_POINT)), cb_head(e->c, CB_ARRAY, 3);
+            for (int k = 0; k < 3; k++) cb_f64(e->c, g->survey_point_mm[k]);
         }
     }
     if (e->j) jw_obj_end(e->j);
@@ -457,7 +483,7 @@ static int type_err(cc_vd *d, const JrVal *v, const char *expected) {
 }
 
 int cc_vd_georef(cc_vd *d, const JrVal *v, const char *skip, cc_georef *out) {
-    const JrVal *f[6] = {0};
+    const JrVal *f[6] = {0}, *sp = NULL;
     memset(out, 0, sizeof *out);
     if (v->type != JR_OBJ) return type_err(d, v, "struct Georef");
     for (size_t j = 0; j < v->n; j++) {
@@ -466,7 +492,16 @@ int cc_vd_georef(cc_vd *d, const JrVal *v, const char *skip, cc_georef *out) {
         int i = 0;
         while (i < 6 && !jr_key_is(mb, F[i])) i++;
         if (d->failed) return -1;
-        if (i == 6) { /* deny_unknown_fields */
+        if (i == 6 && jr_key_is(mb, SURVEY_POINT)) { /* SETOUT: the C core's seventh key */
+            if (sp) {
+                buf_clear(&d->msg);
+                buf_puts(&d->msg, "duplicate field `" SURVEY_POINT "`");
+                return vfail(d, mb->val.off);
+            }
+            sp = &mb->val;
+            continue;
+        }
+        if (i == 6) { /* deny_unknown_fields (Rust's six named, as Rust says it) */
             buf_clear(&d->msg);
             buf_puts(&d->msg, "unknown field `");
             buf_append(&d->msg, mb->key, mb->key_n < 200 ? mb->key_n : 200);
@@ -505,19 +540,44 @@ int cc_vd_georef(cc_vd *d, const JrVal *v, const char *skip, cc_georef *out) {
         }
         *num[i] = f[i]->num;
     }
+    if (sp && sp->type != JR_NULL) { /* SETOUT: [x, y, z], finite, within 1e7 mm (cc_georef_validate) */
+        if (sp->type != JR_ARR) return type_err(d, sp, "an array of 3 numbers");
+        if (sp->n != 3) {
+            buf_clear(&d->msg), buf_puts(&d->msg, "survey_point_mm: expected 3 numbers");
+            return vfail(d, sp->off);
+        }
+        for (int k = 0; k < 3; k++) {
+            const JrVal *x = &sp->items[k];
+            if (x->type != JR_NUM) return type_err(d, x, "f64");
+            if (!finite_(x->num)) {
+                buf_clear(&d->msg), buf_puts(&d->msg, "number out of range");
+                return vfail(d, x->off);
+            }
+            out->survey_point_mm[k] = x->num;
+        }
+        out->has_survey_point = 1;
+    }
     return 0;
 }
 
 int cc_georef_validate(const cc_georef *g, Buf *why) {
-    if (finite_(g->rotation_deg) && finite_(g->east_m) && finite_(g->north_m) && finite_(g->height_m) &&
-        finite_(g->map_rotation_deg))
-        return 0;
-    if (why) buf_puts(why, "georef: non-finite value");
-    return -1;
+    if (!(finite_(g->rotation_deg) && finite_(g->east_m) && finite_(g->north_m) && finite_(g->height_m) &&
+          finite_(g->map_rotation_deg))) {
+        if (why) buf_puts(why, "georef: non-finite value");
+        return -1;
+    }
+    if (g->has_survey_point) /* SETOUT: finite and within CC_SURVEY_POINT_MAX_MM, as grid axes */
+        for (int k = 0; k < 3; k++)
+            if (!finite_(g->survey_point_mm[k]) || fabs_(g->survey_point_mm[k]) > CC_SURVEY_POINT_MAX_MM) {
+                if (why) buf_puts(why, "georef: survey_point_mm out of range (|x| <= 1e7 mm)");
+                return -1;
+            }
+    return 0;
 }
 
 void cc_georef_canonical(cc_georef *g) {
     g->rotation_deg += 0.0, g->east_m += 0.0, g->north_m += 0.0, g->height_m += 0.0, g->map_rotation_deg += 0.0;
+    for (int k = 0; k < 3; k++) g->survey_point_mm[k] += 0.0;
 }
 
 int cc_georef_dup(Arena *a, cc_georef *g) {
@@ -531,6 +591,13 @@ int cc_georef_dup(Arena *a, cc_georef *g) {
 
 /* ---- the verb georef_set (a C addition, verb_table.c) ---- */
 
+double cc_angle_norm_deg(double deg) {
+    if (!finite_(deg)) return deg;
+    while (deg > 180.0) deg -= 360.0;
+    while (deg <= -180.0) deg += 360.0;
+    return deg + 0.0;
+}
+
 static int vbad(Buf *err, const char *a, const char *b, const char *c) {
     buf_clear(err);
     buf_puts(err, "bad arguments: ");
@@ -541,18 +608,19 @@ static int vbad(Buf *err, const char *a, const char *b, const char *c) {
 }
 
 int cc_vh_georef_set(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
-    static const char *const A[] = {"clear", "crs", "east_m", "height_m", "map_rotation_deg", "north_m", "rotation_deg"};
-    const JrVal *f[7] = {0};
+    static const char *const A[] = {"clear",   "crs",          "east_m",         "height_m",
+                                    "map_rotation_deg", "north_m", "rotation_deg", "survey_point_mm"};
+    const JrVal *f[8] = {0};
     if (args->type != JR_OBJ) return vbad(err, "expected an object", 0, 0);
     for (size_t j = 0; j < args->n; j++) {
         const JrMember *mb = &args->members[j];
         int i = 0;
-        while (i < 7 && !jr_key_is(mb, A[i])) i++;
-        if (i == 7) {
+        while (i < 8 && !jr_key_is(mb, A[i])) i++;
+        if (i == 8) {
             vbad(err, "unknown field `", 0, 0);
             buf_append(err, mb->key, mb->key_n < 200 ? mb->key_n : 200);
             buf_puts(err, "`, expected one of");
-            for (int k = 0; k < 7; k++) buf_puts(err, k ? ", `" : " `"), buf_puts(err, A[k]), buf_putc(err, '`');
+            for (int k = 0; k < 8; k++) buf_puts(err, k ? ", `" : " `"), buf_puts(err, A[k]), buf_putc(err, '`');
             return -1;
         }
         f[i] = mb->val.type == JR_NULL ? NULL : &mb->val; /* the last of equal keys wins; null: absent */
@@ -591,6 +659,22 @@ int cc_vh_georef_set(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err)
             return -1;
         }
         *to[i] = v->num + 0.0;
+    }
+    /* SETOUT (ADR 0075): the angles in (-180, 180], one value per direction */
+    g.rotation_deg = cc_angle_norm_deg(g.rotation_deg), g.map_rotation_deg = cc_angle_norm_deg(g.map_rotation_deg);
+    if (f[7]) { /* survey_point_mm: [x, y, z] world mm sets it, [] removes it */
+        const JrVal *v = f[7];
+        if (v->type != JR_ARR || (v->n != 0 && v->n != 3))
+            return vbad(err, "`survey_point_mm`: expected [x, y, z] (mm) or [] to remove it", 0, 0);
+        g.has_survey_point = v->n == 3;
+        for (size_t k = 0; k < 3; k++) {
+            g.survey_point_mm[k] = 0.0;
+            if (v->n != 3) continue;
+            if (v->items[k].type != JR_NUM) return vbad(err, "`survey_point_mm`: expected numbers", 0, 0);
+            double x = v->items[k].num;
+            if (!finite_(x) || fabs_(x) > CC_SURVEY_POINT_MAX_MM) return vbad(err, "`survey_point_mm`: at most 1e7 mm", 0, 0);
+            g.survey_point_mm[k] = x + 0.0;
+        }
     }
     if (cc_georef_eq(&g, &m->georef)) return 0; /* nothing changes: no command */
     cc_command *c = cc_cmds_push(l, CC_CMD_SET_GEOREF);

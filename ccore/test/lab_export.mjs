@@ -159,6 +159,11 @@ async function exportOn(cdp, mode) {
   check(`${mode}: the Font choice, Helvetica on by default`, fontUi?.h === true, JSON.stringify(fontUi));
   if (mode === "native") check("native: Roboto offered (the dev folder has the files)", fontUi?.r === true && fontUi.note === "", JSON.stringify(fontUi));
   else check("wasm: Roboto disabled, with where to put the files", fontUi?.r === false && fontUi.note.includes("Roboto-Regular.ttf"), JSON.stringify(fontUi));
+  // DEAD1: every disabled choice of the dialog says why: "not available yet" (data-not-yet and its tooltip), Roboto where its files go
+  const mute = await evalJs(`[...document.querySelectorAll('[data-bb=export] button:disabled, [data-bb=export] input:disabled')]
+    .filter((e) => e.dataset.bb !== 'export-go' && e.dataset.bb !== 'export-one-pdf' && !(e.title || '').trim()).map((e) => e.textContent.trim() || e.id || e.outerHTML.slice(0, 60))`);
+  const ny = await evalJs("document.querySelectorAll('[data-bb=export] [data-not-yet]').length");
+  check(`${mode}: every disabled choice says why (DXF, Printer, Revision B only, file names, folder: not available yet) (DEAD1)`, mute.length === 0 && ny >= 6, JSON.stringify({ mute, ny }));
 
   /** Export with the font chosen now, into a folder of its own: the PDF's bytes. */
   const exportPdf = async (tag) => {

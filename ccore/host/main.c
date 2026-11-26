@@ -48,6 +48,7 @@
 #include <string.h>
 #ifndef _WIN32
 #include <sys/wait.h>
+#include <sys/resource.h> /* LINKF: getrusage */
 #endif
 #include <time.h>
 #include <unistd.h>
@@ -58,6 +59,7 @@
 #include "static.h"
 #include "fs.h"            /* FS1 */
 #include "settings_file.h" /* FS1 */
+#include "link_cache.h"    /* LINKF: link-convert */
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h> /* _NSGetExecutablePath: macOS has no /proc/self/exe */
@@ -298,6 +300,12 @@ static int serve(unsigned port, Serve *sv) {
         fprintf(stderr, "bimble-ccore: out of memory\n");
         return 1;
     }
+    { /* LINKF: BIMBLE_LINK_CACHE_MIN (bytes): IFC links from this size get a cache and a thread (links.h) */
+        const char *cm = cc_host_getenv("BIMBLE_LINK_CACHE_MIN");
+        if (cm && *cm) ses->link_cache_min = strtoull(cm, NULL, 10);
+        const char *cb = cc_host_getenv("BIMBLE_LINK_CACHE_BESIDE"); /* "0": only the cache folder */
+        ses->link_no_beside = cb && !strcmp(cb, "0");
+    }
     const char *model = sv->model;
     if (model && *model) {
         cc_error err;
@@ -433,6 +441,68 @@ static char **utf8_argv(int *argc) {
 }
 #endif
 
+/* LINKF: bimble-ccore link-convert [--cache-dir DIR] [--keep] FILE...: each file through a link's
+ * conversion (session/link_cache.h), one at a time, in the order given; with --cache-dir the
+ * caches go only there (nothing written beside the files). One line per file: bytes, ms, elements,
+ * shapes, triangles, cache bytes, from the cache or read. --keep: every scene kept until the end,
+ * then the totals (all of them loaded together). Exit 1 when one failed. */
+static int link_convert_main(int argc, char **argv) {
+    const cc_platform *pf = cc_platform_native();
+    int keep = 0, no_beside = 0, bad = 0;
+    int i = 1;
+    for (; i < argc && !strncmp(argv[i], "--", 2); i++) {
+        if (!strcmp(argv[i], "--keep")) keep = 1;
+        else if (!strcmp(argv[i], "--cache-dir") && i + 1 < argc) {
+#ifndef _WIN32
+            setenv("BIMBLE_CACHE_DIR", argv[++i], 1);
+#else
+            _putenv_s("BIMBLE_CACHE_DIR", argv[++i]);
+#endif
+            no_beside = 1;
+        } else {
+            fprintf(stderr, "usage: bimble-ccore link-convert [--cache-dir DIR] [--keep] FILE...\n");
+            return 2;
+        }
+    }
+    cc_link_job **kept = calloc((size_t)argc, sizeof *kept);
+    if (!kept) return 1;
+    double t0 = pf->now_ms(pf->ctx);
+    uint64_t te = 0, tt = 0, ts = 0;
+    for (int k = 0; i < argc; i++, k++) {
+        cc_link_job *j = cc_link_job_new(pf, argv[i]);
+        if (!j) return 1;
+        j->cache_min = 0, j->no_beside = no_beside;
+        cc_link_job_run(j);
+        if (j->rc) {
+            printf("file %d: %s\n", k + 1, j->rc == CC_JOB_REFUSED ? "refused" : "failed"), bad = 1;
+            fprintf(stderr, "%s\n", j->err.msg);
+            cc_link_job_free(j);
+            continue;
+        }
+        size_t ne = j->vf ? j->vf->nelements : j->ifc->scene.nelements, ns = j->vf ? j->vf->nshapes : j->ifc->scene.nshapes;
+        uint64_t nt = 0; /* drawn: each copy counted */
+        for (size_t e = 0; j->vf && e < ne; e++) nt += cc_viewfile_local_mesh(j->vf, e)->ni / 3;
+        if (!j->vf) nt = j->ifc->triangles;
+        printf("file %d: bytes %llu ms %.0f elements %zu shapes %zu triangles %llu cache_bytes %llu %s\n", k + 1,
+               (unsigned long long)j->bytes, j->ms, ne, ns, (unsigned long long)nt, (unsigned long long)j->cache_bytes,
+               j->from_cache ? "from-cache" : "read");
+        fflush(stdout);
+        te += ne, ts += ns, tt += nt;
+        if (keep) kept[k] = j;
+        else cc_link_job_free(j);
+    }
+    if (keep)
+        printf("all: ms %.0f elements %llu shapes %llu triangles %llu\n", pf->now_ms(pf->ctx) - t0, (unsigned long long)te,
+               (unsigned long long)ts, (unsigned long long)tt);
+#ifndef _WIN32
+    struct rusage ru; /* the peak resident memory of this process (kB on Linux) */
+    if (!getrusage(RUSAGE_SELF, &ru)) printf("peak_rss_kB %ld\n", (long)ru.ru_maxrss);
+#endif
+    for (int k = 0; k < argc; k++) cc_link_job_free(kept[k]);
+    free(kept);
+    return bad;
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     {
@@ -446,6 +516,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "open")) return open_main(argv[0], argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "link-convert")) return link_convert_main(argc - 1, argv + 1); /* LINKF */
     /* Flags first, then the positional port and model. */
     Serve sv;
     memset(&sv, 0, sizeof sv);

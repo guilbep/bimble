@@ -161,9 +161,11 @@ static const char *const KINDS[] = {"plan", "ceiling", "section", "three_d"};
 static const char *const FACINGS[] = {"north", "south", "east", "west"}; /* cc_facing order */
 
 int cc_vh_view_add(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
-    static const char *const F[] = {"kind", "storey", "facing", "origin", "from", "name"};
-    const JrVal *f[6];
-    if (args_of(args, F, 6, f, err)) return -1;
+    /* VIEWSHEET (ADR 0076): `scale` and a section's `depth_mm` at creation, so the New view dialog
+     * and the section tool are one verb, one undo step. */
+    static const char *const F[] = {"kind", "storey", "facing", "origin", "from", "name", "scale", "depth_mm"};
+    const JrVal *f[8];
+    if (args_of(args, F, 8, f, err)) return -1;
     Arena *a = &l->arena;
     cc_view v;
     memset(&v, 0, sizeof v);
@@ -202,10 +204,18 @@ int cc_vh_view_add(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
             v.look = k == 1 ? CC_LOOK_UP : CC_LOOK_DOWN;
             v.name = cat(a, k == 1 ? "Ceiling " : "Plan ", hit->name, " (copy)");
             v.storey = cat(a, "", hit->key, "");
+            /* DEAD1 (DEVIATIONS 35): Rust's default cut (1200 mm, a ceiling 2300 mm above the level)
+             * lies above the level above on a storey lower than that (Fondations, 800 mm): Rust's
+             * own check then refuses its default. There the cut goes half way up the storey; every
+             * other default is Rust's. The level above as view.rs resolve finds it (> level + 1 mm). */
+            double cut = k == 1 ? 2300.0 : 1200.0, above = 1.0 / 0.0;
+            for (size_t i = 0; i < n; i++)
+                if (lv[i].elevation > hit->elevation + 1.0 && lv[i].elevation < above) above = lv[i].elevation;
+            if (hit->elevation + cut > above) cut = (above - hit->elevation) / 2.0;
             arena_free(&t);
             /* ViewRange::default_for */
             v.range[CC_RANGE_TOP] = (cc_range_plane){CC_LEVEL_ABOVE, 0.0};
-            v.range[CC_RANGE_CUT] = (cc_range_plane){CC_LEVEL_ASSOCIATED, k == 1 ? 2300.0 : 1200.0};
+            v.range[CC_RANGE_CUT] = (cc_range_plane){CC_LEVEL_ASSOCIATED, cut};
             v.range[CC_RANGE_BOTTOM] = (cc_range_plane){CC_LEVEL_ASSOCIATED, 0.0};
             v.range[CC_RANGE_DEPTH] = (cc_range_plane){k == 1 ? CC_LEVEL_ABOVE : CC_LEVEL_ASSOCIATED, 0.0};
         } else if (k == 2) { /* views.rs new_section */
@@ -248,6 +258,18 @@ int cc_vh_view_add(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
     }
     if (!v.name.p) return oom(err);
     if (f[5] && a_text(f[5], "name", &v.name, err)) return -1;
+    if (f[6]) { /* VIEWSHEET: 1:N, as set_view (view::validate: 1..5000) */
+        if (f[6]->type != JR_NUM || !(f[6]->num >= 1 && f[6]->num <= 5000) || f[6]->num != (double)(uint32_t)f[6]->num)
+            return bad(err, "`scale`: expected a whole number 1 to 5000 (1:N)", 0, 0);
+        v.scale = (uint32_t)f[6]->num;
+    }
+    if (f[7]) { /* VIEWSHEET: a section's depth beyond the cut, as view_edit */
+        if (v.kind != CC_VIEW_SECTION) return bad(err, "`depth_mm` belongs to a section", 0, 0);
+        double d;
+        if (a_mm(f[7], "depth_mm", &d, err)) return -1;
+        if (d < 0) return bad(err, "`depth_mm`: expected 0 (all) or more", 0, 0);
+        v.depth_mm = d + 0.0;
+    }
     new_gid(&v.id);
     return push_view(m, &v, 1, l, err);
 }

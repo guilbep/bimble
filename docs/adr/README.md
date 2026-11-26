@@ -6,6 +6,12 @@ a decision that changes an old one says which one it supersedes.
 
 | # | Decision | Status |
 |---|---|---|
+
+
+
+
+
+```
 | [0001](0001-iteration-1-stack.md) | Rust core, own wgpu renderer, IFC-typed native format | Accepted |
 | [0002](0002-pure-rust-ifc-reader-for-display.md) | Pure-Rust IFC reader for display; IfcOpenShell as reference | Accepted |
 | [0003](0003-scope-and-data-model.md) | Structural scope; IFC as the model; `.bimble` as a superset; `.b3d` cache | Accepted |
@@ -50,24 +56,6 @@ a decision that changes an old one says which one it supersedes.
 | [0042](0042-every-element-and-a-binary-bimble.md) | Convert every element (others as `IfcBuildingElementProxy` keeping their class name, meshes relative to their first point); each shape once (mapped copies share a mesh in memory, file, scene and history; history objects gzipped); `.bimble` v2 = gzip of CBOR, JSON v1 still read | Accepted |
 | [0043](0043-installers-unsigned-for-now.md) | Installers on every system (.dmg, .msi, .deb, .rpm, AppImage) with cargo-packager, unsigned for now (macOS ad hoc); a Homebrew tap in this repository | Accepted |
 | [0044](0044-hide-isolate-and-home.md) | Hide and isolate for now or in a view (by GlobalId), Reveal hidden, Ctrl/Cmd+click selection, right-click menu; Home with recent files; who you are in Settings until a server; tabs: close others or all (then Home); a family split by material, moves saved in the standards (amended 11 Nov) | Accepted |
-
-Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
-
-## Template
-
-```markdown
-# ADR NNNN — Title
-
-- Status: Proposed | Accepted | Superseded by NNNN (date)
-- Decided by: who, and on what basis
-- Reversal cost: low | medium | high
-
-## Context / Problem
-## Decision
-## Alternatives considered
-## Evidence
-## Revisit when
-```
 | [0045](0045-project-north-and-swiss-coordinates.md) | Project north by default (view Orientation: true north), from the IFC building's turn; coordinates in LV95 the Swiss way or WGS84; turned section boxes; 2D camera up and panning from the yaw | Accepted |
 | [0046](0046-model-and-on-paper-in-one-view.md) | One view, two pictures in its tab: Model (GPU, editing) and On paper (the PDF's items), selection on paper by a ray on the model; scale is the view's | Accepted |
 | [0047](0047-ifc2x3-export-and-schema-shown.md) | IFC2x3 export as Bimble's IFC4 written down (owner history, attributes, left out: material values, map conversion), both validated by IfcOpenShell; the schema shown next to the file name | Accepted |
@@ -97,3 +85,21 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 | [0071](0071-helvetica-default-and-weight-table.md) | The C core's PDF export is Helvetica by default (nothing embedded), Roboto optional and not shipped; a generated weight table per feature and file (`ccore/results/weight.md`); the release link drops unused code (`--gc-sections`: 3.67 → 2.23 MB) | Accepted |
 | [0072](0072-main-is-the-c-core.md) | `main` is the C core: no Rust on `main` (one revertible commit); Rust v0.19.0 stays on its tag and on the branch `oracle/rust` with the golden dumpers; the committed references are checked without Rust; CI on `main` is `ccore.yml`; Pages keeps the v0.19.0 lab at the root, the C lab from `main` under `/c/` | Accepted |
 | [0073](0073-pages-previews.md) | Pull request previews of `pages.yml` are served from the production origin and share its storage with the published labs: the risk and five options recorded, the choice left to the owner | Proposed |
+| [0074](0074-response-time-200-ms.md) | Every interaction of the lab answers within 200 ms (input event → first frame after the effect, wasm and native, 72 and 20,000 elements); what cannot shows progress within 200 ms and stays cancellable; the record is `ccore/results/ux.md` (`ccore/tools/ux.mjs`) | Accepted |
+| [0075](0075-setting-out-data.md) | Setting out: the base point is the world origin, a survey point in the georeference, project zero its height, one true north for views, box and tab; markers as session state; reference planes not served yet | Accepted |
+| [0076](0076-views-and-sheets-from-the-ribbon.md) | Views and sheets from the ribbon: New view… a dialog over `view_add` (scale in it, one step), Section a two-click tool in a plan snapped to four facings, Place view… a list placed at the sheet's centre, Revision… the sheet's one index (Rust's), text and dimension types as selects of the standards | Accepted |
+| [0077](0077-concrete-openings-and-foundations.md) | Concrete from the ribbon: pad footing under a column or free, strip footing along a wall, raft (IfcSlab BASESLAB) from the slab outline, openings and sleeves cut through walls and slabs (`set_openings`, refused outside the host or over another), PredefinedType as a property, delegated by Pierre | Accepted |
+| [0078](0078-3d-speed-in-the-c-lab.md) | 3D speed in the C lab: BMSH version 3 sends each shared shape once, copies of 4 or more drawn instanced, spatial batches culled against the view, Rust's moving budget (`moving_fps`); box tree, HLOD proxies and GPU occlusion left for later | Accepted |
+| [0079](0079-link-ifc-and-link-a-folder.md) | Link IFC and link a folder: a limit per format and "too large for this machine" from the free memory; a `.bimbleview` cache and a text report beside each IFC (its source checked by size, time and a hash of its ends); conversions one at a time, the smallest first, on the carrier's thread; `link_folder` in one undo step; positioning, pin, colour, unload stored (not yet drawn) | Accepted |
+## Alternatives considered
+## Context / Problem
+# ADR NNNN — Title
+## Decision
+## Evidence
+## Revisit when
+## Template
+- Decided by: who, and on what basis
+- Reversal cost: low | medium | high
+```markdown
+Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
+- Status: Proposed | Accepted | Superseded by NNNN (date)

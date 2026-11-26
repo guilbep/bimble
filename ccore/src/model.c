@@ -6,6 +6,8 @@
 #include "grid.h"
 #include "relation.h"
 #include "view_io.h"
+#include "math.h" /* CONC1: cc_hypot */
+#include "refplane.h" /* WAVE1B */
 
 const char cc_gid_alphabet[65] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
 
@@ -24,7 +26,7 @@ int cc_gid_valid(const char *s, size_t n) {
 int cc_gid_cmp(const cc_gid *a, const cc_gid *b) { return memcmp(a->c, b->c, 22); }
 
 static const char *const CLASS[] = {"IfcColumn", "IfcBeam", "IfcSlab", "IfcWall", "IfcFooting",
-                                    "IfcBuildingElementProxy", "IfcElementAssembly"};
+                                    "IfcBuildingElementProxy", "IfcElementAssembly", "IfcVirtualElement"};
 static const char *const CAT[] = {"concrete", "steel", "timber", "masonry",
                                   "insulation", "earth", "glass", "other"};
 static const char *const KIND[] = {"rect_column", "rect_beam", "slab", "wall",
@@ -355,6 +357,7 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
             return set_err(err, &b);
         }
     }
+    size_t nplanes = 0; /* WAVE1B: reference planes counted against CC_REFPLANES_MAX */
     for (size_t i = 0; i < m->nelements; i++) {
         const cc_element *e = &m->elements[i];
         const cc_gid *k = ekeys ? &ekeys[i] : &e->id;
@@ -390,7 +393,13 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
         if (placement_validate(&b, &e->placement)) return set_err(err, &b);
         /* ADR 0070: an assembly has no generator (its shape is its parts) and nothing to cut;
          * every other element has one. */
-        if (e->cls == CC_IFC_ELEMENT_ASSEMBLY || e->generator.kind == CC_GEN_NONE) {
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B: a reference plane (refplane.h) */
+            if (++nplanes > CC_REFPLANES_MAX) {
+                buf_puts(&b, "too many reference planes (1000)");
+                return set_err(err, &b);
+            }
+            if (cc_refplane_check(e, &b)) return set_err(err, &b);
+        } else if (e->cls == CC_IFC_ELEMENT_ASSEMBLY || e->generator.kind == CC_GEN_NONE) {
             if (e->cls != CC_IFC_ELEMENT_ASSEMBLY) {
                 buf_puts(&b, "missing generator");
                 return set_err(err, &b);
@@ -524,4 +533,45 @@ void cc_model_canonical(cc_model *m) {
     for (size_t i = 0; i < m->nsheets; i++) cc_sheet_canonical(&m->sheets[i]);
     for (size_t i = 0; i < m->ngrids; i++) cc_grid_canonical(&m->grids[i]);
     cc_georef_canonical(&m->georef);
+}
+
+/* ---- CONC1 (ADR 0077): what the Concrete tab's tools mark (model.h) ---- */
+static double fabs_c(double x) { return x < 0 ? -x : x; }
+int cc_opening_is_sleeve(const cc_opening *o, double *r) {
+    const cc_generator *g = &o->generator;
+    if (g->kind != CC_GEN_EXTRUDED_POLYGON || g->u.poly.nvoids || g->u.poly.outline.n != CC_SLEEVE_SIDES) return 0;
+    double r0 = cc_hypot(g->u.poly.outline.pts[0][0], g->u.poly.outline.pts[0][1]);
+    for (size_t i = 1; i < g->u.poly.outline.n; i++)
+        if (fabs_c(cc_hypot(g->u.poly.outline.pts[i][0], g->u.poly.outline.pts[i][1]) - r0) > 1e-6 * (1.0 + r0)) return 0;
+    if (r) *r = r0;
+    return r0 > 0;
+}
+
+const cc_str *cc_element_predefined(const cc_element *e) {
+    size_t kn = strlen(CC_PREDEFINED_KEY);
+    for (size_t i = 0; i < e->nproperties; i++)
+        if (e->properties[i].key.n == kn && !memcmp(e->properties[i].key.p, CC_PREDEFINED_KEY, kn))
+            return &e->properties[i].value;
+    return NULL;
+}
+/* ---- end CONC1 ---- */
+
+double cc_sleeve_volume_fix_m3(const cc_element *e) { /* WAVE1B (B1), model.h */
+    double t = e->generator.kind == CC_GEN_WALL ? e->generator.u.wall.thickness
+               : e->generator.kind == CC_GEN_SLAB ? e->generator.u.slab.thickness
+                                                   : 0.0;
+    double fix = 0.0, r;
+    for (size_t i = 0; t > 0.0 && i < e->nopenings; i++) {
+        const cc_opening *o = &e->openings[i];
+        if (!cc_opening_is_sleeve(o, &r)) continue;
+        const cc_loop *l = &o->generator.u.poly.outline;
+        double a2 = 0.0; /* shoelace: twice the polygon's area */
+        for (size_t k = 0; k < l->n; k++) {
+            const double *p = l->pts[k], *q = l->pts[(k + 1) % l->n];
+            a2 += p[0] * q[1] - q[0] * p[1];
+        }
+        double area = (a2 < 0 ? -a2 : a2) / 2.0;
+        fix += (area - 3.141592653589793 * r * r) * t / 1e9;
+    }
+    return fix + 0.0;
 }

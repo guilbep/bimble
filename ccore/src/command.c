@@ -8,6 +8,7 @@
 #include <string.h>
 #include "file.h"
 #include "grid.h"
+#include "refplane.h" /* WAVE1B */
 #include "relation.h"
 #include "view_io.h"
 
@@ -50,7 +51,8 @@ static const char *const OPS[] = {"add_storey",     "remove_storey",  "add_mater
                                   "add_view",       "remove_view",    "set_view",      "add_sheet",
                                   "remove_sheet",   "set_sheet",      "set_schedules", "add_relation",
                                   "remove_relation", "set_relation", "set_storey", "add_grid",
-                                  "remove_grid",    "set_grid",       "set_georef",    "set_material"};
+                                  "remove_grid",    "set_grid",       "set_georef",    "set_material",
+                                  "set_openings"};
 
 const char *cc_cmd_op_name(cc_cmd_op op) { return (unsigned)op < CC_CMD_COUNT ? OPS[op] : "?"; }
 
@@ -269,6 +271,12 @@ static int placement_validate(Buf *b, const cc_placement *p) {
 /* ADR 0070: an IfcElementAssembly has no generator (its shape is its parts) and no openings;
  * every other element has a generator of its own. The same texts as model.c. */
 static int assembly_check(Buf *b, cc_ifc_class cls, const cc_generator *g, size_t nopenings) {
+    if (cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B: a reference plane (refplane.h; its sizes: refplane_props) */
+        cc_element e;
+        memset(&e, 0, sizeof e);
+        e.cls = cls, e.generator = *g, e.nopenings = nopenings;
+        return cc_refplane_check(&e, b);
+    }
     if (cls != CC_IFC_ELEMENT_ASSEMBLY) {
         if (g->kind == CC_GEN_NONE) {
             buf_puts(b, "missing generator");
@@ -515,12 +523,16 @@ static int dup_material(Arena *a, cc_material *x) {
     return dup_str(a, &x->name) || dup_str(a, &x->props.source) ? -1 : 0;
 }
 
+static int dup_openings(Arena *a, cc_element *e);
 static int dup_element(Arena *a, cc_element *e) {
     canon_placement(&e->placement);
     if (dup_str(a, &e->name) || dup_generator(a, &e->generator) ||
         dup_kvs(a, &e->properties, e->nproperties))
         return -1;
     if (e->has_ifc_entity && dup_str(a, &e->ifc_entity)) return -1;
+    return dup_openings(a, e);
+}
+static int dup_openings(Arena *a, cc_element *e) {
     if (!e->nopenings) {
         e->openings = NULL;
         return 0;
@@ -547,6 +559,7 @@ static int dup_command(Arena *a, cc_command *c) {
     case CC_CMD_SET_MATERIAL: return dup_material(a, &c->material);
     case CC_CMD_ADD_ELEMENT: return dup_element(a, &c->element);
     case CC_CMD_SET_GENERATOR: return dup_generator(a, &c->generator);
+    case CC_CMD_SET_OPENINGS: return dup_openings(a, &c->element); /* CONC1 */
     case CC_CMD_SET_PLACEMENT: canon_placement(&c->placement); return 0;
     case CC_CMD_RENAME: return dup_str(a, &c->name);
     case CC_CMD_SET_PROPERTY: return dup_str(a, &c->key) || (c->has_value && dup_str(a, &c->value)) ? -1 : 0;
@@ -702,8 +715,14 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
             return invalid_buf(err, &why);
         }
         if (!cc_model_material(m, &e->material)) return not_found(err, &e->material);
-        if (assembly_check(&why, e->cls, &e->generator, e->nopenings) || placement_validate(&why, &e->placement))
+        if (assembly_check(&why, e->cls, &e->generator, e->nopenings) || placement_validate(&why, &e->placement) ||
+            (e->cls == CC_IFC_VIRTUAL_ELEMENT && cc_refplane_check(e, &why))) /* WAVE1B: its sizes */
             return invalid_buf(err, &why);
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B: at most CC_REFPLANES_MAX */
+            size_t np = 0;
+            for (size_t i = 0; i < m->nelements; i++) np += m->elements[i].cls == CC_IFC_VIRTUAL_ELEMENT;
+            if (np >= CC_REFPLANES_MAX) return invalid(err, "too many reference planes", 25);
+        }
         size_t at = lower_bound(m->elements, m->nelements, sizeof *e, &e->id);
         cc_element *p = arr_insert_grow(a, m->elements, m->nelements, &m->cap_elements, sizeof *e, at, e);
         if (!p) return oom(err);
@@ -745,6 +764,26 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         e->generator = c->generator;
         return 0;
     }
+    case CC_CMD_SET_OPENINGS: { /* CONC1 (ADR 0077): the whole list, the old one is the inverse */
+        cc_element *e = find_element(m, &c->id);
+        if (!e) return not_found(err, &c->id);
+        if (assembly_check(&why, e->cls, &e->generator, c->element.nopenings)) return invalid_buf(err, &why);
+        if (c->element.nopenings > CC_MAX_OPENINGS) return invalid(err, "too many openings", 17);
+        for (size_t i = 0; i < c->element.nopenings; i++) {
+            const cc_opening *o = &c->element.openings[i];
+            if (placement_validate(&why, &o->placement) || gen_validate(&why, &o->generator)) return invalid_buf(err, &why);
+            for (size_t j = 0; o->has_id && j < i; j++)
+                if (c->element.openings[j].has_id && !cc_gid_cmp(&c->element.openings[j].id, &o->id))
+                    return exists(err, &o->id);
+        }
+        inv_init(inv, CC_CMD_SET_OPENINGS);
+        inv->id = c->id;
+        inv->element.openings = e->openings;
+        inv->element.nopenings = e->nopenings;
+        e->openings = c->element.nopenings ? c->element.openings : NULL;
+        e->nopenings = c->element.nopenings;
+        return 0;
+    }
     case CC_CMD_SET_PLACEMENT: {
         if (placement_validate(&why, &c->placement)) return invalid_buf(err, &why);
         cc_element *e = find_element(m, &c->id);
@@ -779,6 +818,8 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         if (!e) return not_found(err, &c->id);
         cc_str old = {0, 0};
         int has_old = 0;
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT && cc_refplane_prop_ok(c->key, c->has_value ? &c->value : NULL))
+            return invalid(err, "a reference plane's width and height are numbers within [10, 1000000] mm", 72);
         if (set_prop(a, e, c->key, c->has_value ? &c->value : NULL, &old, &has_old)) return oom(err);
         inv_init(inv, CC_CMD_SET_PROPERTY);
         inv->id = c->id;
@@ -1051,6 +1092,7 @@ void cc_command_describe(const cc_command *c, const cc_model *m, Buf *b) {
     case CC_CMD_ADD_ELEMENT: buf_puts(b, "add "), put_str(b, c->element.name); break;
     case CC_CMD_REMOVE_ELEMENT: buf_puts(b, "delete "), el_name(b, m, &c->id); break;
     case CC_CMD_SET_GENERATOR: buf_puts(b, "change the sizes of "), el_name(b, m, &c->id); break;
+    case CC_CMD_SET_OPENINGS: buf_puts(b, "change the openings of "), el_name(b, m, &c->id); break; /* CONC1 */
     case CC_CMD_SET_PLACEMENT: buf_puts(b, "move "), el_name(b, m, &c->id); break;
     case CC_CMD_RENAME:
         buf_puts(b, "rename "), el_name(b, m, &c->id);
@@ -1263,6 +1305,20 @@ static void w_placement(JsonW *w, const cc_placement *p) {
     jw_obj_end(w);
 }
 
+/* CONC1: model.rs Opening as file.c writes it: {"id"?, "placement", "generator"}. */
+static void w_openings(JsonW *w, const cc_element *e) {
+    jw_arr_begin(w);
+    for (size_t i = 0; i < e->nopenings; i++) {
+        const cc_opening *o = &e->openings[i];
+        jw_obj_begin(w);
+        if (o->has_id) jw_key(w, "id"), w_gid(w, &o->id);
+        jw_key(w, "placement"), w_placement(w, &o->placement);
+        jw_key(w, "generator"), w_generator(w, &o->generator);
+        jw_obj_end(w);
+    }
+    jw_arr_end(w);
+}
+
 void cc_command_write(JsonW *w, const cc_command *c) {
     cc_em em = {w, NULL};
     if (c->op == CC_CMD_ADD_VIEW || c->op == CC_CMD_SET_VIEW) {
@@ -1325,6 +1381,7 @@ void cc_command_write(JsonW *w, const cc_command *c) {
         jw_key(w, "material"), w_gid(w, &e->material);
         jw_key(w, "placement"), w_placement(w, &e->placement);
         if (e->generator.kind != CC_GEN_NONE) jw_key(w, "generator"), w_generator(w, &e->generator);
+        if (e->nopenings) jw_key(w, "openings"), w_openings(w, e); /* CONC1: kept in the journal */
         if (e->nproperties) jw_key(w, "properties"), w_kvs(w, e->properties, e->nproperties);
         if (e->has_ifc_entity) jw_key(w, "ifc_entity"), w_str(w, e->ifc_entity);
         break;
@@ -1344,6 +1401,10 @@ void cc_command_write(JsonW *w, const cc_command *c) {
     case CC_CMD_SET_PLACEMENT:
         jw_key(w, "id"), w_gid(w, &c->id);
         jw_key(w, "placement"), w_placement(w, &c->placement);
+        break;
+    case CC_CMD_SET_OPENINGS: /* CONC1 */
+        jw_key(w, "id"), w_gid(w, &c->id);
+        jw_key(w, "openings"), w_openings(w, &c->element);
         break;
     case CC_CMD_RENAME:
         jw_key(w, "id"), w_gid(w, &c->id);
@@ -1804,6 +1865,31 @@ static int d_material(D *d, const JrVal *v, cc_material *m) {
     return 0;
 }
 
+/* CONC1: model.rs Opening: { id?: GlobalId, placement, generator } (file.c d_opening), a list of
+ * at most CC_MAX_OPENINGS. */
+static int d_openings(D *d, const JrVal *v, cc_element *e) {
+    if (v->type != JR_ARR) return type_err(d, v, "a sequence");
+    if (v->n > CC_MAX_OPENINGS) return dfail(d, v->off, "too many openings", 0, 0);
+    e->nopenings = v->n;
+    e->openings = v->n ? arena_alloc(d->a, v->n * sizeof *e->openings, 8) : NULL;
+    if (v->n && !e->openings) return dfail(d, v->off, "out of memory", 0, 0);
+    for (size_t i = 0; i < v->n; i++) {
+        static const char *const F[] = {"id", "placement", "generator"};
+        const JrVal *f[3], *x = &v->items[i];
+        cc_opening *o = &e->openings[i];
+        memset(o, 0, sizeof *o);
+        if (d_fields(d, x, F, 3, f, "struct Opening", 0)) return -1;
+        for (int k = 1; k < 3; k++)
+            if (need(d, x, f[k], F[k])) return -1;
+        if (f[0] && f[0]->type != JR_NULL) {
+            if (d_gid(d, f[0], &o->id)) return -1;
+            o->has_id = 1;
+        }
+        if (d_placement(d, f[1], &o->placement) || d_generator(d, f[2], &o->generator)) return -1;
+    }
+    return 0;
+}
+
 static int d_element(D *d, const JrVal *v, cc_element *e) {
     static const char *const F[] = {"id", "class", "name", "storey", "material", "placement",
                                     "generator", "openings", "properties", "ifc_entity"};
@@ -1815,19 +1901,16 @@ static int d_element(D *d, const JrVal *v, cc_element *e) {
     if (d_gid(d, f[0], &e->id) ||
         d_enum(d, f[1], class_name_i, CC_IFC_CLASS_COUNT,
                "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`, "
-               "`IfcElementAssembly`",
+               "`IfcElementAssembly`, `IfcVirtualElement`",
                &cls) ||
         d_str(d, f[2], &e->name) || d_gid(d, f[3], &e->storey) || d_gid(d, f[4], &e->material) ||
         d_placement(d, f[5], &e->placement))
         return -1;
     e->cls = (cc_ifc_class)cls;
     /* An IfcElementAssembly has no generator (ADR 0070): the key is left out. */
-    if (!f[6] && e->cls == CC_IFC_ELEMENT_ASSEMBLY) e->generator.kind = CC_GEN_NONE;
+    if (!f[6] && cc_class_shapeless(e->cls)) e->generator.kind = CC_GEN_NONE; /* WAVE1B: a reference plane too */
     else if (need(d, v, f[6], F[6]) || d_generator(d, f[6], &e->generator)) return -1;
-    if (f[7]) {
-        if (f[7]->type != JR_ARR) return type_err(d, f[7], "a sequence");
-        if (f[7]->n) return dfail(d, f[7]->off, "unsupported by the C core: element openings", 0, 0);
-    }
+    if (f[7] && d_openings(d, f[7], e)) return -1; /* CONC1 */
     if (f[8] && d_strmap(d, f[8], &e->properties, &e->nproperties)) return -1;
     if (f[9] && f[9]->type != JR_NULL) {
         if (d_str(d, f[9], &e->ifc_entity)) return -1;
@@ -1873,7 +1956,7 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
                       "`set_property`, `add_view`, `remove_view`, `set_view`, `add_sheet`, `remove_sheet`, "
                       "`set_sheet`, `set_material`, `set_schedules`, `set_project`, `add_relation`, "
                       "`remove_relation`, `set_relation`, `set_storey`, `add_grid`, `remove_grid`, `set_grid`, "
-                      "`set_georef`",
+                      "`set_georef`, `set_openings`",
                       &op);
     }
     memset(c, 0, sizeof *c);
@@ -1938,11 +2021,11 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
     default: break;
     }
     static const char *const F[] = {"id", "generator", "placement", "name", "material", "key", "value", "project",
-                                    "schedules"};
-    const JrVal *f[9];
+                                    "schedules", "openings"};
+    const JrVal *f[10];
     /* Only the variant's own fields count; others are ignored, as serde does without
      * deny_unknown_fields ("op" among them). */
-    if (d_fields(d, v, F, 9, f, "struct variant", 0)) return -1;
+    if (d_fields(d, v, F, 10, f, "struct variant", 0)) return -1;
     if (c->op == CC_CMD_SET_SCHEDULES) {
         if (need(d, v, f[8], "schedules")) return -1;
         cc_vd vd;
@@ -1959,6 +2042,7 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
     if (c->op != CC_CMD_SET_PROJECT && (need(d, v, f[0], "id") || d_gid(d, f[0], &c->id))) return -1;
     switch (c->op) {
     case CC_CMD_SET_GENERATOR: return need(d, v, f[1], "generator") || d_generator(d, f[1], &c->generator) ? -1 : 0;
+    case CC_CMD_SET_OPENINGS: return need(d, v, f[9], "openings") || d_openings(d, f[9], &c->element) ? -1 : 0;
     case CC_CMD_SET_PLACEMENT: return need(d, v, f[2], "placement") || d_placement(d, f[2], &c->placement) ? -1 : 0;
     case CC_CMD_RENAME: return need(d, v, f[3], "name") || d_str(d, f[3], &c->name) ? -1 : 0;
     case CC_CMD_SET_ELEMENT_MATERIAL: return need(d, v, f[4], "material") || d_gid(d, f[4], &c->material_id) ? -1 : 0;

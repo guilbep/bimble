@@ -16,4 +16,8 @@ int cc_scene_mesh_build(double (*tris)[3][3], uint32_t ntris, const double origi
  * one another become instances of a new shared shape, appended to s->shapes (shapes already
  * there are kept). 0 ok, -1 out of memory. */
 int cc_scene_share_copies(cc_scene *s);
+
+/* 3D2 (hlod.c): crease_edges_with_normals (20 degrees) of a mesh's positions and indices: m->edges,
+ * m->normals (and ne, nn) go to `a`, working memory to `scratch`. 0 ok, -1 out of memory. */
+int cc_scene_crease_edges(cc_mesh *m, Arena *a, Arena *scratch);
 #endif

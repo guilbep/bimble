@@ -66,7 +66,11 @@
  *   change_json(res) -> status              cc_change_json: the change feed's JSON now
  *   host_mesh(flags, res) -> status         the session's scene as BMSH (mesh.c cc_mesh_get: the
  *                                           native GET /mesh bytes; flags bit 0 = the local form
- *                                           above); value = rev
+ *                                           above; bit 1 = BMSH version 3, src/scene_bmsh.h, the
+ *                                           native GET /mesh?shapes=1, ticket 3D1; bit 2: built and
+ *                                           cached only, no bytes answered, ticket 3D2); value = rev
+ *   host_proxies(budget, res) -> status     3D2: the HLOD proxies in steps (session/mesh.h
+ *                                           cc_mesh_proxies): 202 "read total", then 200 BPRX
  *   host_saved(res) -> status               the bytes of the last write (the module has no files:
  *                                           `action save`, `save_as`, `export_ifc4`/`export_ifc2x3`,
  *                                           `share_for_viewing` keep them here: a .bimble is v2

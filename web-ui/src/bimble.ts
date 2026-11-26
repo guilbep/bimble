@@ -166,7 +166,7 @@ export interface ScheduleTable {
 /** `query("placing")`: what is placed (edit.rs `Editor::placing_json`). Sizes and offset in mm. */
 export interface Placing {
   active: boolean;
-  kind: "column" | "beam" | "wall" | "slab";
+  kind: "column" | "beam" | "wall" | "slab" | "footing" | "strip_footing" | "raft" | "opening" | "sleeve" | "grid_axis"; // CONC1: the Concrete tab's kinds; WAVE1B: a grid axis
   storey: string | null;
   storey_name: string | null;
   material: string | null;
@@ -179,6 +179,13 @@ export interface Placing {
   points: number[][];
   clicks_needed: number;
   hint: string | null;
+  /** CONC1 (ccore/session/concrete.h): the Concrete tab's sizes, mm; only while one of its kinds is chosen. */
+  concrete?: ConcreteSizes;
+}
+export interface ConcreteSizes {
+  footing_depth: number; footing_length: number; footing_width: number;
+  opening_height: number; opening_length: number; opening_sill: number; opening_width: number;
+  raft_thickness: number; sleeve_diameter: number; strip_depth: number; strip_width: number;
 }
 
 /** One open tab, as the bridge's `open_views` gives it. */
@@ -578,6 +585,7 @@ export async function start(): Promise<void> {
         viewportDirty = (await glChunk).glViewport({
           mesh: async () => cc.ccoreMesh().bytes,
           epoch: async () => null,
+          proxies: async (budget: number) => cc.ccoreProxies(budget), // 3D2
         });
         clearStartStepOnFirstFrame();
       } else startStep.value = null;
@@ -718,7 +726,7 @@ export function setProject(next: Record<string, string>): string | null {
 }
 
 /** Change what is placed: `{kind?, storey?, material?, sizes?}`, all or nothing. Returns the Rust error, or null. */
-export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; material?: string; sizes?: Partial<Placing["sizes"]>; top_offset_mm?: number; shape?: Placing["shape"] }): string | null {
+export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; material?: string; sizes?: Partial<Placing["sizes"]>; top_offset_mm?: number; shape?: Placing["shape"]; concrete?: Partial<ConcreteSizes> }): string | null {
   try {
     wasmOrThrow().set_placing(JSON.stringify(patch));
     return null;
@@ -985,6 +993,8 @@ function refresh(modelChanged: boolean): void {
     // ---- end FAKE1 ----
     refreshNorth(); // G2: project north (viewcube.ts projectNorth) and the setting-out panel
   }
+  refreshSettingOut(); // SETOUT: the markers (session state) and the georeference they show
+  refreshRefPlanes(); // WAVE1B: the planes and the work plane (a deleted one is no work plane)
   // A model is loaded and its first refresh is done (deeplink.ts then sets data-bb-ready for the design check).
   if (state.value.file !== null && actions.value.length > 0) resolveModel();
   if (!timed && modelChanged && state.value.file !== null) {
@@ -1127,12 +1137,20 @@ export function runAction(name: string): string | null {
   const route = screenRoutes[name];
   if (route) { route(); return null; }
   if (fileRoutes.run?.(name)) return null; // FS1
+  // DEAD1: New sheet shows the sheet it made (the core says it is shown: Place view… is enabled), so
+  // the screen and the session agree: the new id is the one not listed before.
+  const sheetsBefore = name === "new_sheet" ? new Set(tryQuery<SheetSummary[]>("sheets", []).map((x) => x.id)) : null;
   try {
     wasmOrThrow().action(name);
+    if (sheetsBefore) {
+      const made = tryQuery<SheetSummary[]>("sheets", []).find((x) => !sheetsBefore.has(x.id));
+      if (made) shellHooks.sheetShown?.(made.id);
+    }
     // Measuring is session state, not in the change JSON: its state and pressed button here (ticket T1).
-    if (name === "measure" || name.startsWith("place_")) {
+    if (name === "measure" || name.startsWith("place_") || name === "reference_planes") { // WAVE1B: the plane tool measures
       setMeasure(tryQuery<MeasureState | null>("measure", null));
       actions.value = tryQuery<ActionState[]>("actions", []);
+      refreshRefPlanes(); // WAVE1B: pick.on
     }
     // The box moves without a change event (its geometry is not in the change signature, calls.rs:152).
     if (name === "box_to_selection") visibility.value = tryQuery<Visibility | null>("visibility", null);
@@ -1142,6 +1160,15 @@ export function runAction(name: string): string | null {
       actions.value = tryQuery<ActionState[]>("actions", []);
     }
     // ---- end ISS71 ----
+    // ---- SETOUT ---- the markers shown and the box's north are session state: no change event
+    if (SETOUT_ACTIONS.includes(name)) {
+      actions.value = tryQuery<ActionState[]>("actions", []);
+      visibility.value = tryQuery<Visibility | null>("visibility", null);
+      refreshSettingOut();
+    }
+    // ---- end SETOUT ----
+    // ---- VIEWSHEET ---- the section tool is session state: its pressed button here
+    if (name === "draw_section") actions.value = tryQuery<ActionState[]>("actions", []);
     // ---- Q2: the view switches are session state, not in the change JSON: their pressed state
     // here; fit and top move the page's camera (glviewport.ts registers `viewActions`). ----
     if (VIEW_SWITCHES.includes(name)) {
@@ -1165,7 +1192,7 @@ export function tabCall(op: "activate" | "close" | "open", tab: OpenTab): string
 /** Which client runs: the C host over HTTP, the C core's wasm in the page, or the Rust wasm. */
 export let backend: "native" | "ccore" | "rust" = "rust";
 /** Set by shell/send.ts: told when a view tab was opened or activated (tabCall). */
-export const shellHooks: { viewShown?: () => void } = {};
+export const shellHooks: { viewShown?: () => void; /** DEAD1: a sheet made by New sheet is shown */ sheetShown?: (id: string) => void } = {};
 /** A file action (new, open, import_ifc, close) with its body {path, discard}, never through
  *  `screenRoutes`. Returns the session's error text, or null. */
 export function fileCall(name: string, body: { path?: string; discard?: boolean; dropped?: boolean /* FS1 */ }): string | null {
@@ -1201,7 +1228,8 @@ export const viewClip = (): ViewClip | null => tryQuery<ViewClip | null>("view_c
 /** A section's extra fields in `view_clip`: its look (world x, y, turned), facing, cut line point
  *  (world mm), depth (0: all) and turn (project north, radians). */
 export interface SectionClip extends ViewClip { dir?: number[]; facing?: string; origin?: number[]; depth_mm?: number; yaw?: number }
-export type ViewAdd = { kind?: "plan" | "ceiling" | "section" | "three_d"; storey?: string; facing?: string; origin?: number[]; from?: string; name?: string };
+export type ViewAdd = { kind?: "plan" | "ceiling" | "section" | "three_d"; storey?: string; facing?: string; origin?: number[]; from?: string; name?: string;
+  scale?: number; depth_mm?: number /* VIEWSHEET */ };
 /** `view_add`, then the new view's id (the one `open_views` did not list before), or the error. */
 export function viewAdd(args: ViewAdd): { id: string | null; error: string | null } {
   const ids = (v: unknown) => new Set(((v as { views?: { id: string }[] }).views ?? []).map((x) => x.id));
@@ -1396,6 +1424,19 @@ function actionWith(name: string, args: unknown): string {
   return w.action_with(name, JSON.stringify(args));
 }
 
+// ---- VIEWSHEET ---- the standards' text and dimension types, the one new annotations get (ccore/session/view_sheet.h)
+export interface AnnotationTypes {
+  dimension: string | null; dimension_types: { decimals: number; name: string; text_mm: number; unit: string }[];
+  text: string | null; text_types: { font: string; name: string; size_mm: number }[];
+}
+/** `query annotation_types`; null where the core does not answer it. */
+export const annotationTypes = (): AnnotationTypes | null => tryQuery<AnnotationTypes | null>("annotation_types", null);
+/** The type new texts or dimensions get (null: Default). Returns the error, or null. */
+export function setAnnotationType(which: "text" | "dimension", name: string | null): string | null {
+  try { actionWith("annotation_type", { [which]: name }); return null; } catch (e) { return message(e); }
+}
+// ---- end VIEWSHEET ----
+
 /** Link a model read-only beside the open one (`link_model {path}`; native host: a path it can read). Returns the error, or null. */
 export function linkModel(path: string): string | null {
   try { actionWith("link_model", { path }); return null; } catch (e) { return message(e); }
@@ -1444,6 +1485,10 @@ export function measureCall(name: "measure_pointer" | "measure_click" | "measure
     const st = JSON.parse(w.tool(name, JSON.stringify(args))) as MeasureState;
     setMeasure(st);
     if (name === "measure_cancel" && !st.active) actions.value = tryQuery<ActionState[]>("actions", []); // its pressed state
+    if (refPlanes.value?.pick.on) { // WAVE1B: the three-point tool's points (its pressed state when Esc stopped it)
+      refreshRefPlanes();
+      if (!refPlanes.value?.pick.on) actions.value = tryQuery<ActionState[]>("actions", []);
+    }
     return { state: st, error: null };
   } catch (e) {
     return { state: null, error: message(e) };
@@ -1487,6 +1532,11 @@ export const levelAdd = (name: string, level_mm: number, storey?: boolean) =>
   runVerb("level_add", storey === undefined ? { name, level_mm } : { name, level_mm, storey });
 export const levelSet = (id: string, patch: { name?: string; level_mm?: number; storey?: boolean }) => runVerb("level_set", { id, ...patch });
 export const levelRemove = (id: string) => runVerb("level_remove", { id });
+/** DEAD1: what the core would refuse on the Levels page, told before the click (query
+ *  level_refusals: the verbs level_remove and level_set {storey: false} run dry), per storey id:
+ *  the refusal texts, null where it would run. A control the core refuses is disabled with it. */
+export type LevelRefusals = Record<string, { remove: string | null; storey: string | null }>;
+export const levelRefusals = (): LevelRefusals => tryQuery<LevelRefusals>("level_refusals", {});
 /** A rectangular grid: axes at `x` (numbered 1, 2…) and at `y` (lettered A, B…), as the verb tags them. */
 export const gridAdd = (name: string, x: number[], y: number[], tags?: string[]) =>
   runVerb("grid_add", tags ? { name, x, y, tags } : { name, x, y });
@@ -1507,6 +1557,86 @@ export const refreshNorth = () => (northInfo.value = tryQuery<NorthInfo | null>(
 export interface Coordinates { survey: [number, number, number]; text: string; wgs84: [number, number] | null; world_mm: [number, number, number] }
 export const coordinates = (at: [number, number, number], system: string | undefined = readoutSystem()) => // SET1: the setting's system
   tryQuery<Coordinates | null>("coordinates", null, system && system !== "survey" ? { at, system } : { at });
-export type GeorefPatch = { crs?: string; east_m?: number; north_m?: number; height_m?: number; rotation_deg?: number; map_rotation_deg?: number; clear?: boolean };
+export type GeorefPatch = { crs?: string; east_m?: number; north_m?: number; height_m?: number; rotation_deg?: number; map_rotation_deg?: number; clear?: boolean; survey_point_mm?: number[] };
 export const georefSet = (patch: GeorefPatch) => runVerb("georef_set", patch);
+// ---- SETOUT (ADR 0075, ccore/session/setting_out.h): the Setting out tab's markers ----
+export interface SetOutPoint { at_mm: [number, number, number]; shown: boolean; survey_m: [number, number, number] }
+export interface SettingOut {
+  base_point: SetOutPoint;
+  crs: string | null;
+  /** World plan unit vectors pointing to project north and to true north. */
+  north: { project: [number, number]; rotation_deg: number; true: [number, number] };
+  /** Project zero: the survey height of world z = 0, m (ADR 0056 decision 1). */
+  project_zero_m: number;
+  survey_point: SetOutPoint & { set: boolean };
+}
+/** The actions of the Setting out tab that change session state only. */
+export const SETOUT_ACTIONS = ["show_base_point", "show_survey_point", "view_true_north"];
+/** `query setting_out` as last asked (null: no editable model). */
+export const settingOut = shallowRef<SettingOut | null>(null);
+export const refreshSettingOut = () => { settingOut.value = tryQuery<SettingOut | null>("setting_out", null); };
+/** Sets the survey point (world mm), or removes it (null). One undoable step (`georef_set`). */
+export const surveyPointSet = (at: [number, number, number] | null) => runVerb("georef_set", { survey_point_mm: at ?? [] });
+// ---- end SETOUT ----
+// ---- WAVE1B (ADR 0075, ccore/session/refplanes.h): reference planes and the work plane ----
+type V3 = [number, number, number];
+export interface RefPlane { corners: V3[]; height: number; id: string; name: string; normal: V3; origin: V3; storey: string; width: number; x_axis: V3 }
+export type ImplicitPlane =
+  | { kind: "level"; id: string; name: string; elevation: number }
+  | { kind: "axis"; id: string; name: string; start: [number, number]; end: [number, number] };
+export interface RefPlanes {
+  /** The work plane of the place tools and of Measure; null: the active storey's level. */
+  active: { id: string; kind: "plane" | "level" | "axis"; name: string } | null;
+  implicit: ImplicitPlane[];
+  /** The three-point tool (action reference_planes): its points so far, world mm. */
+  pick: { on: boolean; points: V3[] };
+  planes: RefPlane[];
+}
+/** `query reference_planes` as last asked (null: no editable model). */
+export const refPlanes = shallowRef<RefPlanes | null>(null);
+export const refreshRefPlanes = () => { refPlanes.value = tryQuery<RefPlanes | null>("reference_planes", null); };
+/** Choose the work plane (kind null: the storey's level again). Session state. Returns the error, or null. */
+export function workPlaneSet(kind: "plane" | "level" | "axis" | null, id?: string): string | null {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return "the work plane needs the C core";
+    refPlanes.value = JSON.parse(w.tool("work_plane", JSON.stringify(kind ? { kind, id } : { kind: null }))) as RefPlanes;
+    return null;
+  } catch (e) { return message(e); }
+}
+export interface RefPlaneArgs { storey: string; name?: string; origin?: V3; normal?: V3; x_axis?: V3; points?: V3[]; width?: number; height?: number }
+/** A new reference plane (verb reference_plane_add): one undoable step. Returns the error, or null. */
+export const referencePlaneAdd = (args: RefPlaneArgs) => runVerb("reference_plane_add", args);
+export const referencePlaneRename = (id: string, name: string) => runVerb("rename", { id, name });
+export const referencePlaneDelete = (id: string) => runVerb("delete", { ids: [id] });
+// ---- WAVE1B (B2, ADR 0077): an opening of a host, selected and changed (verb opening_set) ----
+export interface OpeningInfo {
+  id: string;
+  /** "opening" (a box), "sleeve" (round), "other" (an imported shape: not editable here). */
+  kind: "opening" | "sleeve" | "other";
+  /** In a wall (sizes: width, height, sill) or a slab (width, length). */
+  wall: boolean;
+  width?: number; height?: number; length?: number; sill?: number; diameter?: number;
+  /** Its centre (world mm) and its box's eight corners (world mm), for the overlay. */
+  centre: [number, number, number];
+  corners: [number, number, number][];
+}
+/** `query openings {host}`: the host's openings in order. */
+export const openingsOf = (host: string) => tryQuery<OpeningInfo[]>("openings", [], { host });
+/** The opening selected (its host and GlobalId), or null. Page state: the element selection stays the host. */
+export const selectedOpening = shallowRef<{ host: string; id: string } | null>(null);
+/** `query opening_at {ray}` (scene coordinates, as the measure tool's): the opening under the pointer, or null. */
+export const openingAt = (ray: number[]) => tryQuery<{ host: string; id: string } | null>("opening_at", null, { ray });
+export type OpeningPatch = { width?: number; height?: number; length?: number; sill?: number; diameter?: number; a?: [number, number] };
+/** Changes an opening by its parameters (verb opening_set), its GlobalId kept. One step. Returns the error, or null. */
+export const openingSet = (host: string, id: string, patch: OpeningPatch) => runVerb("opening_set", { host, id, ...patch });
+/** WAVE1B (B1): every opening and sleeve of the model, a row each (`query opening_rows`): a sleeve's
+ *  volume is the exact cylinder pi r^2 t, a box's width x height x t; another shape's null. */
+export interface OpeningRow { host: string; host_name: string; id: string; kind: "opening" | "sleeve" | "other"; level: string;
+  width?: number; height?: number; length?: number; diameter?: number; volume_m3: number | null }
+export const openingRows = () => tryQuery<OpeningRow[]>("opening_rows", []);
+/** WAVE1B (B5): the foundations (footings and rafts, `query foundation_rows`), measured as the schedules are. */
+export interface FoundationRow { id: string; kind: "pad" | "strip" | "raft" | "footing"; level: string; name: string; section: string; volume_m3: number }
+export const foundationRows = () => tryQuery<FoundationRow[]>("foundation_rows", []);
+// ---- end WAVE1B ----
 // ---- end G2 ----

@@ -12,7 +12,7 @@
 //   host     the host call layer in the module (call, change_json, host_open_text, host_mesh,
 //            host_saved; ticket T13b) against the native host (out/tcc/bimble-ccore or $HOST_BIN,
 //            port <port>, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
-//            actions: 58 rows: Rust's 54 + ISS72's 2 + ISS71's 2), open frame.json, the same calls on both (select, verb place,
+//            actions: 61 rows: Rust's 54 + ISS72's 2 + ISS71's 2 + SETOUT's 3), open frame.json, the same calls on both (select, verb place,
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh; ticket E1:
 //            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename;
@@ -559,7 +559,7 @@ suite("host");
     const st0 = hcall("query", "state", "{}");
     check("boot: query state -> 200, no file", st0.status === 200 && JSON.parse(st0.text).file === null, st0.text);
     const ac0 = hcall("query", "actions", "{}");
-    check("boot: query actions -> 58 rows (Rust's 54 + ISS72's 2 + ISS71's 2)", ac0.status === 200 && JSON.parse(ac0.text).length === 58, ac0.text.slice(0, 200));
+    check("boot: query actions -> 73 rows (Rust's 54 + ISS72's 2 + ISS71's 2 + SETOUT's 3 + VIEWSHEET's 4 + CONC1's 5 + WAVE1B's 2 + LINKF's 1)", ac0.status === 200 && JSON.parse(ac0.text).length === 73, ac0.text.slice(0, 200));
     check("unknown op -> 404", hcall("nope").status === 404);
     check("host_saved before a save -> 404", call(X.host_saved, []).status === 404);
 
@@ -652,6 +652,15 @@ suite("host");
         const w = call(X.host_mesh, [], 0), n = await nmesh();
         check(`host_mesh = GET /mesh at rev ${w.value}`, w.status === 200 && w.bytes.length === n.length && w.bytes.every((b, i) => b === n[i]),
           `${w.status} ${w.bytes.length} vs ${n.length} bytes`);
+        // 3D2: the HLOD proxies, in steps until built (202), then the same BPRX bytes as GET /mesh?proxies=N
+        const wt = call(X.host_proxies, [], 0), nt = new Uint8Array(await (await fetch(`${base}/mesh?t=${HOST_TOKEN}&proxies=0`)).arrayBuffer());
+        check(`host_proxies(0) = GET /mesh?proxies=0: the tree (${wt.bytes.length} bytes)`, wt.status === 200 && wt.bytes.length === nt.length && wt.bytes.every((b, i) => b === nt[i]) &&
+          String.fromCharCode(...wt.bytes.subarray(0, 4)) === "BPRX", `${wt.status} ${wt.bytes.length} vs ${nt.length}`);
+        let wp, steps = 0;
+        while ((wp = call(X.host_proxies, [], 100)).status === 202 && steps < 10000) steps++;
+        const np = new Uint8Array(await (await fetch(`${base}/mesh?t=${HOST_TOKEN}&proxies=1000000000`)).arrayBuffer());
+        check(`host_proxies = GET /mesh?proxies at rev ${wp.value} (${steps} steps of 100 triangles first)`, wp.status === 200 && wp.bytes.length === np.length &&
+          wp.bytes.every((b, i) => b === np[i]) && String.fromCharCode(...wp.bytes.subarray(0, 4)) === "BPRX", `${wp.status} ${wp.bytes.length} vs ${np.length} bytes`);
         continue;
       }
       if (s === "saved=open") { // place, undo, save: the text cc_model_save gives frame.json (export save)

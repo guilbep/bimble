@@ -1183,6 +1183,22 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
                 if (!bounds_ok(&lb)) continue;
                 double dx = lb.hi[0] - lb.lo[0], dy = lb.hi[1] - lb.lo[1];
                 int rect = fabs_(dx * dy - fabs_(cc_cut_area(l))) <= 0.01 * dx * dy;
+                /* WAVE1B (B1, DEVIATIONS 34): a round hole (a sleeve: a regular polygon of 24 corners or
+                 * more) gets a cross of two diameters at 45 degrees, with the "Openings" toggle */
+                double rr = dx / 2.0;
+                int round = !rect && l->n >= 24 && fabs_(dx - dy) <= 0.02 * dx &&
+                            fabs_(fabs_(cc_cut_area(l)) - 3.141592653589793 * rr * rr) <= 0.03 * 3.141592653589793 * rr * rr;
+                if (hole && round && tpl->opening_dimensions) {
+                    double cx = (lb.lo[0] + lb.hi[0]) / 2.0, cy = (lb.lo[1] + lb.hi[1]) / 2.0, k = rr * 0.7071067811865476;
+                    double w[4][2] = {{cx - k, cy - k}, {cx + k, cy + k}, {cx - k, cy + k}, {cx + k, cy - k}};
+                    double(*c)[2] = arena_alloc(a, 4 * sizeof *c, _Alignof(double));
+                    if (!c) goto oom;
+                    for (int q = 0; q < 4; q++) to_paper(P, w[q], c[q]);
+                    cross[ncross].p = c;
+                    cross[ncross++].n = 2;
+                    cross[ncross].p = c + 2;
+                    cross[ncross++].n = 2;
+                }
                 if (hole && rect) {
                     double p[2], q[2];
                     to_paper(P, lb.lo, p);

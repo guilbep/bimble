@@ -40,6 +40,7 @@ typedef enum { /* serde tag "op" */
     CC_CMD_SET_GRID,
     CC_CMD_SET_GEOREF, /* the C core's own (ADR 0045): Rust sets the georeference on import only */
     CC_CMD_SET_MATERIAL, /* MAT1: Rust's SetMaterial (command.rs:317), last so older ops keep their numbers */
+    CC_CMD_SET_OPENINGS, /* CONC1 (ADR 0077): the C core's own: an element's whole opening list (Rust has none) */
     CC_CMD_COUNT
 } cc_cmd_op;
 
@@ -54,6 +55,7 @@ typedef enum { /* serde tag "op" */
  *   add_relation, set_relation: relation          remove_relation: id
  *   set_storey: storey (the whole level, by id)   add_grid, set_grid: grid   remove_grid: id
  *   set_georef: georef (the whole georeference; the default clears it)
+ *   set_openings: id, element.openings[element.nopenings] (the element's whole list, CONC1)
  * Strings and arrays are borrowed: from the cc_cmds arena that made the command, or from the
  * model's arena for the inverses that apply returns. */
 typedef struct {

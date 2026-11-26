@@ -40,6 +40,9 @@
 #include "repo.h"
 #include "repo_merge.h"
 #include "repo_write.h"
+#include "command.h" /* WAVE1B (B4) */
+#include "diff.h"    /* WAVE1B (B4) */
+#include "verbs.h"   /* WAVE1B (B4) */
 #include "check.h"
 
 #define GOLD "golden/history"
@@ -730,6 +733,91 @@ static void own_sections(void) {
     cc_model_free(&r);
 }
 
+/* ---- WAVE1B (B4): openings in merge and diff (ADR 0077, DEVIATIONS 28) ---- */
+/* A copy of `m` with the verb run on it (its Commands applied). The new element's or opening's
+ * GlobalId in *made when made is not NULL. */
+static void with_verb(cc_model *out, const cc_model *m, const char *verb, const char *args, cc_gid *made) {
+    Buf t;
+    buf_init(&t);
+    model_text(m, &t);
+    cc_error e;
+    if (cc_model_load(out, t.p, t.len, &e)) printf("with_verb: %s\n", e.msg), exit(2);
+    buf_free(&t);
+    cc_cmds l;
+    cc_cmds_init(&l);
+    Buf err;
+    buf_init(&err);
+    if (cc_verb_run_ex(out, verb, args, strlen(args), 0, -1, 0, &l, &err)) printf("%s: %s\n", verb, buf_cstr(&err)), exit(2);
+    for (size_t i = 0; i < l.n; i++) {
+        cc_command inv;
+        if (cc_command_apply(out, &l.v[i], &inv, &err)) printf("%s apply: %s\n", verb, buf_cstr(&err)), exit(2);
+        if (made && l.v[i].op == CC_CMD_ADD_ELEMENT) *made = l.v[i].element.id;
+        if (made && l.v[i].op == CC_CMD_SET_OPENINGS && l.v[i].element.nopenings)
+            *made = l.v[i].element.openings[l.v[i].element.nopenings - 1].id;
+    }
+    cc_cmds_free(&l);
+    buf_free(&err);
+    cc_model_canonical(out);
+}
+static void openings_merge(void) {
+    cc_model f, b, o, t, w, x, y;
+    load(&f, "golden", "frame.json");
+    cc_gid wall, op1, op2;
+    with_verb(&b, &f, "place", "{\"kind\":\"wall\",\"storey\":\"1uAZA0Yfn05f$xRd1k4uPR\",\"a\":[0,-3000],\"b\":[6000,-3000]}", &wall);
+    char a1[200], a2[200], mv[120];
+    snprintf(a1, sizeof a1, "{\"host\":\"%.22s\",\"a\":[1500,-3000]}", wall.c);
+    snprintf(a2, sizeof a2, "{\"host\":\"%.22s\",\"a\":[4500,-3000],\"shape\":\"round\",\"diameter\":200}", wall.c);
+    snprintf(mv, sizeof mv, "{\"ids\":[\"%.22s\"],\"d\":[0,-500,0]}", wall.c);
+    /* ours adds an opening, theirs moves the wall: both kept */
+    with_verb(&o, &b, "opening_add", a1, &op1);
+    with_verb(&t, &b, "move", mv, NULL);
+    with_verb(&w, &o, "move", mv, NULL);
+    expect_merge("B4 an opening added (ours), the host moved (theirs): both kept", &b, &o, &t, CC_PREFER_NEITHER, "", &w);
+    cc_model_free(&t), cc_model_free(&w);
+    /* ours adds an opening, theirs another one: both openings kept (by GlobalId; Rust picked the list whole) */
+    with_verb(&t, &b, "opening_add", a2, &op2);
+    with_verb(&w, &o, "opening_add", a2, NULL);
+    /* the expected: ours' list then theirs' new one, theirs' GlobalId */
+    {
+        cc_element *we = (cc_element *)cc_model_element(&w, &wall);
+        if (we && we->nopenings == 2) we->openings[1].id = op2;
+    }
+    expect_merge("B4 two openings added, one each side: both kept", &b, &o, &t, CC_PREFER_NEITHER, "", &w);
+    cc_model_free(&t), cc_model_free(&w);
+    /* the same opening changed on both sides: a conflict shown like the others */
+    char s1[200], s2[200];
+    snprintf(s1, sizeof s1, "{\"host\":\"%.22s\",\"id\":\"%.22s\",\"width\":800}", wall.c, op1.c);
+    snprintf(s2, sizeof s2, "{\"host\":\"%.22s\",\"id\":\"%.22s\",\"width\":600}", wall.c, op1.c);
+    with_verb(&x, &o, "opening_set", s1, NULL);
+    with_verb(&y, &o, "opening_set", s2, NULL);
+    char want[256];
+    snprintf(want, sizeof want, "element IfcWall M1: openings.%.22s.generator.width [%.22s]\n", op1.c, wall.c);
+    expect_merge("B4 the same opening resized on both sides: a conflict, ours kept", &o, &x, &y, CC_PREFER_NEITHER, want, &x);
+    expect_merge("B4 the same opening resized on both sides: a conflict, theirs taken", &o, &x, &y, CC_PREFER_THEIRS, want, &y);
+    /* the diff names the opening by its GlobalId */
+    cc_changes ch;
+    cc_changes_init(&ch);
+    Buf e, d;
+    buf_init(&e), buf_init(&d);
+    if (!cc_diff(&b, &o, &ch, &e))
+        for (size_t i = 0; i < ch.n; i++) cc_change_display(&ch.v[i], &d), buf_putc(&d, '\n');
+    char key[64];
+    snprintf(key, sizeof key, "openings.%.22s", op1.c);
+    check_true("B4 diff: the opening added, named by its GlobalId", strstr(buf_cstr(&d), key) != NULL);
+    if (!strstr(buf_cstr(&d), key)) printf("  diff: %s\n", buf_cstr(&d));
+    cc_changes_free(&ch);
+    buf_clear(&d);
+    cc_changes_init(&ch);
+    if (!cc_diff(&o, &x, &ch, &e))
+        for (size_t i = 0; i < ch.n; i++) cc_change_display(&ch.v[i], &d), buf_putc(&d, '\n');
+    snprintf(key, sizeof key, "openings.%.22s.generator.width", op1.c);
+    check_true("B4 diff: the opening's width changed, by its GlobalId", strstr(buf_cstr(&d), key) != NULL);
+    if (!strstr(buf_cstr(&d), key)) printf("  diff: %s\n", buf_cstr(&d));
+    cc_changes_free(&ch);
+    buf_free(&e), buf_free(&d);
+    cc_model_free(&x), cc_model_free(&y), cc_model_free(&o), cc_model_free(&b), cc_model_free(&f);
+}
+
 int main(void) {
     native = cc_platform_native();
     const char *t = getenv("TMPDIR");
@@ -741,6 +829,7 @@ int main(void) {
     walks();
     crash();
     own_sections();
+    openings_merge(); /* WAVE1B (B4) */
     if (getenv("H2B_KEEP")) printf("H2B-KEEP %s\n", tmp);
     else
         rm_rf(tmp);

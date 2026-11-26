@@ -48,7 +48,7 @@
   error no view GlobalId(00000000000000000000ZZ)
   undo ["add the view Plan Niveau 1 (copy)"]
 > view_add {"kind":"three_d","zoom":2}
-  error bad arguments: unknown field `zoom`, expected one of `kind`, `storey`, `facing`, `origin`, `from`, `name`
+  error bad arguments: unknown field `zoom`, expected one of `kind`, `storey`, `facing`, `origin`, `from`, `name`, `scale`, `depth_mm`
   undo ["add the view Plan Niveau 1 (copy)"]
 > view_edit {"id":"<new-3>","name":"Section A-A","depth_mm":4000}
   [{"op":"set_view","id":"0000000000000000000003","name":"Section A-A","kind":{"type":"section","origin":[9000.0,5000.0],"facing":"north","depth_mm":4000.0}}]

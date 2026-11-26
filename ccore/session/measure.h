@@ -28,8 +28,10 @@
 #ifndef CCORE_SESSION_MEASURE_H
 #define CCORE_SESSION_MEASURE_H
 #include <stddef.h>
+#include <stdint.h>
 #include "buf.h"
 #include "json_w.h"
+#include "bvh.h"
 #include "scene.h"
 #include "visibility.h"
 
@@ -59,11 +61,43 @@ typedef struct cc_measure {
     size_t n, cap;
 } cc_measure;
 
+/* MEAS1 (ADR 0074 "Measure: the box index"): the world box of each element of a scene (scene
+ * coordinates: min x, y, z then max x, y, z of its placed mesh's points and edges, the f32 values
+ * cc_scene_world_mesh gives), in element order. A pointer ray meets an element's triangles only
+ * inside its box: the elements whose box the ray misses are not meshed, and the others are meshed
+ * nearest box first until the nearest left lies beyond the visible depth of the best hit. The
+ * session keeps one per scene shown (calls.c, with the scene's own key: rev, links generation,
+ * view): 24 bytes per element.
+ * 3D2: a box tree over them (bvh.h; about 60 bytes per element more): a ray visits only the boxes
+ * it enters, not all of them. The boxes left out of the tree (not finite, or empty) are listed in
+ * `odd` and tested one by one, as before. */
+typedef struct {
+    const cc_scene *sc; /* what it was built for (NULL: nothing) */
+    uint64_t key[3];    /* the session's key: rev, links_gen, view */
+    float (*box)[6];
+    size_t n;
+    Arena arena;   /* 3D2: the tree and `odd` */
+    cc_bvh tree;   /* 3D2: over `box` (item k: element k) */
+    uint32_t *odd; /* 3D2: the elements not in the tree */
+    size_t nodd;
+} cc_mboxes;
+/* Builds `b` for `sc` (freed first). 0 ok, -1 out of memory (`b` then empty). */
+int cc_mboxes_build(cc_mboxes *b, const cc_scene *sc);
+void cc_mboxes_free(cc_mboxes *b);
+
+/* MEAS1: the work of the pointer rays (a regression guard that needs no clock): boxes tested,
+ * placed meshes built (pick and snap), triangles tested. */
+typedef struct {
+    size_t boxes, meshes, triangles;
+} cc_mwork;
+
 /* A scene the pointer can hit: the shown one, or a linked model's. */
 typedef struct {
     const cc_scene *sc;
     float off[3];       /* added to its points (a link: its origin - the shown scene's, f32 as Rust) */
     const cc_vis *vis;  /* its hidden elements (visibility.h; reveal shows them); NULL: none */
+    const float (*box)[6]; /* MEAS1: its elements' boxes (cc_mboxes of sc); NULL: made for the call */
+    const cc_mboxes *index; /* 3D2: the cc_mboxes `box` belongs to (its tree); NULL: every box tested */
 } cc_mlayer;
 
 /* What a pointer call sees: the layers (the shown scene first), the box that cuts (scene
@@ -74,6 +108,10 @@ typedef struct {
     const float *clip_min, *clip_max;
     const double *org;
     float clip_yaw; /* ISS71: the box's turn (visibility.h cc_vis.yaw): min, max are in its frame */
+    cc_mwork *work; /* MEAS1: counted into when not NULL */
+    int brute;      /* MEAS1, tests: every visible element meshed and tested in order (the old way) */
+    const double *plane; /* WAVE1B: the work plane (origin, unit normal; scene coordinates): a ray that
+                          * meets no element ends on it (a face point); NULL: none */
 } cc_mview;
 
 void cc_measure_free(cc_measure *m);  /* the measurements; the state is zeroed */

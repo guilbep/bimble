@@ -14,8 +14,11 @@
 #include "guid.h"
 #include "inflate.h"
 #include "json_w.h"
+#include "mesh.h"
 #include "session.h"
+#include "concrete.h" /* CONC1 */
 #include "links.h"
+#include "link_cache.h" /* LINKF */
 #include "sheet_svg.h"
 #include "views.h"
 #include "schedules.h" /* Q2 */
@@ -29,6 +32,7 @@ cc_session *cc_session_new(const cc_platform *pf) {
     buf_init(&s->mesh);
     cc_vis_init(&s->vis);
     s->link_sel = -1;
+    s->link_cache_min = CC_LINK_CACHE_MIN; /* LINKF */
     s->edges = s->hatching = 1; /* Q2: bimble-render lib.rs:1431-1432 defaults */
     return s;
 }
@@ -42,12 +46,14 @@ void cc_session_free(cc_session *s) {
     if (s->open) cc_history_free(&s->hist), cc_model_free(&s->model);
     drop_view(s);
     cc_links_clear(s);
+    cc_links_session_free(s); /* LINKF: a conversion still running is left to end on its own */
     free(s->links);
     free(s->tabs);
     free(s->paper_views); /* PAPER1 */
     free(s->undo_ids), free(s->redo_ids), free(s->also), free(s->material);
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
+    cc_mesh_proxies_free(s); /* 3D2 */
     cc_paper_cache_free(s);
     cc_paper_fonts_free(s); /* D7 */
     cc_versions_free(s); /* H2a */
@@ -56,6 +62,7 @@ void cc_session_free(cc_session *s) {
     cc_tool_free(&s->tool);
     cc_vis_free(&s->vis);
     cc_measure_free(&s->measure);
+    cc_session_mboxes_free(s); /* MEAS1 */
     persist_free(s);
     free(s);
 }
@@ -68,14 +75,55 @@ int cc_session_unsaved(const cc_session *s) {
     return s->open && (cc_session_step(s) != s->saved_step || cc_links_changed(s)); /* LNK1: the links are saved too */
 }
 
-/* The whole file through the platform, NUL-terminated, at most CC_MAX_FILE_BYTES. NULL with `err`. */
+static int ends_with_ci(const char *s, const char *suffix);
+
+/* LINKF: each format's limit (DEVIATIONS 37): an IFC the STEP reader's, a .bimbleview its reader's,
+ * the rest (.bimble, .json) CC_MAX_FILE_BYTES (the JSON DOM's). Was CC_MAX_FILE_BYTES for every
+ * file: "<file>.ifc: larger than 268435456 bytes" for an IFC Rust reads. */
+size_t cc_session_read_limit(const char *path, size_t *peak_per_byte) {
+    size_t lim = CC_MAX_FILE_BYTES, k = 4; /* a .bimble: the text, the DOM (json_r.h), the model */
+    if (ends_with_ci(path, ".ifc")) lim = CC_IFC_MAX_FILE_BYTES, k = CC_IFC_READ_PEAK_PER_BYTE;
+    else if (ends_with_ci(path, ".bimbleview")) lim = CC_VIEWFILE_MAX_FILE_BYTES, k = CC_VIEWFILE_READ_PEAK_PER_BYTE;
+    if (peak_per_byte) *peak_per_byte = k;
+    return lim;
+}
+
+static double gb(uint64_t b) { return (double)b / 1e9; }
+
+int cc_session_fits(const cc_platform *pf, const char *path, uint64_t size, cc_error *err) {
+    size_t k;
+    size_t lim = cc_session_read_limit(path, &k);
+    if (size > (uint64_t)lim) {
+        snprintf(err->msg, sizeof err->msg, "%s: larger than %zu bytes", path, lim);
+        return -1;
+    }
+    uint64_t avail = pf->mem_available ? pf->mem_available(pf->ctx) : 0;
+    uint64_t need = size > UINT64_MAX / k ? UINT64_MAX : size * k;
+    uint64_t base = ends_with_ci(path, ".ifc") ? CC_IFC_READ_PEAK_BASE : (uint64_t)64 << 20;
+    if (size < base / 6) base = size * 6; /* a small file: at most 10 times its size in all */
+    need = need > UINT64_MAX - base ? UINT64_MAX : need + base;
+    if (avail && need > avail) {
+        snprintf(err->msg, sizeof err->msg,
+                 "%s: too large for this machine: reading %.2f GB needs about %.1f GB of memory, %.1f GB is free", path,
+                 gb(size), gb(need), gb(avail));
+        return -2;
+    }
+    return 0;
+}
+
+/* The whole file through the platform, NUL-terminated, at most its format's limit, refused first
+ * when the machine has not the memory its reader needs (cc_session_fits). NULL with `err`. */
 static char *read_all(const cc_session *s, const char *path, size_t *n, cc_error *err) {
     char *p = NULL;
-    int st = s->pf->read_file(s->pf->ctx, path, CC_MAX_FILE_BYTES, &p, n);
+    size_t lim = cc_session_read_limit(path, NULL);
+    cc_pf_stat st0;
+    if (s->pf->stat_path && s->pf->stat_path(s->pf->ctx, path, 1, &st0) == CC_PF_OK && st0.kind == CC_PF_FILE &&
+        cc_session_fits(s->pf, path, st0.size, err))
+        return NULL;
+    int st = s->pf->read_file(s->pf->ctx, path, lim, &p, n);
     if (st == CC_PF_OK) return p;
     if (st == CC_PF_NOT_FOUND) snprintf(err->msg, sizeof err->msg, "%s: cannot open", path);
-    else if (st == CC_PF_TOO_LARGE)
-        snprintf(err->msg, sizeof err->msg, "%s: larger than %zu bytes", path, (size_t)CC_MAX_FILE_BYTES);
+    else if (st == CC_PF_TOO_LARGE) snprintf(err->msg, sizeof err->msg, "%s: larger than %zu bytes", path, lim);
     else snprintf(err->msg, sizeof err->msg, "%s: %s", path, st == CC_PF_IO ? "read error" : "out of memory");
     return NULL;
 }
@@ -129,6 +177,7 @@ static void set_path(cc_session *s, const char *path) {
 
 /* Drops the read-only scene, if any. */
 static void drop_view(cc_session *s) {
+    cc_mesh_proxies_free(s); /* 3D2: built on the scene dropped here */
     if (s->ifc) cc_ifc_scene_free(s->ifc), free(s->ifc), s->ifc = NULL;
     if (s->vf) cc_scene_free(&s->vscene), cc_viewfile_free(s->vf), free(s->vf), s->vf = NULL;
     s->view = CC_VIEW_NONE;
@@ -150,6 +199,9 @@ static void drop_model(cc_session *s) {
     cc_tool_clear(&s->tool);
     cc_vis_reset(&s->vis); /* lib.rs:1657-1676: a box or a hide means nothing for another model */
     cc_measure_reset(&s->measure); /* lib.rs:1677: measurements mean nothing for another model */
+    memset(&s->wp, 0, sizeof s->wp); /* WAVE1B: the storey's level again, the plane tool off */
+    cc_session_mboxes_free(s); /* MEAS1: the boxes are the old scenes' */
+    cc_mesh_proxies_free(s); /* 3D2: so are the proxies */
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;
     s->ntabs = 0, s->has_active = 0, s->tab_open = 0;
@@ -176,6 +228,7 @@ static void install(cc_session *s, cc_model *m, const char *path, uint64_t saved
     if (!best && s->model.nstoreys) best = &s->model.storeys[0];
     if (best) s->has_storey = 1, s->storey = best->id;
     s->kind = CC_KIND_COLUMN;
+    cc_conc_defaults(s->conc); /* CONC1 */
     double sizes[5] = {300.0, 250.0, 500.0, 200.0, 250.0}; /* verbs.rs:86-96 */
     memcpy(s->sizes, sizes, sizeof sizes);
     s->offset[0] = 1000.0, s->offset[1] = 0.0, s->offset[2] = 0.0;
@@ -272,7 +325,7 @@ int cc_session_new_model(cc_session *s, cc_error *err) {
 /* The cc_scene over a view file (session.h `vscene`): element rows in its own arena, the meshes
  * and shapes borrowed from `v`. The GlobalId is the file's text when it has 22 bytes, else
  * zeros. 0 ok, -1 out of memory. */
-static int view_scene(cc_scene *sc, const cc_viewfile *v, cc_error *err) {
+int cc_view_scene(cc_scene *sc, const cc_viewfile *v, cc_error *err) {
     memset(sc, 0, sizeof *sc);
     arena_init(&sc->arena, 0);
     memcpy(sc->origin, v->origin, sizeof sc->origin);
@@ -325,7 +378,7 @@ int cc_link_load(cc_session *s, const char *path, cc_link *k, cc_error *err) {
     } else if (vw) {
         if (!(l.vf = malloc(sizeof *l.vf))) snprintf(err->msg, sizeof err->msg, "out of memory");
         else if (cc_viewfile_read((const uint8_t *)text, n, l.vf, err) != 0) cc_viewfile_free(l.vf), free(l.vf), l.vf = NULL;
-        else if (view_scene(&l.scene, l.vf, err) != 0) cc_scene_free(&l.scene), cc_viewfile_free(l.vf), free(l.vf), l.vf = NULL;
+        else if (cc_view_scene(&l.scene, l.vf, err) != 0) cc_scene_free(&l.scene), cc_viewfile_free(l.vf), free(l.vf), l.vf = NULL;
         else rc = 0;
     } else {
         if (!(l.model = malloc(sizeof *l.model))) snprintf(err->msg, sizeof err->msg, "out of memory");
@@ -369,7 +422,7 @@ int cc_session_open_file(cc_session *s, const char *path, cc_error *err) {
     else if (ifc) rc = cc_ifc_read(text, n, is, err); /* always initializes */
     else {
         rc = cc_viewfile_read((const uint8_t *)text, n, vf, err);
-        if (!rc) rc = view_scene(&vs, vf, err);
+        if (!rc) rc = cc_view_scene(&vs, vf, err);
     }
     free(text);
     if (rc) {

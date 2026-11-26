@@ -195,7 +195,57 @@ static int key_cmp(const void *x, const void *y) {
 
 /* repo.rs merge_value: writes the merged value to `out` and returns 1, or 0 for none (removed).
  * `path` is the dotted path so far (restored on return). */
+/* WAVE1B (B4, DEVIATIONS 28): an element's `openings`, merged opening by opening (matched by their
+ * GlobalIds, as objects are): one added on one side and the host changed on the other merge; the
+ * same opening changed on both sides differently is a conflict on `openings.<id>.<field>`. Only when
+ * every opening of the three sides has an id (else the list is picked whole, as Rust does). 1 when a
+ * value was written, 0 when the merged list is empty (the key left out, as the file does), -1 not
+ * this case. */
+static const JrVal *op_by_id(const JrVal *arr, const JrVal *id) {
+    for (size_t i = 0; arr && i < arr->n; i++) {
+        const JrVal *x = getk(&arr->items[i], "id", 2);
+        if (x && val_eq(x, id)) return &arr->items[i];
+    }
+    return NULL;
+}
+static int merge_value(Ctx *c, const JrVal *b, const JrVal *o, const JrVal *t, Buf *path, Buf *out, Paths *ps);
+static int merge_openings(Ctx *c, const JrVal *b, const JrVal *o, const JrVal *t, Buf *path, Buf *out, Paths *ps) {
+    const JrVal *s3[3] = {b, o, t};
+    for (int k = 0; k < 3; k++) {
+        if (s3[k] && s3[k]->type != JR_ARR) return -1;
+        for (size_t i = 0; s3[k] && i < s3[k]->n; i++) {
+            const JrVal *id = getk(&s3[k]->items[i], "id", 2);
+            if (s3[k]->items[i].type != JR_OBJ || !id || id->type != JR_STR) return -1;
+        }
+    }
+    size_t plen = path->len, mark = out->len;
+    int n = 0;
+    buf_putc(out, '[');
+    for (int side = 0; side < 2; side++) { /* ours' order, then the ones only theirs has */
+        const JrVal *arr = side ? t : o;
+        for (size_t i = 0; arr && i < arr->n; i++) {
+            const JrVal *id = getk(&arr->items[i], "id", 2);
+            if (side && op_by_id(o, id)) continue;
+            const JrVal *bo = op_by_id(b, id), *oo = op_by_id(o, id), *to = op_by_id(t, id);
+            if (plen) buf_putc(path, '.');
+            buf_append(path, id->s, id->n);
+            size_t at = out->len;
+            if (n) buf_putc(out, ',');
+            if (merge_value(c, bo, oo, to, path, out, ps)) n++;
+            else out->len = at;
+            path->len = plen;
+        }
+    }
+    buf_putc(out, ']');
+    if (!n) out->len = mark;
+    return n ? 1 : 0;
+}
+
 static int merge_value(Ctx *c, const JrVal *b, const JrVal *o, const JrVal *t, Buf *path, Buf *out, Paths *ps) {
+    if (path->len == 8 && !memcmp(path->p, "openings", 8) && !(val_eq(o, t))) { /* WAVE1B (B4) */
+        int r = merge_openings(c, b, o, t, path, out, ps);
+        if (r >= 0) return r;
+    }
     if (b && o && t && b->type == JR_OBJ && o->type == JR_OBJ && t->type == JR_OBJ && same_variant(b, o) &&
         same_variant(o, t) && !val_eq(o, t)) {
         size_t nk = b->n + o->n + t->n, u = 0;

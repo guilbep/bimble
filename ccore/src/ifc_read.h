@@ -25,6 +25,7 @@
 #include "buf.h"
 #include "model.h"
 #include "scene.h"
+#include "step.h"
 #include "viewfile.h"
 
 typedef struct { /* bimble_geom::StoreyLevel */
@@ -61,6 +62,7 @@ typedef struct {
     cc_ifc_grid *grids; /* file order */
     size_t ngrids;
     cc_ifc_georef georef;
+    double base_point_mm[3]; /* LINKF: the origin of the IfcBuilding's placement, world mm (a link's base point) */
     cc_str schema; /* FILE_SCHEMA names joined by ", " ("IFC4", "IFC2X3") */
     size_t triangles; /* Scene::triangle_count: local meshes' triangles */
     /* Counts for reports (not in the golden text, no Rust twin): the products with a body
@@ -73,6 +75,27 @@ typedef struct {
 /* Reads STEP text for display. Always initializes `out` (free it with cc_ifc_scene_free).
  * 0 ok; -1 with `err`: "parse: line N: …", "not an IFC file (schema \"…\")", "out of memory". */
 int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err);
+
+/* LINKF: the largest IFC an open or a link reads: the STEP reader's (step.h CC_STEP_MAX_BYTES,
+ * read.rs 64 GiB) on a 64-bit build; 1 GiB in a 32-bit one (wasm32: Rust's file.rs wasm cap).
+ * Not CC_MAX_FILE_BYTES: that is the .bimble's (its JSON DOM). What the machine can give is the
+ * other bound (session.c: "too large for this machine"). */
+#define CC_IFC_MAX_FILE_BYTES (sizeof(size_t) > 4 ? (size_t)CC_STEP_MAX_BYTES : (size_t)1 << 30)
+/* Peak memory of a link's read (the text, the STEP entities, the meshes, the cache written) as
+ * PER_BYTE x the file + BASE, from a local folder of 17 IFC files (ADR 0079): the files over
+ * 100 MB peaked at 2.2 to 3.6 times their size; small files with heavy meshes up to 10 times
+ * (60 MB: 0.58 GB): BASE, at most 6 x the file (session.c cc_session_fits). */
+#define CC_IFC_READ_PEAK_PER_BYTE 4
+#define CC_IFC_READ_PEAK_BASE ((uint64_t)512 << 20)
+
+/* LINKF: cc_ifc_read with progress and cancel (both optional): `done` goes 0..1000 as it reads
+ * (the STEP parse to 300, the elements to 950, the rest to 1000); a nonzero `cancel` stops it
+ * between batches with "cancelled". Written and read with relaxed atomics (another thread polls). */
+typedef struct {
+    size_t done;
+    int cancel;
+} cc_ifc_progress;
+int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg);
 void cc_ifc_scene_free(cc_ifc_scene *s);
 
 /* serde_json of the Georef ("{}" when default), appended. */
@@ -96,4 +119,6 @@ void cc_ifc_error_txt(Buf *b, const cc_error *err);
  * draws), appended to `out`. The GlobalId field holds the file's id text, cut or padded with
  * '0' to 22 bytes. 0 ok, -1 with `err` (out of memory, a count over u32). */
 int cc_ifc_scene_bmsh(const cc_ifc_scene *s, uint32_t rev, Buf *out, cc_error *err);
+/* 3D1: the same as BMSH version 3 (scene_bmsh.h: each shape once, a placement per element). */
+int cc_ifc_scene_bmsh3(const cc_ifc_scene *s, uint32_t rev, Buf *out, cc_error *err);
 #endif

@@ -10,6 +10,7 @@
 #include "fmt.h"
 #include "json_w.h"
 #include "scene_build.h"
+#include "scene_bmsh.h"
 
 #define ELEMENT_MAX_TRIANGLES ((size_t)50000000) /* read.rs */
 #define BATCH 1024
@@ -326,13 +327,14 @@ done:
 static double to_degrees(double x) { return x * 57.2957795130823208767981548141051703; }
 
 /* georef() with Georef::from_frame */
-static void georef(R *r, double scale, Arena *a, cc_ifc_georef *g, int *oom) {
+static void georef(R *r, double scale, Arena *a, cc_ifc_georef *g, double base_mm[3], int *oom) {
     memset(g, 0, sizeof *g);
     const cc_step_entity *b = first_of(r->f, "IFCBUILDING");
     uint64_t pl;
     Aff bf = b && cc_sv_as_ref(arg(b, 5), &pl) ? object_placement(r, pl, 0) : IDENT;
     double rot = to_degrees(cc_atan2(bf.x[1], bf.x[0]));
     g->rotation_deg = round_rs(rot * 1e6) / 1e6 + 0.0;
+    for (int k = 0; k < 3; k++) base_mm[k] = bf.t[k] * scale + 0.0; /* LINKF: the building's origin, world mm */
     double e = bf.t[0] * scale / 1000.0, n = bf.t[1] * scale / 1000.0;
     if (e >= 2480000.0 && e <= 2840000.0 && n >= 1070000.0 && n <= 1300000.0) {
         g->has_crs = 1;
@@ -695,7 +697,13 @@ static void mesh_job(void *ctx, size_t k, size_t w) {
 
 /* ---- read */
 
-static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
+/* LINKF: progress (ifc_read.h cc_ifc_progress), relaxed atomics: another thread reads it. */
+static void pg_set(cc_ifc_progress *pg, size_t v) {
+    if (pg) cc_atomic_store(&pg->done, v);
+}
+static int pg_cancelled(cc_ifc_progress *pg) { return pg && cc_atomic_load(&pg->cancel); }
+
+static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg) {
     cc_scene *s = &out->scene;
     Arena *a = &s->arena;
     int rc = -1, oom = 0;
@@ -784,7 +792,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     PROF("  ids");
     if (storey_levels(&r, scale, a, &out->storeys, &out->nstoreys)) goto oom;
     if (grid_axes(&r, scale, a, &out->grids, &out->ngrids)) goto oom;
-    georef(&r, scale, a, &out->georef, &oom);
+    georef(&r, scale, a, &out->georef, out->base_point_mm, &oom);
     warnings = r.warnings;
     memset(&r.warnings, 0, sizeof r.warnings);
     r_free(&r);
@@ -844,6 +852,8 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     if (!items || !res) goto oom;
     for (size_t b0 = 0; b0 < nids; b0 += BATCH) {
         size_t bn = min_z(BATCH, nids - b0);
+        pg_set(pg, 300 + 650 * b0 / nids); /* LINKF */
+        if (pg_cancelled(pg)) goto cancelled;
         /* Fresh readers per batch (read.rs: map_init per batch). */
         for (size_t w = 0; w < nw; w++) {
             r_free(&rs[w]);
@@ -1068,6 +1078,9 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     goto done;
 oom:
     set_err(err, "out of memory", "");
+    goto done;
+cancelled: /* LINKF */
+    set_err(err, "cancelled", "");
 done:
     for (size_t k = 0; k < nres; k++) piece_free(&res[k]);
     for (size_t k = 0; items && k < nitems; k++) tris_free(&items[k].tris);
@@ -1098,6 +1111,10 @@ done:
 }
 
 int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
+    return cc_ifc_read_progress(text, n, out, err, NULL);
+}
+
+int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg) {
     memset(out, 0, sizeof *out);
     arena_init(&out->scene.arena, 0);
     out->schema.p = "";
@@ -1125,6 +1142,7 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
         return -1;
     }
     PROF("step parse");
+    pg_set(pg, 300); /* LINKF */
 #ifdef CC_IFC_PROFILE
     fprintf(stderr, "PROF entities %zu\n", f.n);
 #endif
@@ -1145,7 +1163,8 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
         cc_step_free(&f);
         return -1;
     }
-    int rc = read_parsed(&f, text, n, out, err);
+    int rc = pg_cancelled(pg) ? (set_err(err, "cancelled", ""), -1) : read_parsed(&f, text, n, out, err, pg);
+    if (!rc) pg_set(pg, 950);
     PROF("geometry+scene total");
     cc_step_free(&f);
     return rc;
@@ -1190,6 +1209,7 @@ int cc_ifc_scene_meta(const cc_ifc_scene *s, cc_viewfile_meta *mt) {
         info[k].name = x->name;
         info[k].storey = x->storey;
         info[k].material = x->material;
+        info[k].volume_fix_m3 = 0.0; /* WAVE1B (B1): a model's sleeves only */
     }
     for (size_t i = 0; i < s->nstoreys; i++) {
         st[i].name = s->storeys[i].name;
@@ -1382,4 +1402,15 @@ int cc_ifc_scene_bmsh(const cc_ifc_scene *is, uint32_t rev, Buf *out, cc_error *
 done:
     arena_free(&tmp);
     return rc;
+}
+
+/* ---- 3D1: BMSH version 3 (scene_bmsh.h), the ids as cc_ifc_scene_bmsh writes them */
+static void ifc_bmsh_id(const void *ctx, const cc_scene *s, size_t k, char out[22]) {
+    const cc_ifc_scene *is = ctx;
+    cc_str id = is->info[s->elements[k].model_index].global_id;
+    for (size_t i = 0; i < 22; i++) out[i] = i < id.n ? id.p[i] : '0';
+}
+
+int cc_ifc_scene_bmsh3(const cc_ifc_scene *is, uint32_t rev, Buf *out, cc_error *err) {
+    return cc_scene_bmsh3(&is->scene, ifc_bmsh_id, is, rev, out, err);
 }

@@ -2,7 +2,8 @@
 // node ccore/test/lab_measure.mjs. Starts out/tcc/bimble-ccore (or $HOST_BIN) with a copy of
 // golden/frame.json, Vite from web-ui/ and headless /usr/bin/chromium over raw CDP; opens
 // /?native=1&gl=1&port=…&token=… and, with real mouse events:
-//   3D: action measure (pressed), the pointer near the foot corner (-150, -150, 0) of column P1.00
+//   3D: action measure (pressed); a pointer move redraws the overlay alone, not the model (MEAS1);
+//     the pointer near the foot corner (-150, -150, 0) of column P1.00
 //     snaps to it (a corner), a click; near the foot corner (5850, -150, 0) of P1.10, a click: one
 //     measurement, "6 000 mm" (thin space) drawn by the overlay, `measurements` has 1 row
 //     ("1. 6 000 mm"), rev and the history unchanged; clear: 0 rows;
@@ -150,7 +151,9 @@ async function main() {
     if (!on) throw new Error(`(${x}, ${y}) -> ${xy} is not on the canvas`);
     return xy;
   };
-  const settle = async () => { const f0 = await frames(); await waitFor("a new frame", 5000, async () => (await frames()) > f0).catch(() => {}); await sleep(100); };
+  // a new frame of the model or, MEAS1, of the overlay alone
+  const drawn = () => evalJs("window.__bbGl.frames + (window.__bbGl.overlayFrames ?? 0)");
+  const settle = async () => { const f0 = await drawn(); await waitFor("a new frame", 5000, async () => (await drawn()) > f0).catch(() => {}); await sleep(100); };
   const shot = async (name) => { if (!process.env.SHOTS) return; const { data } = await S("Page.captureScreenshot", { format: "png" }); (await import("node:fs")).writeFileSync(join(process.env.SHOTS, `${name}.png`), Buffer.from(data, "base64")); };
   const PLAN_N1 = "3w8zGYnP$Ay1lyvMZjDnXq";
   const THIN = "\u2009";
@@ -187,6 +190,14 @@ async function main() {
   await mMove(await screen(-148, -148, 0));
   const h1 = (await gl()).measure?.hover;
   check("3D: the pointer near P1.00's foot snaps to its corner", h1?.snap === "corner" && JSON.stringify(at(h1)) === "[-150,-150,0]", JSON.stringify(h1));
+  // MEAS1 (ADR 0074): a pointer move while measuring draws the overlay (marker, rubber line), not the model
+  await sleep(300);
+  const g0 = await gl();
+  await mMove(await screen(2000, -148, 1000));
+  await sleep(300);
+  const g1 = await gl();
+  check("3D: a pointer move redraws the overlay alone, not the model (MEAS1)", g1.frames === g0.frames && g1.overlayFrames > g0.overlayFrames,
+    `frames ${g0.frames} -> ${g1.frames}, overlay frames ${g0.overlayFrames} -> ${g1.overlayFrames}`);
   await mClick(await screen(-148, -148, 0));
   check("3D: click 1 keeps the first point", JSON.stringify((await gl()).measure?.first) === "[-150,-150,0]", JSON.stringify((await gl()).measure?.first));
   await mMove(await screen(5852, -148, 0));

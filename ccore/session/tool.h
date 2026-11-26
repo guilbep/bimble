@@ -53,6 +53,11 @@ int cc_snap_targets_build(cc_snap_targets *t, const cc_scene *sc, double level, 
  * axes through the columns, as above. */
 int cc_snap_targets_build_grid(cc_snap_targets *t, const cc_scene *sc, double level, double next, const double (*grid)[4],
                                size_t ngrid);
+/* MEAS1: the same, `box` (NULL: none) the elements' boxes in scene coordinates (measure.h
+ * cc_mboxes): an element whose box lies outside the height band is skipped without placing its
+ * mesh (the same targets: its points would all be outside too). */
+int cc_snap_targets_build_boxes(cc_snap_targets *t, const cc_scene *sc, double level, double next, const double (*grid)[4],
+                                size_t ngrid, const float (*box)[6]);
 void cc_snap_targets_free(cc_snap_targets *t);
 /* snap.rs `snap`: `p` snapped within `tol` mm into `out`; returns the kind (CC_SNAP_NONE: p
  * rounded to 10 mm). */

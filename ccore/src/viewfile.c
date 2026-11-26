@@ -126,6 +126,7 @@ int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const c
         const cc_material *mat = cc_model_material(m, &me->material);
         if (!sto || !mat) return -1;
         info[k].global_id.p = e->id.c, info[k].global_id.n = 22;
+        info[k].volume_fix_m3 = cc_sleeve_volume_fix_m3(me); /* WAVE1B (B1) */
         info[k].name = me->name;
         info[k].storey = sto->name;
         info[k].material = mat->name;
@@ -180,6 +181,7 @@ int cc_viewfile_meta_from_file(cc_viewfile_meta *mt, const cc_viewfile *v) {
         info[k].name = x->name;
         info[k].storey = x->storey;
         info[k].material = x->material;
+        info[k].volume_fix_m3 = 0.0; /* WAVE1B (B1): a model's sleeves only */
     }
     mt->info = info, mt->ninfo = v->nelements;
     mt->storeys = v->storeys, mt->nstoreys = v->nstoreys;
@@ -627,6 +629,17 @@ static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
             if (!ok) return fail(e, E_INVALID, "georef: not JSON");
             v->georef = g;
             v->has_georef = 1;
+        } else if (memcmp(kind, "SRCE", 4) == 0 && !v->has_source) { /* LINKF: a link cache's source */
+            cc_str g;
+            if (rd_str(&s, &g, e)) return -1;
+            Arena scratch;
+            arena_init(&scratch, 0);
+            JrError je;
+            int ok = jr_parse(&scratch, g.p, g.n, &je) != NULL;
+            arena_free(&scratch);
+            if (!ok) return fail(e, E_INVALID, "source: not JSON");
+            v->source = g;
+            v->has_source = 1;
         } else if (memcmp(kind, "HEAD", 4) == 0 || memcmp(kind, "META", 4) == 0) {
             return fail(e, E_INVALID, "section repeated");
         } else {
@@ -663,6 +676,16 @@ static void set_msg(cc_error *err, const Err *e) {
     err->msg[n] = 0;
     err->offset = CC_NO_OFFSET;
     buf_free(&b);
+}
+
+int cc_viewfile_append_source(Buf *out, const char *json, size_t n) {
+    Buf p;
+    buf_init(&p);
+    put_str(&p, json, n);
+    section(out, "SRCE", &p);
+    int bad = p.oom || out->oom;
+    buf_free(&p);
+    return bad ? -1 : 0;
 }
 
 int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err) {

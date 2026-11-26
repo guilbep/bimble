@@ -27,11 +27,36 @@ int cc_links_panel_json(struct cc_session *s, Buf *out) {
         const cc_link *k = &s->links[i];
         char ext[32];
         ext_of(k->name, ext);
+        /* LINKF: the conversion's state and the link's numbers (links.h) */
+        const cc_scene *sc = cc_link_scene(k);
+        uint64_t tris = 0;
+        for (size_t e = 0; e < sc->nelements; e++) {
+            const cc_mesh *lm = cc_scene_local_mesh(sc, e);
+            if (lm && (sc->elements[e].shape < 0)) tris += lm->ni / 3;
+        }
+        for (size_t e = 0; e < sc->nshapes; e++) tris += sc->shapes[e].ni / 3; /* each shared shape once */
         jw_obj_begin(&w);
+        jw_key(&w, "bytes"), jw_u64(&w, k->bytes);
+        jw_key(&w, "cache"), k->cache ? jw_str(&w, k->cache) : jw_null(&w);
+        jw_key(&w, "cache_mtime_s"), jw_i64(&w, k->cache ? k->cache_mtime_s : 0);
+        jw_key(&w, "colour"), k->colour >= 0 ? jw_u64(&w, (uint64_t)k->colour) : jw_null(&w);
+        jw_key(&w, "elements"), jw_u64(&w, sc->nelements);
+        jw_key(&w, "from_cache"), jw_bool(&w, k->from_cache);
         jw_key(&w, "kind"), jw_str(&w, ext);
-        jw_key(&w, "missing"), jw_bool(&w, k->kind == 0);
+        jw_key(&w, "log"), k->log ? jw_str(&w, k->log) : jw_null(&w);
+        jw_key(&w, "message"), k->msg ? jw_str(&w, k->msg) : jw_null(&w);
+        jw_key(&w, "missing"), jw_bool(&w, k->state == CC_LS_MISSING);
+        jw_key(&w, "move_mm"), jw_arr_begin(&w);
+        for (int c = 0; c < 3; c++) jw_f64(&w, k->move_mm[c]);
+        jw_arr_end(&w);
         jw_key(&w, "name"), jw_str(&w, k->name);
+        jw_key(&w, "origin"), jw_str(&w, CC_LINK_ORIGIN_NAME[k->origin >= 0 && k->origin < 4 ? k->origin : 0]);
         jw_key(&w, "path"), jw_str(&w, k->path ? k->path : "");
+        jw_key(&w, "pinned"), jw_bool(&w, k->pinned);
+        jw_key(&w, "progress"), jw_u64(&w, k->state == CC_LS_CONVERTING ? k->progress / 10 : k->state == CC_LS_READY ? 100 : 0);
+        jw_key(&w, "rotation_deg"), jw_f64(&w, k->rotation_deg);
+        jw_key(&w, "state"), jw_str(&w, CC_LINK_STATE_NAME[k->state >= 0 && k->state <= CC_LS_UNLOADED ? k->state : 0]);
+        jw_key(&w, "triangles"), jw_u64(&w, tris);
         jw_key(&w, "visible"), jw_bool(&w, k->visible);
         jw_obj_end(&w);
     }

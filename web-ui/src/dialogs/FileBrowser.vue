@@ -18,6 +18,12 @@ interface Listing { dir: string; parent: string | null; entries: Entry[]; hidden
 const req = fileRequest.value;
 const purpose: Purpose = req?.purpose ?? "open";
 const saving = !!PURPOSES[purpose].save;
+const folder = !!PURPOSES[purpose].folder; // LINKF: Link a folder…: the folder shown is the answer
+// LINKF: Link IFC… picks several files: click one, Ctrl/Cmd-click toggles, Shift-click a range,
+// Ctrl A all; a checkbox per row on a narrow screen; "Link this folder" too.
+const multi = purpose === "link_model";
+const sel = ref<Set<string>>(new Set());
+let anchor: string | null = null;
 const roots = ref<{ kind: "home" | "root"; path: string }[]>([]);
 const listing = ref<Listing | null>(null);
 const where = ref("");
@@ -70,15 +76,43 @@ onMounted(() => {
 });
 
 const picked = ref<string | null>(null);
-function click(e: Entry): void {
+const files = computed(() => entries.value.filter((e) => !isDir(e) && !e.outside));
+function pickMulti(e: Entry, ev: MouseEvent | KeyboardEvent | null, toggle = false): void {
+  const s = new Set(sel.value);
+  if (ev?.shiftKey && anchor) {
+    const f = files.value.map((x) => x.name), a = f.indexOf(anchor), b = f.indexOf(e.name);
+    if (a >= 0 && b >= 0) for (let i = Math.min(a, b); i <= Math.max(a, b); i++) s.add(f[i]!);
+  } else if (toggle || ev?.ctrlKey || ev?.metaKey) {
+    if (s.has(e.name)) s.delete(e.name); else s.add(e.name);
+    anchor = e.name;
+  } else {
+    s.clear(), s.add(e.name), anchor = e.name;
+  }
+  sel.value = s;
+  picked.value = s.size ? e.name : null;
+}
+function click(e: Entry, ev: MouseEvent | null = null): void {
   if (e.outside) return;
-  if (isDir(e)) list(join(listing.value!.dir, e.name));
-  else {
-    picked.value = e.name;
-    if (saving) name.value = e.name;
+  if (isDir(e)) { sel.value = new Set(); anchor = null; list(join(listing.value!.dir, e.name)); return; }
+  if (multi) return pickMulti(e, ev);
+  picked.value = e.name;
+  if (saving) name.value = e.name;
+}
+function keys(ev: KeyboardEvent): void {
+  if (multi && (ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a" && !(ev.target instanceof HTMLInputElement && ev.target.type !== "checkbox")) {
+    ev.preventDefault();
+    sel.value = new Set(files.value.map((x) => x.name));
   }
 }
+const selSize = computed(() => files.value.filter((x) => sel.value.has(x.name)).reduce((a, x) => a + x.size, 0));
+function linkFolderHere(): void { if (listing.value && agree.value) req?.resolve({ folder: listing.value.dir }); }
 function choose(n: string | null = saving ? name.value.trim() : picked.value): void {
+  if (folder && listing.value && agree.value) return req?.resolve(listing.value.dir); // LINKF
+  if (multi && listing.value && agree.value) { // LINKF: the selection, in the folder's order
+    const ps = files.value.filter((x) => sel.value.has(x.name)).map((x) => join(listing.value!.dir, x.name));
+    if (ps.length) req?.resolve(ps);
+    return;
+  }
   if (!n || !listing.value || !agree.value) return; // FIXUI: never into a folder other than the one shown
   let file = n;
   // A typed name without its extension takes the purpose's first one.
@@ -86,13 +120,13 @@ function choose(n: string | null = saving ? name.value.trim() : picked.value): v
   req?.resolve(file.startsWith("/") || /^[A-Za-z]:[\\/]/.test(file) ? file : join(listing.value.dir, file));
 }
 const exists = computed(() => saving && !!name.value.trim() && (listing.value?.entries ?? []).some((e) => e.name === name.value.trim()));
-const go = computed(() => t(saving ? (purpose === "save_as" ? "files.go.save" : "files.go.export") : purpose.startsWith("link") ? "files.go.link" : purpose === "import_ifc" ? "files.go.import" : "files.go.open"));
-const size = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const go = computed(() => multi && sel.value.size > 1 ? t("files.go.linkN", { n: sel.value.size }) : t(saving ? (purpose === "save_as" ? "files.go.save" : "files.go.export") : folder ? "files.go.linkFolder" : purpose.startsWith("link") ? "files.go.link" : purpose === "import_ifc" ? "files.go.import" : "files.go.open"));
+const size = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`);
 const date = (s: number) => new Date(s * 1000).toLocaleString();
 </script>
 
 <template>
-  <div class="bb-dialog fb" role="dialog" :aria-label="t(`files.title.${purpose}`)" data-bb="file-browser" :data-purpose="purpose">
+  <div class="bb-dialog fb" role="dialog" :aria-label="t(`files.title.${purpose}`)" data-bb="file-browser" :data-purpose="purpose" @keydown="keys">
     <div style="display:flex;align-items:center">
       <h2 style="font-size:22px">{{ t(`files.title.${purpose}`) }}</h2><span style="flex:1"></span>
       <button class="ib" type="button" :aria-label="t('files.close')" data-bb="file-browser-close" @click="req?.resolve(null)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
@@ -109,9 +143,10 @@ const date = (s: number) => new Date(s * 1000).toLocaleString();
           {{ r.kind === 'home' ? t('files.home') : r.path.split('/').filter(Boolean).pop() ?? r.path }}
         </button>
       </nav>
-      <div class="card list" role="listbox" :aria-label="t('files.folder')" data-bb="file-browser-list">
-        <button v-for="e in entries" :key="e.name" type="button" role="option" class="ent" :class="{ on: picked === e.name, off: e.outside }" :aria-selected="picked === e.name" :disabled="e.outside"
-          :title="e.outside ? t('files.outside') : e.name" data-bb="file-browser-entry" :data-name="e.name" :data-kind="e.kind" @click="click(e)" @dblclick="!isDir(e) && !e.outside && choose(saving ? e.name : e.name)">
+      <div class="card list" role="listbox" :aria-label="t('files.folder')" :aria-multiselectable="multi ? 'true' : undefined" data-bb="file-browser-list" tabindex="-1">
+        <button v-for="e in entries" :key="e.name" type="button" role="option" class="ent" :class="{ on: multi ? sel.has(e.name) : picked === e.name, off: e.outside, multi }" :aria-selected="multi ? sel.has(e.name) : picked === e.name" :disabled="e.outside"
+          :title="e.outside ? t('files.outside') : e.name" data-bb="file-browser-entry" :data-name="e.name" :data-kind="e.kind" @click="click(e, $event)" @dblclick="!isDir(e) && !e.outside && !multi && choose(saving ? e.name : e.name)">
+          <input v-if="multi && !isDir(e) && !e.outside" type="checkbox" class="ck" :checked="sel.has(e.name)" :aria-label="e.name" data-bb="file-browser-check" @click.stop="pickMulti(e, null, true)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path v-if="isDir(e)" d="M3 7h6l2 2h10v10H3z"/><path v-else d="M6 3h8l4 4v14H6z"/>
             <path v-if="e.kind === 'link'" d="M10 15l4-4M14 15v-4h-4"/>
@@ -129,8 +164,10 @@ const date = (s: number) => new Date(s * 1000).toLocaleString();
     <div style="display:flex;gap:10px;align-items:center;justify-content:flex-end">
       <span v-if="error" class="note err" role="alert" data-bb="file-browser-error">{{ error }}</span>
       <span v-else-if="exists" class="note" data-bb="file-browser-replace">{{ t('files.replace', { name: name.trim() }) }}</span>
+      <span v-else-if="multi && sel.size" class="note" data-bb="file-browser-count">{{ t('files.selected', { n: sel.size, size: size(selSize) }) }}</span>
       <span style="flex:1"></span>
-      <button class="btn p" type="button" :disabled="!agree || (saving ? !name.trim() : !picked)" :title="agree ? undefined : t('files.notShown')" data-bb="file-browser-go" @click="choose()">{{ go }}</button>
+      <button v-if="multi" class="btn" type="button" :disabled="!agree" data-bb="file-browser-link-folder" @click="linkFolderHere()">{{ t('files.go.linkFolder') }}</button>
+      <button class="btn p" type="button" :disabled="!agree || (folder ? false : multi ? !sel.size : saving ? !name.trim() : !picked)" :title="agree ? undefined : t('files.notShown')" data-bb="file-browser-go" @click="choose()">{{ go }}</button>
     </div>
   </div>
 </template>
@@ -150,6 +187,9 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 .ent:hover { background: var(--bb-sunk); }
 .ent.on { background: var(--bb-pink); }
 .ent.off { opacity: .55; cursor: default; }
+.ent.multi { grid-template-columns: 18px minmax(0, 1fr) 80px 150px; }
+.ck { display: none; margin: 0; }
+@media (max-width: 480px) { .ent.multi { grid-template-columns: 18px 18px minmax(0, 1fr) 70px; } .ck { display: block; } } /* LINKF: no modifier keys on a phone */
 .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: 'DM Mono', monospace; }
 .meta { font-size: 11.5px; color: var(--bb-stone); text-align: right; white-space: nowrap; }

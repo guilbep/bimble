@@ -10,16 +10,27 @@
 #include <stdint.h>
 #include "buf.h"
 #include "history.h"
+#include "hlod.h" /* 3D2 */
 #include "ifc_read.h"
 #include "measure.h"
 #include "model.h"
 #include "platform.h"
 #include "scene.h"
+#include "setting_out.h" /* SETOUT */
+#include "refplanes.h" /* WAVE1B */
+#include "view_sheet.h"  /* VIEWSHEET */
 #include "tool.h"
 #include "viewfile.h"
 #include "visibility.h"
 
-typedef enum { CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB } cc_kind; /* verbs.rs:29 */
+typedef enum {
+    CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB, /* verbs.rs:29 */
+    /* CONC1 (ADR 0077, concrete.h): the Concrete tab's kinds, run by their own verbs */
+    CC_KIND_FOOTING, CC_KIND_STRIP_FOOTING, CC_KIND_RAFT, CC_KIND_OPENING, CC_KIND_SLEEVE,
+    CC_KIND_GRID_AXIS, /* WAVE1B (A2): an axis of the model's grid by two clicks (verb grid_axis_add) */
+    CC_KIND_COUNT
+} cc_kind;
+#define CC_CONC_N 11 /* concrete.c: the sizes of the CONC1 kinds */
 
 enum { CC_VIEW_NONE, CC_VIEW_IFC, CC_VIEW_FILE };
 
@@ -66,6 +77,7 @@ typedef struct cc_session {
     double offset[3];
     double top_offset_mm;
     int polygon;
+    double conc[CC_CONC_N]; /* CONC1: the Concrete tab's sizes (concrete.h) */
     cc_tool tool; /* the place tool's points and pointer (tool.h); cleared with the placing state */
     int tab_open; /* a view tab is current (`active`); 0: Home (views.h) */
     /* The views (ticket C1, views.h): the active view and the open view tabs, in order. */
@@ -85,6 +97,15 @@ typedef struct cc_session {
     int mesh_status; /* 0: nothing cached */
     const cc_model *mesh_model;
     uint32_t mesh_rev;
+    int mesh_form; /* 3D1: the BMSH version cached (1, or 3: shapes once, scene_bmsh.h) */
+    /* 3D2 (ADR 0078): the HLOD proxies of the scene /mesh draws (mesh.h cc_mesh_proxies), built in
+     * steps the page asks for, then their BPRX bytes; per (scene, rev). */
+    cc_hlod *hlod;
+    const cc_scene *hlod_scene;
+    uint32_t hlod_rev;
+    int hlod_status; /* 0 none, 202 building, 200 built (hlod_out: BPRX), 500 (hlod_out: the error) */
+    Buf hlod_out;
+    double hlod_ms;  /* build time so far */
     cc_persist *persist;
     /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link
      * order; dropped with the open model (lib.rs:1668). links_gen + 1 on every change to them
@@ -134,6 +155,18 @@ typedef struct cc_session {
     /* ---- KEY1: the plan annotation toggles (toggles.h), bit i set = off; 0 (all on) as new ---- */
     unsigned plan_off;
     /* ---- end KEY1 ---- */
+    /* ---- MEAS1: the element boxes of each scene the pointer can hit (measure.h cc_mboxes), one
+     * slot per layer of the measure tool (the shown scene, then the visible links), malloc'd, kept
+     * while their scene's key (rev, links_gen, view) holds; dropped with the model ---- */
+    cc_mboxes *mboxes;
+    size_t nmboxes;
+    /* ---- end MEAS1 ---- */
+    /* ---- SETOUT: the setting-out markers shown (setting_out.h), session state ---- */
+    cc_setout setout;
+    /* ---- WAVE1B: the work plane and the three-point plane tool (refplanes.h), session state ---- */
+    cc_wplane wp;
+    /* ---- VIEWSHEET: the section tool and the annotation types (view_sheet.h), session state ---- */
+    cc_viewsheet vsh;
     /* ---- PAPER1: paper.rs paper_views, the views shown On paper (by id, unsorted, unique;
      * cleared with the model, lib.rs:1661); plan_window: the Export view window (ribbon.rs:722
      * Action::OnPaper toggles it, :630 drawn pressed) ---- */
@@ -144,6 +177,14 @@ typedef struct cc_session {
     /* ---- LNK1: the links list as last saved or opened (links.h cc_links_changed), NULL: none ---- */
     char *links_saved;
     size_t links_saved_n;
+    /* ---- LINKF: the link conversions (links.h cc_links_tick): one at a time, smallest first ---- */
+    struct cc_link_job *link_job; /* running (on the carrier's thread, or done and not yet taken) */
+    uint32_t link_job_uid;        /* the link it is for (cc_link uid); 0: the link went */
+    uint32_t link_uid_next;
+    uint64_t link_cache_min;      /* CC_LINK_CACHE_MIN unless the carrier sets less (BIMBLE_LINK_CACHE_MIN) */
+    int link_no_beside;           /* 1: caches only in the platform's cache folder (BIMBLE_LINK_CACHE_BESIDE=0) */
+    struct cc_links_undo *links_undo, *links_redo; /* link_folder's undo and redo steps (links.h) */
+    size_t nlinks_undo, nlinks_redo, caplinks_undo, caplinks_redo;
     /* ---- end LNK1 ---- */
     /* ---- H2a: query pending's cache (versions.c), NULL: none ---- */
     struct cc_versions_cache *versions_cache;
@@ -154,6 +195,8 @@ typedef struct cc_session {
 cc_session *cc_session_new(const cc_platform *pf);
 /* Frees the model, history, caches and the session file state (writes nothing). NULL is fine. */
 void cc_session_free(cc_session *s);
+/* MEAS1: drops the measure tool's element boxes (calls.c keeps them, measure.h cc_mboxes). */
+void cc_session_mboxes_free(cc_session *s);
 
 /* lib.rs:191: the path of a new model until it is saved somewhere. */
 #define CC_UNTITLED "Untitled.bimble"
@@ -173,6 +216,15 @@ int cc_session_open(cc_session *s, const char *path, cc_error *err);
  * draws the scene. Replaces what is open only when the new file loaded; rev + 1; the session file
  * pauses (nothing to keep). 0 ok; -1 with `err`. */
 int cc_session_open_file(cc_session *s, const char *path, cc_error *err);
+
+/* LINKF: the largest file an open or a link of `path` reads, by its format (an IFC: the STEP
+ * reader's, a .bimbleview: its reader's, else CC_MAX_FILE_BYTES), and the reader's peak memory per
+ * input byte (`peak_per_byte`, optional). cc_session_fits: 0 when a file of `size` bytes at `path`
+ * is within that limit and its reader's peak within the memory the platform says is free (none
+ * said: no check); -1 with "<path>: larger than N bytes", -2 with "<path>: too large for this
+ * machine: ..." in `err`. Every open and link checks it before a byte is read. */
+size_t cc_session_read_limit(const char *path, size_t *peak_per_byte);
+int cc_session_fits(const cc_platform *pf, const char *path, uint64_t size, cc_error *err);
 
 /* File -> New (lib.rs:1688-1712 start_new, verbs.rs:101 new_model): project "Untitled" with a new
  * GlobalId, one storey "Level 0" at 0 mm, path CC_UNTITLED, editable and unsaved (as an imported

@@ -1,6 +1,8 @@
 /* See verb_table.h. The schema and summary texts below are Rust's (crates/bimble-api/src/
  * dispatch.rs), compacted from golden/verbs_schema/<verb>.json and golden/verbs_list.json. */
 #include "verb_table.h"
+#include "verbs_concrete.h" /* CONC1 */
+#include "refplane.h" /* WAVE1B */
 #include "verbs_materials.h" /* MAT1 */
 #include <string.h>
 #include "json_w.h"
@@ -404,17 +406,20 @@ static const char SCHEMA_GEOREF_SET[] =
     "rees counter-clockwise.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"north_m\":{\""
     "description\":\"What the survey system adds to y, m.\",\"format\":\"double\",\"type\":[\"numbe"
     "r\",\"null\"]},\"rotation_deg\":{\"description\":\"Project north: degrees counter-clockwise fr"
-    "om true north.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]}},\"title\":\"GeorefSetA"
-    "rgs\",\"type\":\"object\"}";
+    "om true north.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"survey_point_mm\":{\"des"
+    "cription\":\"The survey point (a benchmark of the site), world mm [x, y, z]; [] removes it (SETOUT, A"
+    "DR 0075).\",\"items\":{\"format\":\"double\",\"type\":\"number\"},\"type\":[\"array\",\"null\"]}},"
+    "\"title\":\"GeorefSetArgs\",\"type\":\"object\"}";
 static const char SUMMARY_GEOREF_SET[] =
-    "Set the model's georeference: project north, the survey system (LV95) and the map conversion; missing "
-    "ones are kept (a C addition, ADR 0045).";
+    "Set the model's georeference: project north, the survey system (LV95), the map conversion and the survey "
+    "point; missing ones are kept, angles come back in (-180, 180] (a C addition, ADR 0045, 0075).";
 int cc_vh_georef_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 /* ---- SEC1 ---- C additions of ticket SEC1: views, handlers in verbs_views.c. */
 static const char SCHEMA_VIEW_ADD[] =
     "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
     "escription\":\"Arguments of `view_add`: a new view (kind), or a copy of one (from).\",\"properti"
-    "es\":{\"facing\":{\"description\":\"A section's look direction.\",\"enum\":[\"north\",\"east\","
+    "es\":{\"depth_mm\":{\"description\":\"A section's depth beyond the cut, mm; 0 (default): all.\",\"form"
+    "at\":\"double\",\"type\":[\"number\",\"null\"]},\"facing\":{\"description\":\"A section's look direction.\",\"enum\":[\"north\",\"east\","
     "\"south\",\"west\",null],\"type\":[\"string\",\"null\"]},\"from\":{\"description\":\"GlobalId of"
     " a view to duplicate (its copy is named \\\"<name> (copy)\\\").\",\"type\":[\"string\",\"null\"]"
     "},\"kind\":{\"description\":\"plan, ceiling (a ceiling plan looking up), section or three_d.\","
@@ -422,7 +427,8 @@ static const char SCHEMA_VIEW_ADD[] =
     "ame\":{\"description\":\"The view's name; default: as Rust's viewer names a new view.\",\"type\""
     ":[\"string\",\"null\"]},\"origin\":{\"description\":\"A section's cut: a point it goes through, "
     "world mm [x, y]; default: the middle of the model.\",\"items\":{\"format\":\"double\",\"type\":"
-    "\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":[\"array\",\"null\"]},\"storey\":{\"descripti"
+    "\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":[\"array\",\"null\"]},\"scale\":{\"descripti"
+    "on\":\"1:N the view is drawn at (1 to 5000); default 100.\",\"format\":\"uint32\",\"type\":[\"integer\",\"null\"]},\"storey\":{\"descripti"
     "on\":\"A plan's level: its GlobalId.\",\"type\":[\"string\",\"null\"]}},\"title\":\"ViewAddArgs"
     "\",\"type\":\"object\"}";
 static const char SUMMARY_VIEW_ADD[] =
@@ -508,6 +514,80 @@ static const char SCHEMA_MATERIAL_REMOVE[] =
 static const char SUMMARY_MATERIAL_REMOVE[] =
     "Delete a material; refused while elements are made of it (a C addition).";
 /* ---- end MAT1 ---- */
+/* ---- CONC1 (ADR 0077): footings, raft, openings (verbs_concrete.h) ---- */
+static const char SCHEMA_FOOTING_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `footing_add` (CONC1, ADR 0077).\",\"properties\":{\"a\":{\"descript"
+    "ion\":\"A pad's centre (under a column there: centred on it), or a strip's first point (on a wal"
+    "l: along the whole wall), mm.\",\"items\":{\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\""
+    "type\":\"array\"},\"b\":{\"description\":\"A free strip's second point, mm.\",\"items\":{\"type\""
+    ":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"depth\":{\"description\":\"Thic"
+    "kness below the top, mm.\",\"type\":\"number\"},\"kind\":{\"description\":\"pad (default) or str"
+    "ip.\",\"enum\":[\"pad\",\"strip\"],\"type\":\"string\"},\"length\":{\"description\":\"Pad: size "
+    "along y, mm.\",\"type\":\"number\"},\"material\":{\"description\":\"Material name.\",\"type\":\""
+    "string\"},\"storey\":{\"description\":\"GlobalId of the storey.\",\"type\":\"string\"},\"width\""
+    ":{\"description\":\"Pad: size along x; strip: width, mm.\",\"type\":\"number\"}},\"required\":[\""
+    "storey\",\"a\"],\"title\":\"FootingAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_FOOTING_ADD[] = "Add an IfcFooting: a pad (under a column, centred, top at its base) or a strip (along a wall or between two points); a C addition.";
+static const char SCHEMA_RAFT_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `raft_add` (CONC1, ADR 0077).\",\"properties\":{\"material\":{\"desc"
+    "ription\":\"Material name.\",\"type\":\"string\"},\"outline\":{\"description\":\"Corners [x, y],"
+    " mm.\",\"items\":{\"description\":\"A corner.\",\"items\":{\"type\":\"number\"},\"maxItems\":2,\""
+    "minItems\":2,\"type\":\"array\"},\"type\":\"array\"},\"storey\":{\"description\":\"GlobalId of t"
+    "he storey (default: the lowest).\",\"type\":\"string\"},\"thickness\":{\"description\":\"mm, def"
+    "ault 400.\",\"type\":\"number\"}},\"required\":[\"outline\"],\"title\":\"RaftAddArgs\",\"type\":"
+    "\"object\"}";
+static const char SUMMARY_RAFT_ADD[] = "Add a raft: an IfcSlab BASESLAB from an outline, top at the storey's elevation; a C addition.";
+static const char SCHEMA_OPENING_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `opening_add` (CONC1, ADR 0077).\",\"properties\":{\"a\":{\"descript"
+    "ion\":\"Centre (one point) or first corner/end, mm.\",\"items\":{\"type\":\"number\"},\"maxItems"
+    "\":2,\"minItems\":2,\"type\":\"array\"},\"b\":{\"description\":\"Opposite corner (slab) or other"
+    " end (wall), mm.\",\"items\":{\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"arra"
+    "y\"},\"diameter\":{\"description\":\"A sleeve's diameter, mm.\",\"type\":\"number\"},\"height\":"
+    "{\"description\":\"A wall opening's height, mm.\",\"type\":\"number\"},\"host\":{\"description\""
+    ":\"GlobalId of the IfcWall or IfcSlab.\",\"type\":\"string\"},\"length\":{\"description\":\"A sl"
+    "ab opening's size along y, mm.\",\"type\":\"number\"},\"shape\":{\"description\":\"rectangle (de"
+    "fault) or round (a sleeve).\",\"enum\":[\"rectangle\",\"round\"],\"type\":\"string\"},\"sill\":{"
+    "\"description\":\"A wall opening's bottom above the wall's base, mm.\",\"type\":\"number\"},\"wi"
+    "dth\":{\"description\":\"mm.\",\"type\":\"number\"}},\"required\":[\"host\",\"a\"],\"title\":\"O"
+    "peningAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_OPENING_ADD[] = "Cut an opening (IfcOpeningElement) or a sleeve through a wall or a slab; refused outside the host or over another opening; a C addition.";
+static const char SCHEMA_OPENING_SET[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `opening_set` (CONC1, ADR 0077).\",\"properties\":{\"a\":{\"descript"
+    "ion\":\"New centre, mm.\",\"items\":{\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\""
+    ":\"array\"},\"diameter\":{\"description\":\"mm.\",\"type\":\"number\"},\"height\":{\"description"
+    "\":\"mm.\",\"type\":\"number\"},\"host\":{\"description\":\"GlobalId of the host.\",\"type\":\"s"
+    "tring\"},\"id\":{\"description\":\"GlobalId of the opening.\",\"type\":\"string\"},\"length\":{\""
+    "description\":\"mm.\",\"type\":\"number\"},\"sill\":{\"description\":\"mm.\",\"type\":\"number\""
+    "},\"width\":{\"description\":\"mm.\",\"type\":\"number\"}},\"required\":[\"host\",\"id\"],\"titl"
+    "e\":\"OpeningSetArgs\",\"type\":\"object\"}";
+static const char SUMMARY_OPENING_SET[] = "Move or resize an opening by its parameters (its GlobalId kept); a C addition.";
+static const char SCHEMA_OPENING_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `opening_remove` (CONC1, ADR 0077).\",\"properties\":{\"host\":{\"de"
+    "scription\":\"GlobalId of the host.\",\"type\":\"string\"},\"id\":{\"description\":\"GlobalId of"
+    " the opening.\",\"type\":\"string\"}},\"required\":[\"host\",\"id\"],\"title\":\"OpeningRemoveAr"
+    "gs\",\"type\":\"object\"}";
+static const char SUMMARY_OPENING_REMOVE[] = "Delete an opening of a host; a C addition.";
+/* ---- end CONC1 ---- */
+/* ---- WAVE1B: reference planes (refplane.h, ADR 0075) ---- */
+static const char SCHEMA_REFERENCE_PLANE_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":"
+    "\"Arguments of `reference_plane_add` (WAVE1B, ADR 0075): origin and normal, or three points.\",\"properties\":{"
+    "\"height\":{\"description\":\"Outline size along normal x x_axis, mm (default 10000).\",\"type\":\"number\"},"
+    "\"name\":{\"description\":\"Its name (default RP 1, RP 2...).\",\"type\":\"string\"},"
+    "\"normal\":{\"description\":\"[x, y, z] a direction.\",\"items\":{\"type\":\"number\"},\"maxItems\":3,\"minItems\":3,\"type\":\"array\"},"
+    "\"origin\":{\"description\":\"[x, y, z] world mm.\",\"items\":{\"type\":\"number\"},\"maxItems\":3,\"minItems\":3,\"type\":\"array\"},"
+    "\"points\":{\"description\":\"Three points [x, y, z] world mm, not on one line.\",\"maxItems\":3,\"minItems\":3,\"type\":\"array\"},"
+    "\"storey\":{\"description\":\"GlobalId of the storey.\",\"type\":\"string\"},"
+    "\"width\":{\"description\":\"Outline size along x_axis, mm (default 10000).\",\"type\":\"number\"},"
+    "\"x_axis\":{\"description\":\"[x, y, z] a direction in the plane.\",\"items\":{\"type\":\"number\"},\"maxItems\":3,\"minItems\":3,\"type\":\"array\"}},"
+    "\"required\":[\"storey\"],\"title\":\"ReferencePlaneAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_REFERENCE_PLANE_ADD[] = "Add a reference plane (an IfcVirtualElement); a C addition.";
+/* ---- end WAVE1B ---- */
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -555,6 +635,14 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(material_set, MATERIAL_SET),
     V(material_remove, MATERIAL_REMOVE),
     /* ---- end MAT1 ---- */
+    /* ---- CONC1 ---- */
+    V(footing_add, FOOTING_ADD),
+    V(raft_add, RAFT_ADD),
+    V(opening_add, OPENING_ADD),
+    V(opening_set, OPENING_SET),
+    V(opening_remove, OPENING_REMOVE),
+    /* ---- end CONC1 ---- */
+    V(reference_plane_add, REFERENCE_PLANE_ADD), /* WAVE1B */
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

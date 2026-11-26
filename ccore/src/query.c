@@ -591,8 +591,8 @@ static void q_element(const cc_model *m, const cc_element *e, JsonW *w) {
     else jw_null(w);
     jw_key(w, "name");
     w_s(w, e->name);
-    jw_key(w, "openings"); /* the C model refuses files with openings */
-    jw_u64(w, 0);
+    jw_key(w, "openings"); /* query.rs:146 e.openings.len() (CONC1: the C model keeps them) */
+    jw_u64(w, e->nopenings);
     jw_key(w, "placement");
     jw_obj_begin(w);
     w_vec3(w, "origin", e->placement.origin);

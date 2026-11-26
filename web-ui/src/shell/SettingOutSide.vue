@@ -5,9 +5,14 @@
 // height), changed with the verb `georef_set` (one undoable step per field, the verb's error shown).
 // Orientation = the active view's true_north. The selection's survey coordinates through
 // `coordinates`; the pointer's readout in the status bar is ticket KEY1's.
+// SETOUT (ADR 0075): the survey point (`query setting_out`, verb georef_set {survey_point_mm}: X,
+// Y, Z in world mm, its survey coordinates read back; at the base point until placed). "Move the
+// base point" is a capability the core does not serve (base_point_move): drawn "not yet".
 import { computed, ref } from "vue";
-import { coordinates, editableNow, element, georefSet, northInfo, openViews, setView, state, type GeorefPatch } from "../bimble";
+import { coordinates, editableNow, element, georefSet, northInfo, openViews, setView, settingOut, state, surveyPointSet, type GeorefPatch } from "../bimble";
+import { placing, referencePlaneAdd, referencePlaneDelete, referencePlaneRename, refPlanes, storeys, workPlaneSet } from "../bimble"; // WAVE1B
 import { t } from "../i18n";
+import { has } from "./capability";
 
 const view = computed(() => openViews.value.views.find((v) => v.id === openViews.value.active) ?? null);
 const orient = (e: Event) => view.value && setView(view.value.id, { true_north: (e.target as HTMLSelectElement).value === "true" });
@@ -36,6 +41,57 @@ const setNum = (k: Num, e: Event) => {
   apply({ [k]: v });
 };
 const setCrs = (e: Event) => apply({ crs: (e.target as HTMLInputElement).value.trim() });
+// ---- SETOUT: the survey point ----
+const sp = computed(() => settingOut.value?.survey_point ?? null);
+const AXES = ["X", "Y", "Z"] as const;
+const spShow = (i: number) => (sp.value ? String(Math.round(sp.value.at_mm[i]! * 1000) / 1000) : "");
+const setSp = (i: number, e: Event) => {
+  const txt = (e.target as HTMLInputElement).value.trim().replace(",", ".");
+  const v = Number(txt);
+  if (!sp.value || txt === "" || !Number.isFinite(v)) { error.value = t("settingout.badNumber"); ver.value++; return; }
+  const at = [...sp.value.at_mm] as [number, number, number];
+  at[i] = v;
+  error.value = surveyPointSet(at);
+  ver.value++;
+};
+const spText = computed(() => {
+  const s = sp.value?.survey_m;
+  return s ? `E ${s[0].toFixed(3)} N ${s[1].toFixed(3)} · ${s[2].toFixed(3)} m` : "—";
+});
+const moveServed = computed(() => has("base_point_move"));
+// ---- end SETOUT ----
+// ---- WAVE1B: reference planes (ADR 0075, ccore/session/refplanes.h): the work plane chosen among the
+// stored planes and the implicit ones (levels, grid axes); stored planes renamed and deleted (verbs
+// rename, delete); a new one by origin + normal (verb reference_plane_add); by three points through
+// the ribbon's Reference planes tool. ----
+const rpServed = computed(() => has("reference_planes"));
+const rp = computed(() => refPlanes.value);
+const wpValue = computed(() => (rp.value?.active ? `${rp.value.active.kind}:${rp.value.active.id}` : ""));
+const levels = computed(() => (rp.value?.implicit ?? []).filter((x) => x.kind === "level").sort((a, b) => (a.kind === "level" && b.kind === "level" ? a.elevation - b.elevation : 0)));
+const axes = computed(() => (rp.value?.implicit ?? []).filter((x) => x.kind === "axis"));
+const setWork = (e: Event) => {
+  const v = (e.target as HTMLSelectElement).value, i = v.indexOf(":");
+  error.value = i < 0 ? workPlaneSet(null) : workPlaneSet(v.slice(0, i) as "plane" | "level" | "axis", v.slice(i + 1));
+  ver.value++;
+};
+const rename = (id: string, e: Event) => { error.value = referencePlaneRename(id, (e.target as HTMLInputElement).value.trim()); ver.value++; };
+const ORIGIN = ref<[number, number, number]>([0, 0, 0]);
+const NORMAL = ref<[number, number, number]>([0, 0, 1]);
+const setVec = (which: "o" | "n", i: number, e: Event) => {
+  const v = which === "o" ? ORIGIN : NORMAL;
+  const x = Number((e.target as HTMLInputElement).value.trim().replace(",", "."));
+  if (!Number.isFinite(x)) { error.value = t("settingout.badNumber"); ver.value++; return; }
+  const a = [...v.value] as [number, number, number];
+  a[i] = x;
+  v.value = a;
+};
+const addPlane = () => {
+  const storey = placing.value?.storey ?? storeys.value[0]?.id;
+  if (!storey) return;
+  error.value = referencePlaneAdd({ storey, origin: ORIGIN.value, normal: NORMAL.value });
+  ver.value++;
+};
+// ---- end WAVE1B ----
 /** The first selected element's origin in the survey system (the status bar's text). */
 const selText = computed(() => {
   void northInfo.value;
@@ -60,6 +116,49 @@ const selText = computed(() => {
     </div>
     <p v-if="error" class="err" role="alert" data-bb="settingout-error">{{ error }}</p>
     <div class="row"><span class="k">{{ t("settingout.basePoint") }}</span><span class="mono small" data-bb="settingout-base">{{ base?.text ?? "—" }}</span></div>
+    <!-- SETOUT: the survey point -->
+    <div class="sec">{{ t("settingout.survey") }}</div>
+    <div :key="`sp${ver}`" style="display:contents">
+      <div v-for="(a, i) in AXES" :key="a" class="row">
+        <label class="k" :for="`so-sp-${a}`">{{ t("settingout.surveyAt", { axis: a }) }}</label>
+        <input :id="`so-sp-${a}`" class="inp mono" style="width:140px;text-align:right" :value="spShow(i)" :data-bb="`settingout-survey-${a}`" :disabled="!sp" @change="setSp(i, $event)">
+      </div>
+    </div>
+    <div class="row"><span class="k">{{ t("settingout.surveyCoords") }}</span><span class="mono small" data-bb="settingout-survey-coords">{{ spText }}</span></div>
+    <div class="row">
+      <span v-if="sp && !sp.set" class="note">{{ t("settingout.surveyAtBase") }}</span>
+      <button v-else type="button" class="btn s" data-bb="settingout-survey-remove" :disabled="!sp?.set" @click="error = surveyPointSet(null); ver++">{{ t("settingout.surveyRemove") }}</button>
+    </div>
+    <p class="note">{{ t("settingout.markers") }}</p>
+    <!-- WAVE1B: reference planes and the work plane -->
+    <template v-if="rpServed && rp">
+      <div class="sec">{{ t("settingout.rp.title") }}</div>
+      <div class="row"><label class="k" for="so-wp">{{ t("settingout.rp.work") }}</label>
+        <select id="so-wp" class="sel-inp" style="width:170px" data-bb="refplane-work" :value="wpValue" @change="setWork">
+          <option value="">{{ t("settingout.rp.storeyLevel") }}</option>
+          <optgroup :label="t('settingout.rp.stored')"><option v-for="p in rp.planes" :key="p.id" :value="`plane:${p.id}`">{{ p.name }}</option></optgroup>
+          <optgroup :label="t('settingout.rp.levels')"><option v-for="l in levels" :key="l.id" :value="`level:${l.id}`">{{ t("settingout.rp.level", { name: l.name }) }}</option></optgroup>
+          <optgroup v-if="axes.length" :label="t('settingout.rp.axes')"><option v-for="a in axes" :key="a.id" :value="`axis:${a.id}`">{{ t("settingout.rp.axis", { name: a.name }) }}</option></optgroup>
+        </select></div>
+      <div :key="`rp${ver}`" style="display:contents">
+        <p v-if="!rp.planes.length" class="note">{{ t("settingout.rp.none") }}</p>
+        <div v-for="(p, i) in rp.planes" :key="p.id" class="row" data-bb="refplane-row" :data-id="p.id">
+          <input class="inp" style="width:150px" :value="p.name" :aria-label="t('settingout.rp.name', { n: i + 1 })" data-bb="refplane-name" @change="rename(p.id, $event)">
+          <button type="button" class="btn s" data-bb="refplane-delete" @click="error = referencePlaneDelete(p.id); ver++">{{ t("settingout.rp.delete") }}</button>
+        </div>
+        <div v-for="(a, i) in (['X', 'Y', 'Z'] as const)" :key="`o${a}`" class="row">
+          <label class="k" :for="`so-rpo-${a}`">{{ t("settingout.rp.origin", { axis: a }) }}</label>
+          <input :id="`so-rpo-${a}`" class="inp mono" style="width:90px;text-align:right" :value="ORIGIN[i]" :data-bb="`refplane-origin-${a}`" @change="setVec('o', i, $event)">
+        </div>
+        <div v-for="(a, i) in (['X', 'Y', 'Z'] as const)" :key="`n${a}`" class="row">
+          <label class="k" :for="`so-rpn-${a}`">{{ t("settingout.rp.normal", { axis: a }) }}</label>
+          <input :id="`so-rpn-${a}`" class="inp mono" style="width:90px;text-align:right" :value="NORMAL[i]" :data-bb="`refplane-normal-${a}`" @change="setVec('n', i, $event)">
+        </div>
+      </div>
+      <button type="button" class="btn s" style="align-self:flex-start" data-bb="refplane-add" @click="addPlane">{{ t("settingout.rp.add") }}</button>
+      <p class="note" data-bb="refplane-pick">{{ rp.pick.on ? t("settingout.rp.picking", { n: rp.pick.points.length }) : t("settingout.rp.pick") }}</p>
+    </template>
+    <!-- end WAVE1B -->
   </template>
   <p v-else class="note" data-bb="settingout-readonly">{{ t("settingout.noModel") }}</p>
   <div class="row"><span class="k">{{ t("settingout.readFrom") }}</span><span data-missing="where the georeference was read from (IfcMapConversion of an imported IFC)">—</span></div>
@@ -69,7 +168,10 @@ const selText = computed(() => {
       <option value="false">{{ t("settingout.projectNorth") }}</option><option value="true">{{ t("settingout.trueNorth") }}</option>
     </select></div>
   <div class="row"><span class="k">{{ t("settingout.shown") }}</span><span class="mono small" data-bb="settingout-selection">{{ selText ?? "—" }}</span></div>
-  <button type="button" class="btn s" style="align-self:flex-start;margin-top:4px" disabled data-missing="move the base point by clicks (a tool; the values above set it)" data-bb="settingout-move">{{ t("settingout.move") }}</button>
+  <!-- SETOUT: not served by the core (capability base_point_move): "not yet", with the tooltip -->
+  <button type="button" class="btn s" :class="{ ny: !moveServed }" style="align-self:flex-start;margin-top:4px" :disabled="!moveServed"
+          :data-not-yet="moveServed ? undefined : ''" :title="moveServed ? undefined : t('na.tooltip', { name: t('settingout.move') })"
+          data-bb="settingout-move">{{ t("settingout.move") }}</button>
 </template>
 
 <style scoped>
@@ -80,6 +182,7 @@ const selText = computed(() => {
 .small { font-size: 11.5px; text-align: right; }
 .note { font-size: 13px; color: var(--bb-stone); margin: 0; }
 .err { color: var(--bb-ink); border-left: 3px solid var(--bb-attention); padding-left: 6px; font-size: 13px; margin: 0; }
+.btn.ny { border-style: dashed; cursor: help; }
 .sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
 /* .inp{height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 8px;font:inherit;font-size:13.5px;color:#141414;min-width:0} */
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }

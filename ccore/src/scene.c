@@ -537,6 +537,58 @@ static int gen_tris(const cc_generator *g, Arena *a, double (**out)[3][3], size_
     return 0;
 }
 
+/* ---- WAVE1B (B1): a wall's openings across its thickness (a sleeve's 32-gon, boxes) without a
+ * kernel: the wall seen as a slab of its face, F: (x, y, z) -> (x, z, y + t/2) (the face
+ * [0, length] x [0, height] extruded through the thickness), cut by the "holes" case, mapped back
+ * (F is a reflection: each triangle's winding turned back). 0 cut, 1 not a special case, -1 out
+ * of memory. ---- */
+static int wall_holes(const cc_generator *g, const cc_tri_set *cut, size_t nc, Arena *a, double (**tris)[3][3], size_t *m) {
+    double L = g->u.wall.length, T = g->u.wall.thickness, H = g->u.wall.height;
+    cc_tri_set *cf = arena_alloc(a, (nc + 1) * sizeof *cf, 8);
+    if (!cf) return -1;
+    for (size_t i = 0; i < nc; i++) {
+        double (*t)[9] = arena_alloc(a, (cut[i].n + 1) * sizeof *t, 8);
+        if (!t) return -1;
+        for (size_t k = 0; k < cut[i].n; k++)
+            for (int c = 0; c < 3; c++) {
+                const double *q = &cut[i].t[k][3 * c];
+                t[k][3 * c] = q[0], t[k][3 * c + 1] = q[2], t[k][3 * c + 2] = q[1] + T / 2.0;
+            }
+        cf[i].t = (const double(*)[9])t, cf[i].n = cut[i].n;
+    }
+    double (*face)[2] = arena_alloc(a, 4 * sizeof *face, 8);
+    if (!face) return -1;
+    double q[4][2] = {{0.0, 0.0}, {L, 0.0}, {L, H}, {0.0, H}};
+    memcpy(face, q, sizeof q);
+    cc_ploop pl = {face, 4};
+    cc_ploop *holes;
+    int rc = cc_prism_cut_holes(&pl, 1, T, cf, nc, a, &holes);
+    if (rc) return rc;
+    Loop *all = arena_alloc(a, (nc + 1) * sizeof *all, 8);
+    if (!all) return -1;
+    all[0].p = face, all[0].n = 4;
+    for (size_t i = 0; i < nc; i++) all[1 + i].p = holes[i].p, all[1 + i].n = holes[i].n;
+    double (*t)[3][3];
+    size_t n;
+    Buf why;
+    buf_init(&why);
+    rc = extrude_tris(all, nc + 1, T, a, &t, &n, &why);
+    int oom = why.oom;
+    buf_free(&why);
+    if (rc < 0 || oom) return -1;
+    if (rc) return 1;
+    for (size_t k = 0; k < n; k++) {
+        for (int c = 0; c < 3; c++) {
+            double x = t[k][c][0], y = t[k][c][1], z = t[k][c][2];
+            t[k][c][0] = x, t[k][c][1] = z - T / 2.0 + 0.0, t[k][c][2] = y;
+        }
+        double sw[3];
+        memcpy(sw, t[k][1], sizeof sw), memcpy(t[k][1], t[k][2], sizeof sw), memcpy(t[k][2], sw, sizeof sw);
+    }
+    *tris = t, *m = n;
+    return 0;
+}
+
 /* ---- SLAB1: without a kernel, openings of a prism host cut exactly when they are boxes in a
  * rectangular host or convex prisms through any profile (prism_cut.h). 0 cut (*tris, *m
  * replaced), 1 not a special case, -1 out of memory. ---- */
@@ -563,6 +615,7 @@ static int prism_cut(const cc_generator *g, const cc_tri_set *cut, size_t nc, Ar
     }
     cc_ploop *holes;
     rc = cc_prism_cut_holes(pl, nloops, depth, cut, nc, a, &holes);
+    if (rc == 1 && g->kind == CC_GEN_WALL) return wall_holes(g, cut, nc, a, tris, m); /* WAVE1B (B1) */
     if (rc) return rc;
     Loop *more = arena_alloc(a, (nloops + nc) * sizeof *more, 8);
     if (!more) return -1;
@@ -1095,6 +1148,8 @@ int cc_scene_mesh_build(double (*tris)[3][3], uint32_t ntris, const double origi
 
 int cc_scene_share_copies(cc_scene *s) { return share_copies(s); }
 
+int cc_scene_crease_edges(cc_mesh *m, Arena *a, Arena *scratch) { return crease_edges(m, a, scratch); }
+
 /* ---- Scene::from_model ---- */
 
 /* Element::class_name: the IFC entity when there is one. */
@@ -1140,6 +1195,11 @@ static int scene_build(cc_scene *s, const cc_model *m, cc_error *err, Arena *scr
         buf_init(&why);
         arena_reset(scratch);
         size_t uncut = 0;
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B: a reference plane has no mesh (the page draws its outline) */
+            buf_free(&why);
+            w[i].ntris = 0;
+            continue;
+        }
         int rc = local_mesh(e, scratch, &l, &why, &uncut);
         if (rc == LIMIT) {
             buf_free(&why);

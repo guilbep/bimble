@@ -26,12 +26,14 @@
  * With linked models (links.h), the LNKS trailer follows: one BMSH per link. Without, nothing
  * follows (the bytes above, unchanged). */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ifc_read.h"
 #include "links.h"
 #include "mesh.h"
 #include "scene.h"
+#include "scene_bmsh.h"
 #include "session.h"
 
 static void put_u32(Buf *b, uint32_t v) { buf_append(b, &v, 4); }
@@ -105,11 +107,25 @@ int cc_mesh_bmsh(const cc_model *m, uint32_t rev, Buf *out, cc_error *err) {
     return rc;
 }
 
-/* links.h: the LNKS trailer. */
-int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) {
+/* 3D1: a link's ids in BMSH version 3 (links.c cc_link_id). */
+static void link_bmsh_id(const void *ctx, const cc_scene *sc, size_t k, char out[22]) {
+    (void)sc;
+    cc_link_id(ctx, k, out);
+}
+
+/* links.h: the LNKS trailer (`form` 3: each link's BMSH in version 3). */
+static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error *err) {
     if (!s->nlinks) return 0;
+    /* LINKF: version 2 when a link is placed or coloured (links.h); else version 1, as before */
+    int v2 = 0;
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        double c, sn, t[3];
+        cc_link_placement(s, k, &c, &sn, t);
+        if (k->colour >= 0 || (k->kind && !(c == 1.0 && sn == 0.0 && t[0] == 0.0 && t[1] == 0.0 && t[2] == 0.0))) v2 = 1;
+    }
     buf_append(out, "LNKS", 4);
-    put_u32(out, 1);
+    put_u32(out, v2 ? 2 : 1);
     put_u32(out, (uint32_t)s->nlinks);
     Buf one;
     buf_init(&one);
@@ -122,9 +138,20 @@ int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) {
         static const char zero[4];
         buf_append(out, zero, (4 - L % 4) % 4);
         put_u32(out, k->visible && k->kind ? 1u : 0u); /* LNK1: a missing link (kind 0) draws nothing */
+        if (v2) { /* LINKF: the turn about Z (cos, sin), the placed origin (host world mm), the colour */
+            double c, sn, t[3], o[3];
+            cc_link_placement(s, k, &c, &sn, t);
+            const double *lo = cc_link_raw_scene(k)->origin;
+            o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
+            buf_append(out, &c, 8), buf_append(out, &sn, 8);
+            for (int q = 0; q < 3; q++) buf_append(out, &o[q], 8);
+            int32_t col = k->colour;
+            buf_append(out, &col, 4);
+        }
         buf_clear(&one);
         one.oom = 0;
-        rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
+        if (form == 3) rc = cc_scene_bmsh3(cc_link_raw_scene(k), link_bmsh_id, k, rev, &one, err);
+        else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
         if (!rc && (one.oom || one.len > UINT32_MAX)) rc = fail(err, "out of memory");
         if (!rc) put_u32(out, (uint32_t)one.len), buf_append(out, one.p, one.len);
     }
@@ -133,10 +160,17 @@ int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) {
     return rc;
 }
 
+int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) { return links_bmsh(s, rev, 1, out, err); }
+
 /* ---- the cached answer (in the session) ---- */
 
 int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double *build_ms) {
+    return cc_mesh_get_form(s, 1, p, n, rev, build_ms);
+}
+
+int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_t *rev, double *build_ms) {
     cc_error err;
+    if (form != 3) form = 1;
     *build_ms = 0;
     Buf *cache = &s->mesh;
     const cc_model *m = cc_mesh_model(s, rev, &err);
@@ -147,7 +181,7 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
         *p = buf_cstr(cache), *n = cache->len;
         return 404;
     }
-    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_gen != s->links_gen) {
+    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_gen != s->links_gen || s->mesh_form != form) {
         double t0 = s->pf->now_ms(s->pf->ctx);
         buf_clear(cache);
         cache->oom = 0;
@@ -155,9 +189,19 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
          * not a second build; when it has none (or it failed), a build here gives the error. */
         const cc_scene *sc = cc_session_scene(s);
         int rc;
-        if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh(s->ifc, *rev, cache, &err); /* the file's id text */
+        if (form == 3) { /* 3D1: shapes once */
+            cc_scene own;
+            int built = 0;
+            if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh3(s->ifc, *rev, cache, &err);
+            else if (sc) rc = cc_scene_bmsh3(sc, NULL, NULL, *rev, cache, &err);
+            else {
+                built = 1;
+                rc = cc_scene_build(&own, m, &err) != 0 ? -1 : cc_scene_bmsh3(&own, NULL, NULL, *rev, cache, &err);
+            }
+            if (built) cc_scene_free(&own);
+        } else if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh(s->ifc, *rev, cache, &err); /* the file's id text */
         else rc = sc ? bmsh_of(sc, *rev, cache, &err) : cc_mesh_bmsh(m, *rev, cache, &err);
-        if (rc == 0) rc = cc_links_bmsh(s, *rev, cache, &err); /* nothing without links */
+        if (rc == 0) rc = links_bmsh(s, *rev, form, cache, &err); /* nothing without links */
         if (rc != 0) {
             buf_clear(cache);
             cache->oom = 0;
@@ -166,9 +210,68 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
         } else {
             s->mesh_status = 200;
         }
-        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_gen = s->links_gen;
+        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_gen = s->links_gen, s->mesh_form = form;
         *build_ms = s->pf->now_ms(s->pf->ctx) - t0;
     }
     *p = cache->p ? cache->p : "", *n = cache->len;
     return s->mesh_status;
+}
+
+/* ---- 3D2 (ADR 0078): the HLOD proxies, in steps (mesh.h) ---- */
+
+void cc_mesh_proxies_free(cc_session *s) {
+    if (s->hlod) cc_hlod_free(s->hlod);
+    free(s->hlod);
+    buf_free(&s->hlod_out);
+    s->hlod = NULL, s->hlod_scene = NULL, s->hlod_status = 0, s->hlod_rev = 0, s->hlod_ms = 0;
+}
+
+int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, uint32_t *rev, double *ms) {
+    cc_error err;
+    const cc_model *m = cc_mesh_model(s, rev, &err);
+    const cc_scene *sc = m || s->view ? cc_session_scene(s) : NULL; /* the open model's, an IFC's, a view file's */
+    if (!sc) {
+        cc_mesh_proxies_free(s);
+        buf_puts(&s->hlod_out, "no scene");
+        *p = buf_cstr(&s->hlod_out), *n = s->hlod_out.len, *ms = 0;
+        return 404;
+    }
+    if (s->hlod_scene != sc || s->hlod_rev != *rev || !s->hlod_status) {
+        cc_mesh_proxies_free(s);
+        s->hlod_scene = sc, s->hlod_rev = *rev;
+        s->hlod = calloc(1, sizeof *s->hlod);
+        cc_hlod_opts o;
+        cc_hlod_default(&o);
+        double t0 = s->pf->now_ms(s->pf->ctx);
+        if (!s->hlod) s->hlod_status = 500, buf_puts(&s->hlod_out, "out of memory");
+        else if (cc_hlod_start(s->hlod, sc, &o, &err)) s->hlod_status = 500, buf_puts(&s->hlod_out, err.msg);
+        else s->hlod_status = 202;
+        s->hlod_ms += s->pf->now_ms(s->pf->ctx) - t0;
+    }
+    if (s->hlod_status == 202 && !budget) { /* the tree alone (hlod.h cc_hlod_bprx_tree), no step */
+        buf_clear(&s->hlod_out);
+        s->hlod_out.oom = 0;
+        int rc = cc_hlod_bprx_tree(s->hlod, *rev, (uint32_t)sc->nelements, &s->hlod_out, &err);
+        *ms = s->hlod_ms;
+        if (rc) buf_clear(&s->hlod_out), buf_puts(&s->hlod_out, err.msg);
+        *p = s->hlod_out.p ? s->hlod_out.p : "", *n = s->hlod_out.len;
+        return rc ? 500 : 200;
+    }
+    if (s->hlod_status == 202) {
+        double t0 = s->pf->now_ms(s->pf->ctx);
+        int r = cc_hlod_step(s->hlod, budget, &err);
+        buf_clear(&s->hlod_out);
+        s->hlod_out.oom = 0;
+        if (r < 0) s->hlod_status = 500, buf_puts(&s->hlod_out, err.msg);
+        else if (r == 0) buf_u64(&s->hlod_out, s->hlod->read), buf_putc(&s->hlod_out, ' '), buf_u64(&s->hlod_out, s->hlod->total);
+        else if (cc_hlod_bprx(s->hlod, *rev, (uint32_t)sc->nelements, &s->hlod_out, &err)) {
+            buf_clear(&s->hlod_out);
+            s->hlod_out.oom = 0;
+            s->hlod_status = 500, buf_puts(&s->hlod_out, err.msg);
+        } else s->hlod_status = 200;
+        s->hlod_ms += s->pf->now_ms(s->pf->ctx) - t0;
+    }
+    *ms = s->hlod_ms;
+    *p = s->hlod_out.p ? s->hlod_out.p : "", *n = s->hlod_out.len;
+    return s->hlod_status;
 }

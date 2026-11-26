@@ -62,6 +62,24 @@ typedef struct cc_platform {
     /* Creates the folder `path` (one level). 0 when it was made or already is a folder, -1. */
     int (*make_dir)(void *ctx, const char *path);
     /* ---- end FS1 ---- */
+    /* ---- LINKF (links.h, ADR 0079; NULL in a carrier without them: callers check) ---- */
+    /* The memory the machine can give now, in bytes (Linux: MemAvailable); 0 when unknown. A read
+     * that would need more is refused before it starts (session.c, "too large for this machine"). */
+    uint64_t (*mem_available)(void *ctx);
+    /* Bytes [off, off + n) of the file at `path` into p (`*got` read: fewer at its end). CC_PF_OK,
+     * else a status. The cache check reads a file's first and last MiB with it, not the file. */
+    int (*read_range)(void *ctx, const char *path, uint64_t off, size_t n, char *p, size_t *got);
+    /* The folder for caches that cannot go next to their file (a read-only folder): written to
+     * out[0..n), created when missing. 0 ok, -1 none. Native: BIMBLE_CACHE_DIR, else
+     * $XDG_CACHE_HOME/bimble, else $HOME/.cache/bimble. */
+    int (*cache_dir)(void *ctx, char *out, size_t n);
+    /* Runs fn(arg) on another thread and returns at once: 0 started, -1 none (the caller then runs
+     * it itself). The thread touches only what `arg` holds; it is the carrier's. */
+    int (*spawn)(void *ctx, void (*fn)(void *arg), void *arg);
+    /* 1 when `path` may be linked from a list the page picked (link_model {paths}): under a folder
+     * the file dialog lists (host/fs.h, the path rule) or a dropped file's staged copy; NULL: all. */
+    int (*path_allowed)(void *ctx, const char *path);
+    /* ---- end LINKF ---- */
 } cc_platform;
 
 /* WIN2: the last separator of the path `p`, or NULL: '/', and on Windows '\\' too (Rust's

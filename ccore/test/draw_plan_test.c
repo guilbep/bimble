@@ -17,6 +17,8 @@
 #include "../src/model.h"
 #include "../src/paper.h"
 #include "../src/scene.h"
+#include "../src/command.h" /* WAVE1B (B1) */
+#include "../src/verbs.h"   /* WAVE1B (B1) */
 #include "check.h"
 
 #define G "golden/drawing"
@@ -448,7 +450,76 @@ static void test_plan_synthetic(void) {
     unload(&L);
 }
 
+/* WAVE1B (B1): a sleeve of 300 in the slab D1 (Niveau 1, seen from above in the plan of Niveau 2):
+ * with the "Openings" toggle (opening_dimensions) its round hole gets a cross of two diameters at
+ * 45 degrees (two more line rings, each 300 mm long on the paper's scale); without it, none. */
+static size_t line_rings(const cc_paper *p, double *len_mm) {
+    size_t n = 0;
+    for (size_t i = 0; i < p->nitems; i++)
+        if (p->items[i].kind == CC_ITEM_LINES)
+            for (size_t r = 0; r < p->items[i].nrings; r++) {
+                n++;
+                const cc_ring *g = &p->items[i].rings[r];
+                if (len_mm && g->n == 2) {
+                    double dx = g->p[1][0] - g->p[0][0], dy = g->p[1][1] - g->p[0][1];
+                    double l = dx * dx + dy * dy;
+                    if (l > *len_mm) *len_mm = l;
+                }
+            }
+    return n;
+}
+static void test_sleeve_symbol(void) {
+    Loaded L;
+    if (load("frame.json", &L)) return;
+    cc_gid slab;
+    int found = 0;
+    for (size_t i = 0; i < L.m.nelements && !found; i++)
+        if (L.m.elements[i].name.n == 2 && !memcmp(L.m.elements[i].name.p, "D1", 2)) slab = L.m.elements[i].id, found = 1;
+    check_true("B1 the slab D1", found);
+    if (!found) return unload(&L);
+    char args[160];
+    snprintf(args, sizeof args, "{\"host\":\"%.22s\",\"a\":[5000,5000],\"shape\":\"round\",\"diameter\":300}", slab.c);
+    cc_cmds l;
+    cc_cmds_init(&l);
+    Buf err;
+    buf_init(&err);
+    int ok = !cc_verb_run_ex(&L.m, "opening_add", args, strlen(args), 0, -1, 0, &l, &err);
+    for (size_t i = 0; ok && i < l.n; i++) {
+        cc_command inv;
+        ok = !cc_command_apply(&L.m, &l.v[i], &inv, &err);
+    }
+    cc_cmds_free(&l);
+    check_true("B1 a sleeve of 300 in D1", ok);
+    cc_error e;
+    cc_scene_free(&L.s);
+    ok = ok && !cc_scene_build(&L.s, &L.m, &e);
+    Arena a;
+    arena_init(&a, 0);
+    cc_style style;
+    cc_plan_template tpl;
+    size_t n[2] = {0, 0};
+    double len = 0;
+    for (int on = 0; ok && on < 2; on++) {
+        ok = !cc_style_default(&style, &a) && !min_template(&tpl, &L.m, &a);
+        tpl.opening_dimensions = on;
+        cc_plan_options o;
+        cc_plan_options_init(&o);
+        o.storey = S("Niveau 2"), o.project = S("frame"), o.date = S("2026-01-01"), o.style = &style, o.tpl = &tpl, o.bare = 1;
+        cc_paper sheet;
+        cc_plan_info info;
+        buf_clear(&err);
+        ok = ok && cc_plan(&L.s, &L.m, &o, &a, &sheet, &info, &err) == 0;
+        if (ok) n[on] = line_rings(&sheet, on ? &len : NULL);
+        if (ok && on) printf("  B1 plan of Niveau 2 at 1:%u: %zu line rings with the toggle, %zu without\n", (unsigned)o.scale, n[1], n[0]);
+    }
+    check_true("B1 the sleeve's cross: two more lines with the Openings toggle", ok && n[1] == n[0] + 2);
+    buf_free(&err);
+    arena_free(&a);
+    unload(&L);
+}
+
 int main(void) {
+    test_sleeve_symbol(); /* WAVE1B (B1) */
     test_style();
     test_template();
     test_plan("frame", "frame.json", "Niveau 1");

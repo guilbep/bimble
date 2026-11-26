@@ -29,6 +29,13 @@
 
 #define CC_VIEWFILE_VERSION 1u
 #define CC_VIEWFILE_CHUNK_BYTES ((size_t)1 << 20)
+/* LINKF: the largest .bimbleview an open or a link reads: 8 GiB on a 64-bit build (Rust's
+ * file.rs MAX_FILE_BYTES native), 1 GiB in a 32-bit one (its wasm cap). Each section stays at most
+ * 1 GiB and a gzipped file inflates to at most 64 times its size (viewfile.c). */
+#define CC_VIEWFILE_MAX_FILE_BYTES (sizeof(size_t) > 4 ? (size_t)((uint64_t)8 << 30) : (size_t)1 << 30)
+/* Peak memory of a read per file byte: the bytes, the arena's copy (inflated when gzipped: up to
+ * 64 times, bounded by the reader), the element and shape tables (ADR 0079). */
+#define CC_VIEWFILE_READ_PEAK_PER_BYTE 4
 
 /* Appends the view file of scene `s` (built from `m` by cc_scene_build) to `out`, gzipped when
  * `gzip`: cc_viewfile_meta_from_model then cc_viewfile_write_meta. 0 ok, -1 out of memory (or a
@@ -78,6 +85,8 @@ typedef struct {
     size_t nwarnings;
     int has_georef;
     cc_str georef; /* GEOR's JSON text (checked to parse), when has_georef */
+    int has_source;
+    cc_str source;   /* LINKF: SRCE's JSON text (a link cache: the IFC it was read from), when has_source */
     cc_mesh *shapes; /* shared shapes, own coordinates (malloc) */
     size_t nshapes;
     cc_view_element *elements; /* malloc */
@@ -86,6 +95,10 @@ typedef struct {
 
 typedef struct { /* the text of one scene element (SceneElement's fields beside class, family) */
     cc_str global_id, name, storey, material;
+    /* WAVE1B (B1): what the quantities add to the mesh's volume (m3): for each sleeve of the element,
+     * its 32-gon's area minus the circle's, times the host's thickness (the exact cylinder pi r^2 t,
+     * ADR 0077). From the model only (cc_viewfile_meta_from_model); 0 otherwise; never written. */
+    double volume_fix_m3;
 } cc_view_info;
 
 /* A scene's META (and GEOR) for the writer. Every string and array is borrowed (from the model,
@@ -114,6 +127,12 @@ int cc_viewfile_meta_from_file(cc_viewfile_meta *mt, const cc_viewfile *v);
 /* Appends the view file of scene `s` with its META `mt` to `out`, gzipped when `gzip`
  * (viewfile.rs write). 0 ok, -1 out of memory or `mt` not of `s` (ninfo != nelements). */
 int cc_viewfile_write_meta(const cc_viewfile_meta *mt, const cc_scene *s, int gzip, Buf *out);
+
+/* LINKF (ADR 0079, DEVIATIONS 37): appends a section "SRCE" holding `json` (the source of a link
+ * cache: the IFC's size, time and a hash of its ends) to the raw view file in `out`. A reader
+ * that does not know SRCE skips it (Rust's and this one skip a later addition); this reader keeps
+ * it in `source` (checked to be UTF-8 JSON). 0 ok, -1 out of memory. */
+int cc_viewfile_append_source(Buf *out, const char *json, size_t n);
 
 /* Reads a view file. Always initializes `out` (free it with cc_viewfile_free either way).
  * 0 ok, -1 with err->msg. */

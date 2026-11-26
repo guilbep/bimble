@@ -17,6 +17,11 @@ export const fr = {
   "action.place_beam": "Poutre",
   "action.place_wall": "Mur",
   "action.place_slab": "Dalle",
+  "action.place_footing": "Semelle", // CONC1
+  "action.place_strip_footing": "Semelle filante", // CONC1
+  "action.place_raft": "Radier", // CONC1
+  "action.place_opening": "Ouverture", // CONC1
+  "action.place_sleeve": "Réservation", // CONC1
   "action.measure": "Mesurer",
   "action.sheet_tool_select": "Sélection",
   "action.sheet_tool_text": "Texte",
@@ -36,6 +41,7 @@ export const fr = {
   "action.new_sheet": "Nouvelle feuille",
   "action.close_sheet": "Fermer la feuille",
   "action.link_model": "Insérer un lien",
+  "action.link_folder": "Lier un dossier",
   "action.link_dxf": "Lier un DXF…",
   "action.link_pdf": "Lier un PDF…",
   "action.manage_links": "Gestion des liens",
@@ -59,6 +65,15 @@ export const fr = {
   "action.show_all_in_view": "Tout afficher dans la vue",
   "action.show_all": "Tout réafficher", // ISS72
   "action.show_previous": "Affichage précédent", // ISS72
+  "action.show_base_point": "Point de base du projet", // SETOUT
+  "action.show_survey_point": "Point topographique", // SETOUT
+  "action.view_true_north": "Nord géo. / projet", // SETOUT
+  "action.reference_planes": "Plan de référence par trois points", // WAVE1B
+  "action.place_grid_axis": "Placer : axe de trame", // WAVE1B (A2)
+  "action.new_view": "Nouvelle vue…", // VIEWSHEET
+  "action.draw_section": "Coupe", // VIEWSHEET
+  "action.sheet_place_view": "Placer une vue…", // VIEWSHEET
+  "action.sheet_revision": "Indice de la feuille…", // VIEWSHEET
   "actionTab.Model": "Modèle",
   "actionTab.Manage": "Gérer",
   "actionTab.Quick access": "Accès rapide",
@@ -78,6 +93,11 @@ export const en: Record<keyof typeof fr, string> = {
   "action.place_beam": "Beam",
   "action.place_wall": "Wall",
   "action.place_slab": "Slab",
+  "action.place_footing": "Footing", // CONC1
+  "action.place_strip_footing": "Strip footing", // CONC1
+  "action.place_raft": "Raft", // CONC1
+  "action.place_opening": "Opening", // CONC1
+  "action.place_sleeve": "Sleeve", // CONC1
   "action.measure": "Measure",
   "action.sheet_tool_select": "Select",
   "action.sheet_tool_text": "Text",
@@ -97,6 +117,7 @@ export const en: Record<keyof typeof fr, string> = {
   "action.new_sheet": "New sheet",
   "action.close_sheet": "Close sheet",
   "action.link_model": "Insert a link",
+  "action.link_folder": "Link a folder",
   "action.link_dxf": "Link DXF…",
   "action.link_pdf": "Link PDF…",
   "action.manage_links": "Manage links",
@@ -120,6 +141,15 @@ export const en: Record<keyof typeof fr, string> = {
   "action.show_all_in_view": "Show all in view",
   "action.show_all": "Show all", // ISS72
   "action.show_previous": "Show previous", // ISS72
+  "action.show_base_point": "Project base point", // SETOUT
+  "action.show_survey_point": "Survey point", // SETOUT
+  "action.view_true_north": "True / project north", // SETOUT
+  "action.reference_planes": "Reference plane by three points", // WAVE1B
+  "action.place_grid_axis": "Place: grid axis", // WAVE1B (A2)
+  "action.new_view": "New view…", // VIEWSHEET
+  "action.draw_section": "Section", // VIEWSHEET
+  "action.sheet_place_view": "Place view…", // VIEWSHEET
+  "action.sheet_revision": "Sheet revision…", // VIEWSHEET
   "actionTab.Model": "Model",
   "actionTab.Manage": "Manage",
   "actionTab.Quick access": "Quick access",

@@ -6,7 +6,14 @@
  *
  * query links_panel -> {"models": [...], "references": [...]} (keys sorted):
  *   models     in link order: {"kind": "ifc"|"bimble"|"bimbleview"|"json"|…, "missing": bool,
- *              "name", "path": "<as linked>", "visible"}. "missing" (DEVIATIONS 29): a link the
+ *              "name", "path": "<as linked>", "visible"} and (LINKF, links.h) "bytes" (the file),
+ *              "cache" (its .bimbleview cache, or null), "cache_mtime_s", "colour" (0..11 or null),
+ *              "elements", "from_cache", "log" (its conversion report, or null), "message" (why
+ *              it failed or was refused, a note when ready, or null), "move_mm" [x, y, z],
+ *              "origin" ("file"|"origin"|"base_point"|"survey_point"), "pinned", "progress"
+ *              (0..100), "rotation_deg", "state" ("ready"|"missing"|"queued"|"converting"|
+ *              "failed"|"refused"|"unloaded"), "triangles" (each shared shape once).
+ *              "missing" (DEVIATIONS 29): a link the
  *              open .bimble names whose file was not found when it opened; it draws nothing and
  *              "Locate…" links it again from another path (manage_links {op: "locate", name, path}).
  *   references every stored view's reference plans, view order then the view's order:

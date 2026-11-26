@@ -24,13 +24,14 @@ import { currentDialog } from "./dialogs";
 import { actionBody, fileRoutes, state } from "./bimble";
 import { here, send } from "./shell/send";
 
-export type Purpose = "open" | "import_ifc" | "link_model" | "link_pdf" | "link_dxf" | "save_as" | "export_ifc4" | "export_ifc2x3" | "share_for_viewing";
+export type Purpose = "open" | "import_ifc" | "link_model" | "link_folder" | "link_pdf" | "link_dxf" | "save_as" | "export_ifc4" | "export_ifc2x3" | "share_for_viewing";
 
 /** Per purpose: the extensions listed, and for a write the name proposed. */
-export const PURPOSES: Record<Purpose, { ext: string[]; save?: (stem: string) => string }> = {
+export const PURPOSES: Record<Purpose, { ext: string[]; save?: (stem: string) => string; folder?: boolean }> = {
   open: { ext: [".bimble", ".json", ".ifc", ".bimbleview"] },
   import_ifc: { ext: [".ifc"] },
   link_model: { ext: [".ifc", ".bimbleview", ".bimble", ".json"] },
+  link_folder: { ext: [".ifc", ".bimbleview"], folder: true }, // LINKF: the folder shown is the answer
   link_pdf: { ext: [".pdf"] },
   link_dxf: { ext: [".dxf"] },
   save_as: { ext: [".bimble", ".json"], save: (s) => `${s}.bimble` },
@@ -47,7 +48,9 @@ export const isWasm = (): boolean => params.get("ccore") === "1" || import.meta.
 
 // ---- the dialog's request (one at a time; Esc or a click outside cancels) ----
 
-export interface FileRequest { purpose: Purpose; name: string; resolve: (path: string | null) => void }
+/** What the dialog answers: a path, several (LINKF: link_model's multi-select), a folder ("Link this folder"), or null. */
+export type DialogAnswer = string | string[] | { folder: string } | null;
+export interface FileRequest { purpose: Purpose; name: string; resolve: (path: DialogAnswer) => void }
 export const fileRequest = shallowRef<FileRequest | null>(null);
 
 /** The model's file name without extension ("model" for none). */
@@ -76,12 +79,12 @@ function browserPick(purpose: Purpose): Promise<File | null> {
 }
 
 /** The page's own dialog (native): an absolute path, or null (closed). */
-async function dialogPick(purpose: Purpose): Promise<string | null> {
+async function dialogPick(purpose: Purpose): Promise<DialogAnswer> {
   if (fileRequest.value) {
     fileRequest.value.resolve(null);
     await nextTick(); // the dialog closes before the next one mounts
   }
-  return new Promise<string | null>((resolve) => {
+  return new Promise<DialogAnswer>((resolve) => {
     const req: FileRequest = { purpose, name: PURPOSES[purpose].save?.(stem()) ?? "", resolve: () => undefined };
     let done = false;
     let stop: (() => void) | null = null;
@@ -105,11 +108,27 @@ let dropped: File | null = null;
 
 /** What the picker answers: a path the host reads (`dropped`: a staged copy of a dropped file), or a
  *  file's bytes (wasm). */
-export interface Picked { path?: string; file?: File; dropped?: boolean }
+export interface Picked { path?: string; file?: File; dropped?: boolean; paths?: string[]; folder?: string }
 
 /** Ask for a file: on the native host the page's own dialog (an absolute path), in wasm the
  *  browser's picker (the file's bytes; a write purpose has no picker there: null). A file dropped on
  *  the page just before is the answer of Open, without asking. Throws when a drop cannot be staged. */
+/** LINKF: the browser's picker for several files (wasm: Link a folder… links each one). */
+export function browserPickMany(ext: string[]): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.accept = ext.join(",");
+    input.dataset.bb = "ccore-link-folder";
+    input.style.display = "none";
+    input.addEventListener("change", () => { const f = [...(input.files ?? [])]; input.remove(); resolve(f); });
+    input.addEventListener("cancel", () => { input.remove(); resolve([]); });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
 export async function pickFile(purpose: Purpose): Promise<Picked | null> {
   const drop = purpose === "open" ? dropped : null;
   dropped = null;
@@ -119,8 +138,11 @@ export async function pickFile(purpose: Purpose): Promise<Picked | null> {
     const f = await browserPick(purpose);
     return f ? { file: f } : null;
   }
-  const path = await dialogPick(purpose);
-  return path ? { path } : null;
+  const a = await dialogPick(purpose);
+  if (!a) return null;
+  if (Array.isArray(a)) return a.length === 1 && a[0] ? { path: a[0] } : { paths: a }; // LINKF
+  if (typeof a === "object") return { folder: a.folder };
+  return { path: a };
 }
 
 /** Open a file the host can read (a recent file): through the shell. False when it refused now. */
@@ -207,6 +229,29 @@ export async function dropFile(f: File): Promise<string | null> {
   }
 }
 
+/** LINKF: several files dropped with a model open: each model file is linked, in ONE call (one undo
+ *  step, the host's queue). The browser gives no path, so natively each is staged first (256 MB at
+ *  most: a larger one is said, "use Link IFC… and pick it in the dialog", the others go on); in
+ *  wasm the bytes go to the module, one file after the other. */
+export async function dropMany(fs: File[]): Promise<string | null> {
+  if (state.value.file === null) return report("drop", "open or create a model first: several dropped files are linked to it");
+  const ok = fs.filter((f) => DROP_OPEN.test(f.name)), errs: string[] = [];
+  for (const f of fs) if (!DROP_OPEN.test(f.name)) errs.push(`${f.name}: not a .ifc, .bimbleview, .bimble or .json`);
+  if (isNative()) {
+    const paths: string[] = [];
+    for (const f of ok) {
+      if (f.size > STAGE_MAX) { errs.push(`${f.name}: too large to drop (256 MB at most): use Link IFC… and pick it in the dialog`); continue; }
+      try { paths.push(await stage(f)); } catch (e) { errs.push(msg(e)); }
+    }
+    if (paths.length) { const err = act("link_model", { paths }); if (err) errs.push(err); }
+  } else if (isWasm()) {
+    const cc = await import("./ccore");
+    for (const f of [...ok].sort((a, b) => a.size - b.size))
+      try { cc.ccoreLinkFile(f.name, new Uint8Array(await f.arrayBuffer())); } catch (e) { errs.push(msg(e)); }
+  }
+  return report("drop", errs.length ? errs.join("; ") : null);
+}
+
 let installed = false;
 /** The page-wide listeners: drop a file, and the browser's question before leaving with unsaved changes. */
 export function installFiles(): void {
@@ -218,10 +263,12 @@ export function installFiles(): void {
     if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
   });
   window.addEventListener("drop", (e) => {
-    const f = e.dataTransfer?.files?.[0];
+    const all = [...(e.dataTransfer?.files ?? [])];
+    const f = all[0];
     if (!f) return;
     e.preventDefault();
-    void dropFile(f);
+    if (all.length > 1) void dropMany(all); // LINKF: several files: linked
+    else void dropFile(f);
   });
   // The built page only (the desktop build, the published lab), or `&unload=1`: the Vite dev server
   // the lab tests run on reloads pages with edits in them, and a question would stop them.

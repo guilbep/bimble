@@ -8,8 +8,9 @@ export const capability = "project_info", editable = true; // FAKE1: query proje
 <script setup lang="ts">
 // A3 Project information (wireframes v01 ProjectInfo.html; ADR 0030, 0052). Leaving a field or Enter
 // (the native `change` event) sends one SetProject with the whole map; undo restores it.
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { project, state, setProject, setProjectField, northInfo, coordinates } from "../bimble";
+import { georefSet, type GeorefPatch } from "../bimble"; // WAVE1B (A5)
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
 import NotAvailable from "../shell/NotAvailable.vue"; // FAKE1
@@ -29,6 +30,29 @@ const georefText = computed(() => {
   return n && c ? `${n.crs ?? "—"} · ${c.text} · ${n.rotation_deg}°` : "—";
 });
 // ---- end G2 ----
+// ---- WAVE1B (A5): the georeference's fields here too (verb georef_set, one undoable step each), as
+// the Setting out panel edits them: system, the base point's east, north and height, the angles ----
+type GNum = "east_m" | "north_m" | "height_m" | "rotation_deg" | "map_rotation_deg";
+const geoVer = ref(0);
+const geoError = ref<string | null>(null);
+const geoFields = computed((): { k: GNum; unit: string; v: number | null }[] => {
+  void state.value.rev; void geoVer.value;
+  const n = northInfo.value, b = n ? coordinates([0, 0, 0])?.survey ?? null : null;
+  return [
+    { k: "east_m", unit: "m", v: b ? b[0] : null }, { k: "north_m", unit: "m", v: b ? b[1] : null }, { k: "height_m", unit: "m", v: b ? b[2] : null },
+    { k: "rotation_deg", unit: "°", v: n ? n.rotation_deg : null }, { k: "map_rotation_deg", unit: "°", v: n ? n.map_rotation_deg : null },
+  ];
+});
+const geoShow = (v: number | null) => (v === null ? "" : String(Math.round(v * 1e6) / 1e6));
+const geoApply = (patch: GeorefPatch) => { geoError.value = georefSet(patch); geoVer.value++; };
+function geoNum(k: GNum, e: Event) {
+  const txt = (e.target as HTMLInputElement).value.trim().replace(",", ".");
+  const v = Number(txt);
+  if (txt === "" || !Number.isFinite(v)) { geoError.value = t("settingout.badNumber"); geoVer.value++; return; }
+  geoApply({ [k]: v });
+}
+const GEO_LABEL: Record<GNum, Parameters<typeof t>[0]> = { east_m: "settingout.east", north_m: "settingout.north", height_m: "settingout.elevation", rotation_deg: "settingout.angle", map_rotation_deg: "settingout.mapAngle" };
+// ---- end WAVE1B ----
 
 function commit(key: string, e: Event) {
   const v = (e.target as HTMLInputElement).value;
@@ -39,14 +63,29 @@ function commit(key: string, e: Event) {
   error.value = setProject(next);
 }
 
-// "Add field": a label and a value; Enter on the value sends one `set_project_field` (the key is made in Rust).
+// "Add field": a label and a value; Add (or Enter in either field) sends one `set_project_field` (the
+// key is made in Rust). DEAD1: the row has its own Add and Cancel buttons and says why Add is off
+// (no name yet), and the core's refusal shows in the row; "Add field" again goes back to the name.
 const adding = ref(false);
 const newLabel = ref("");
 const newValue = ref("");
+const addError = ref<string | null>(null);
+const labelInput = ref<HTMLInputElement | null>(null);
+async function startAdding() {
+  adding.value = true;
+  await nextTick();
+  labelInput.value?.focus();
+}
 function addField() {
-  error.value = setProjectField(newLabel.value, newValue.value);
-  if (error.value) return;
+  if (newLabel.value.trim() === "") { addError.value = null; return; }
+  addError.value = setProjectField(newLabel.value, newValue.value);
+  if (addError.value) return;
   adding.value = false;
+  newLabel.value = newValue.value = "";
+}
+function cancelAdd() {
+  adding.value = false;
+  addError.value = null;
   newLabel.value = newValue.value = "";
 }
 </script>
@@ -72,6 +111,17 @@ function addField() {
         <span class="k">IfcMapConversion</span><span class="mono" data-bb="project-georef">{{ georefText }}</span>
         <!-- end G2 -->
       </div>
+      <!-- WAVE1B (A5): the georeference, editable here as in the Setting out panel -->
+      <h2 style="font-size:20px;margin-top:14px" data-bb="project-georef-title">{{ t('projectinfo.georef') }}</h2>
+      <p v-if="geoError" class="banner b-o" role="alert" data-bb="project-georef-error">{{ t('projectinfo.error', { msg: geoError }) }}</p>
+      <div :key="geoVer" class="ifc">
+        <label class="k" for="pi-geo-crs">{{ t('settingout.system') }}</label>
+        <input id="pi-geo-crs" class="inp mono" :value="northInfo?.crs ?? ''" placeholder="EPSG:2056" data-bb="project-georef-crs" @change="geoApply({ crs: ($event.target as HTMLInputElement).value.trim() })">
+        <template v-for="f in geoFields" :key="f.k">
+          <label class="k" :for="`pi-geo-${f.k}`">{{ t(GEO_LABEL[f.k]) }} ({{ f.unit }})</label>
+          <input :id="`pi-geo-${f.k}`" class="inp mono" style="text-align:right" :value="geoShow(f.v)" :data-bb="`project-georef-${f.k}`" @change="geoNum(f.k, $event)">
+        </template>
+      </div>
     </section>
     <section class="col" style="gap:10px">
       <div style="display:flex;align-items:center">
@@ -94,11 +144,14 @@ function addField() {
         <input :id="`pi-${k}`" class="inp" :value="info[k] ?? ''" :data-bb="`project-field-${k}`" @change="commit(k, $event)">
         <span class="mono key">{{ '{' + k + '}' }}</span>
       </div>
-      <div v-if="adding" class="fld" data-bb="project-new-field">
-        <input v-model="newLabel" class="inp" :aria-label="t('projectinfo.newLabel')" :placeholder="t('projectinfo.newLabel')" data-bb="project-new-label">
-        <input v-model="newValue" class="inp" :aria-label="t('projectinfo.newValue')" :placeholder="t('projectinfo.newValue')" data-bb="project-new-value" @keydown.enter="addField">
-      </div>
-      <button type="button" class="qb add" data-bb="project-add-field" @click="adding = true">
+      <form v-if="adding" class="fld newf" data-bb="project-new-field" @submit.prevent="addField" @keydown.esc.prevent="cancelAdd">
+        <input ref="labelInput" v-model="newLabel" class="inp" :aria-label="t('projectinfo.newLabel')" :placeholder="t('projectinfo.newLabel')" data-bb="project-new-label">
+        <input v-model="newValue" class="inp" :aria-label="t('projectinfo.newValue')" :placeholder="t('projectinfo.newValue')" data-bb="project-new-value">
+        <button type="submit" class="btn s" :disabled="newLabel.trim() === ''" :title="newLabel.trim() === '' ? t('projectinfo.needLabel') : undefined" data-bb="project-new-add">{{ t('projectinfo.addIt') }}</button>
+        <button type="button" class="btn s" data-bb="project-new-cancel" @click="cancelAdd">{{ t('projectinfo.cancelAdd') }}</button>
+        <p v-if="addError" class="err" role="alert" data-bb="project-new-error">{{ t('projectinfo.error', { msg: addError }) }}</p>
+      </form>
+      <button type="button" class="qb add" data-bb="project-add-field" @click="startAdding">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg> {{ t('projectinfo.addField') }}
       </button>
     </section>
@@ -107,6 +160,9 @@ function addField() {
 
 <style scoped>
 /* .page style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:28px;align-content:start" (padding from .bb-page) */
+.fld.newf { display: flex; flex-wrap: wrap; gap: 8px; }
+.fld.newf .inp { flex: 1 1 150px; }
+.newf .err { flex-basis: 100%; margin: 0; color: var(--bb-red, #b42318); font-size: 12px; }
 .pi { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 28px; align-content: start; }
 .col { display: flex; flex-direction: column; }
 /* .page h2{font-family:'Sora',sans-serif;margin:0} */

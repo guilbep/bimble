@@ -24,6 +24,7 @@
 #include "inflate.h"
 #include "json_r.h"
 #include "json_w.h"
+#include "refplane.h" /* WAVE1B */
 #include "relation.h"
 #include "view_io.h"
 
@@ -527,14 +528,14 @@ static int d_element(D *d, const JrVal *v, cc_element *e) {
     if (d_gid(d, f[0], &e->id) ||
         d_enum(d, f[1], class_name_i, CC_IFC_CLASS_COUNT,
                "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`, "
-               "`IfcElementAssembly`",
+               "`IfcElementAssembly`, `IfcVirtualElement`",
                &cls) ||
         d_str(d, f[2], &e->name) || d_gid(d, f[3], &e->storey) || d_gid(d, f[4], &e->material) ||
         d_placement(d, f[5], &e->placement))
         return -1;
     e->cls = (cc_ifc_class)cls;
     /* An IfcElementAssembly has no generator (ADR 0070): the key is left out. */
-    if (!f[6] && e->cls == CC_IFC_ELEMENT_ASSEMBLY) e->generator.kind = CC_GEN_NONE;
+    if (!f[6] && cc_class_shapeless(e->cls)) e->generator.kind = CC_GEN_NONE; /* WAVE1B: a reference plane too */
     else if (need(d, v, f[6], F[6]) || d_generator(d, f[6], &e->generator)) return -1;
     if (f[7]) {
         if (f[7]->type != JR_ARR) return type_err(d, f[7], "a sequence");
@@ -624,20 +625,55 @@ typedef struct {
     cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys, *rkeys, *gkeys;
 } Keys;
 
+/* LINKF: the names of a link's origin rule in the file (0, "file", is left out) */
+static const char *const LINK_ORIGIN[] = {"file", "origin", "base_point", "survey_point"};
+static int link_moved(const cc_model_link *k) { return k->move_mm[0] != 0.0 || k->move_mm[1] != 0.0 || k->move_mm[2] != 0.0; }
+
 /* ---- LNK1: "links" (model.h cc_model_link): at most CC_MODEL_LINKS_MAX entries, each a name
  * and a path (4096 bytes at most, no NUL), maybe `relative` and `hidden` ---- */
 static int d_links(D *d, const JrVal *v, cc_model *m) {
-    static const char *const F[] = {"hidden", "name", "path", "relative"};
+    static const char *const F[] = {"hidden", "name", "path", "relative", "origin", "move_mm", "rotation_deg", "pinned", "colour"};
+    static const char *const ORIG[] = {"origin", "base_point", "survey_point"}; /* LINKF; "file" is the default, left out */
     if (v->type != JR_ARR) return type_err(d, v, "a sequence");
     if (v->n > CC_MODEL_LINKS_MAX) return dfail(d, v->off, "links: too many linked models", 0, 0);
     if (!v->n) return 0;
     m->links = arena_alloc_n(d->a, v->n, sizeof *m->links, sizeof(void *));
     if (!m->links) return dfail(d, v->off, "out of memory", 0, 0);
     for (size_t i = 0; i < v->n; i++) {
-        const JrVal *x = &v->items[i], *f[4];
+        const JrVal *x = &v->items[i], *f[9];
         cc_model_link *k = &m->links[i];
         memset(k, 0, sizeof *k);
-        if (d_fields(d, x, F, 4, f, "struct Link", 1) || need(d, x, f[1], F[1]) || need(d, x, f[2], F[2])) return -1;
+        if (d_fields(d, x, F, 9, f, "struct Link", 1) || need(d, x, f[1], F[1]) || need(d, x, f[2], F[2])) return -1;
+        /* ---- LINKF: the placement, pin and colour (model.h), untrusted: each checked ---- */
+        if (f[4]) {
+            if (f[4]->type != JR_STR) return type_err(d, f[4], "a string");
+            for (int o = 0; o < 3; o++)
+                if (f[4]->n == strlen(ORIG[o]) && !memcmp(f[4]->s, ORIG[o], f[4]->n)) k->origin = o + 1;
+            if (!k->origin) return dfail(d, f[4]->off, "links: origin is one of origin, base_point, survey_point", 0, 0);
+        }
+        if (f[5]) {
+            if (f[5]->type != JR_ARR || f[5]->n != 3) return type_err(d, f[5], "a sequence of 3 numbers");
+            for (int c = 0; c < 3; c++) {
+                if (d_f64(d, &f[5]->items[c], &k->move_mm[c])) return -1;
+                if (!(k->move_mm[c] > -1e9 && k->move_mm[c] < 1e9)) return dfail(d, f[5]->off, "links: move_mm within 1000 km", 0, 0);
+                k->move_mm[c] += 0.0; /* canonical: no -0.0 */
+            }
+        }
+        if (f[6]) {
+            if (d_f64(d, f[6], &k->rotation_deg)) return -1;
+            if (!(k->rotation_deg > -1e6 && k->rotation_deg < 1e6)) return dfail(d, f[6]->off, "links: rotation_deg out of range", 0, 0);
+            k->rotation_deg += 0.0;
+        }
+        if (f[7]) {
+            if (f[7]->type != JR_BOOL) return type_err(d, f[7], "a boolean");
+            k->unpinned = !f[7]->b;
+        }
+        if (f[8]) {
+            if (f[8]->type != JR_NUM || !f[8]->num_int || f[8]->num_neg || f[8]->num > 11)
+                return dfail(d, f[8]->off, "links: colour is a palette index 0..11", 0, 0);
+            k->colour = (int)f[8]->num, k->has_colour = 1;
+        }
+        /* ---- end LINKF ---- */
         if (d_str(d, f[1], &k->name) || d_str(d, f[2], &k->path) || (f[3] && d_str(d, f[3], &k->relative))) return -1;
         if (f[0] && f[0]->type != JR_BOOL) return type_err(d, f[0], "a boolean");
         k->hidden = f[0] && f[0]->b;
@@ -1072,10 +1108,19 @@ int cc_model_save(const cc_model *m, Buf *b) {
         for (size_t i = 0; i < m->nlinks; i++) {
             const cc_model_link *k = &m->links[i];
             jw_obj_begin(&w);
+            if (k->has_colour) jw_key(&w, "colour"), jw_u64(&w, (uint64_t)k->colour); /* LINKF */
             if (k->hidden) jw_key(&w, "hidden"), jw_bool(&w, 1);
+            if (link_moved(k)) { /* LINKF */
+                jw_key(&w, "move_mm"), jw_arr_begin(&w);
+                for (int c = 0; c < 3; c++) jw_f64(&w, k->move_mm[c]);
+                jw_arr_end(&w);
+            }
             jw_key(&w, "name"), jw_str_n(&w, k->name.p ? k->name.p : "", k->name.n);
+            if (k->origin > 0 && k->origin < 4) jw_key(&w, "origin"), jw_str(&w, LINK_ORIGIN[k->origin]); /* LINKF */
             jw_key(&w, "path"), jw_str_n(&w, k->path.p ? k->path.p : "", k->path.n);
+            if (k->unpinned) jw_key(&w, "pinned"), jw_bool(&w, 0); /* LINKF */
             if (k->relative.n) jw_key(&w, "relative"), jw_str_n(&w, k->relative.p, k->relative.n);
+            if (k->rotation_deg != 0.0) jw_key(&w, "rotation_deg"), jw_f64(&w, k->rotation_deg); /* LINKF */
             jw_obj_end(&w);
         }
         jw_arr_end(&w);
@@ -1379,11 +1424,21 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
             cb_head(b, CB_ARRAY, m->nlinks);
             for (size_t i = 0; i < m->nlinks; i++) {
                 const cc_model_link *k = &m->links[i];
-                cb_head(b, CB_MAP, 2 + (k->hidden ? 1 : 0) + (k->relative.n ? 1 : 0));
+                int org = k->origin > 0 && k->origin < 4, mv = link_moved(k);
+                cb_head(b, CB_MAP, 2 + (k->hidden ? 1 : 0) + (k->relative.n ? 1 : 0) + (k->has_colour ? 1 : 0) + mv + org +
+                                       (k->unpinned ? 1 : 0) + (k->rotation_deg != 0.0));
+                if (k->has_colour) c_key(b, "colour"), cb_head(b, CB_UINT, (uint64_t)k->colour); /* LINKF */
                 if (k->hidden) c_key(b, "hidden"), cb_head(b, 7, 21); /* true */
+                if (mv) {
+                    c_key(b, "move_mm"), cb_head(b, CB_ARRAY, 3);
+                    for (int c = 0; c < 3; c++) cb_f64(b, k->move_mm[c]);
+                }
                 c_key(b, "name"), c_str(b, k->name);
+                if (org) c_key(b, "origin"), cb_text(b, LINK_ORIGIN[k->origin], strlen(LINK_ORIGIN[k->origin]));
                 c_key(b, "path"), c_str(b, k->path);
+                if (k->unpinned) c_key(b, "pinned"), cb_head(b, 7, 20); /* false */
                 if (k->relative.n) c_key(b, "relative"), c_str(b, k->relative);
+                if (k->rotation_deg != 0.0) c_key(b, "rotation_deg"), cb_f64(b, k->rotation_deg);
             }
         }
     }

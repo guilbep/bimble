@@ -31,6 +31,9 @@ export const fr = {
   "na.screen.you": "Vous",
   "na.screen.settings": "Réglages", // SET1
   "na.screen.about": "À propos de Bimble", // SET1
+  "na.screen.new-view": "Nouvelle vue", // VIEWSHEET
+  "na.screen.place-view": "Placer une vue", // VIEWSHEET
+  "na.screen.sheet-revision": "Indice de la feuille", // VIEWSHEET
   "na.screen.collab": "Travail partagé",
   "na.screen.team": "Équipe",
   "na.screen.recent": "Fichiers récents",
@@ -72,6 +75,9 @@ export const en: typeof fr = {
   "na.screen.you": "You",
   "na.screen.settings": "Settings", // SET1
   "na.screen.about": "About Bimble", // SET1
+  "na.screen.new-view": "New view", // VIEWSHEET
+  "na.screen.place-view": "Place view", // VIEWSHEET
+  "na.screen.sheet-revision": "Sheet revision", // VIEWSHEET
   "na.screen.collab": "Shared work",
   "na.screen.team": "Team",
   "na.screen.recent": "Recent files",

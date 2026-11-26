@@ -678,7 +678,24 @@ EXPORT("host_mesh") int wa_host_mesh(int flags, cc_wasm_res *r) {
     size_t n;
     uint32_t rev;
     double ms;
-    int st = cc_mesh_get(s, &p, &n, &rev, &ms);
+    int st = cc_mesh_get_form(s, flags & 2 ? 3 : 1, &p, &n, &rev, &ms); /* 3D1: bit 1, BMSH version 3 */
+    r->value = rev;
+    Buf b;
+    buf_init(&b);
+    if (!(flags & 4) || st != 200) buf_append(&b, p, n); /* 3D2: bit 2, built and cached, no bytes copied out */
+    return answer(r, &b, st);
+}
+
+/* 3D2 (ADR 0078): the HLOD proxies in steps (session/mesh.h cc_mesh_proxies): `budget` triangles more
+ * a call; 202 with "read total" until built, then 200 with the BPRX bytes (src/hlod.h). */
+EXPORT("host_proxies") int wa_host_proxies(int budget, cc_wasm_res *r) {
+    cc_session *s = host_session();
+    if (!s) return r->value = 0, text(r, 500, "out of memory");
+    const char *p;
+    size_t n;
+    uint32_t rev;
+    double ms;
+    int st = cc_mesh_proxies(s, budget > 0 ? (uint64_t)budget : 0, &p, &n, &rev, &ms); /* 0: the tree alone */
     r->value = rev;
     Buf b;
     buf_init(&b);

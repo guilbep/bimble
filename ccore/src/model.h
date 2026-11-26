@@ -31,6 +31,7 @@ typedef enum {
     CC_IFC_FOOTING,
     CC_IFC_PROXY, /* IfcBuildingElementProxy */
     CC_IFC_ELEMENT_ASSEMBLY, /* IfcElementAssembly: no generator, its shape is its parts (ADR 0070) */
+    CC_IFC_VIRTUAL_ELEMENT,  /* IfcVirtualElement: a reference plane, no generator (WAVE1B, refplane.h) */
     CC_IFC_CLASS_COUNT
 } cc_ifc_class;
 
@@ -107,6 +108,7 @@ typedef struct {
     } u;
 } cc_generator;
 
+#define CC_MAX_OPENINGS 10000 /* CONC1: openings of one element in a command (set_openings, add_element) */
 typedef struct { /* model.rs Opening: a solid cut out of its element (element-local mm) */
     int has_id; /* id: Option<GlobalId> */
     cc_gid id;
@@ -171,6 +173,11 @@ typedef struct {
     cc_str crs;              /* the survey system, e.g. "EPSG:2056" (LV95) */
     double east_m, north_m, height_m; /* what the survey system adds to world coordinates (m) */
     double map_rotation_deg; /* IfcMapConversion: the turn of the model's x axis in the survey system */
+    /* SETOUT (ADR 0075, DEVIATIONS 32): the survey point, a C addition: a benchmark of the site in
+     * world mm, its survey coordinates those of the georeference. File key "survey_point_mm"
+     * [x, y, z] after Rust's six, left out when unset (has_survey_point 0). */
+    int has_survey_point;
+    double survey_point_mm[3];
 } cc_georef;
 
 /* ---- LNK1: a linked model the file names (GitHub issue #69, DEVIATIONS 29): file key "links",
@@ -182,6 +189,14 @@ typedef struct {
 typedef struct {
     cc_str name, path, relative;
     int hidden;
+    /* LINKF (session/links.h, ADR 0079), each left out at its default: "origin" one of "origin",
+     * "base_point", "survey_point" (default "file": 0 here), "move_mm" [x, y, z] (zeros),
+     * "rotation_deg" (0; |x| < 1e6), "pinned": false (default true), "colour" 0..11 (none: left out). */
+    int origin;           /* 0 file, 1 origin, 2 base_point, 3 survey_point */
+    double move_mm[3];    /* each |x| < 1e9 */
+    double rotation_deg;
+    int unpinned;
+    int has_colour, colour; /* 0..11 when has_colour (zero-initialized: none) */
 } cc_model_link;
 
 typedef struct {
@@ -250,4 +265,16 @@ void cc_model_canonical(cc_model *m);
 void cc_buf_display_f64(Buf *b, double x);              /* format!("{}", x): "300", "-0.5", "NaN" */
 void cc_buf_debug_str(Buf *b, const char *s, size_t n); /* format!("{:?}", s), common escapes */
 void cc_buf_gid(Buf *b, const cc_gid *g);
+/* CONC1 (ADR 0077, verbs_concrete.h). */
+#define CC_SLEEVE_SIDES 32     /* a sleeve's polygon (area error 0.64 % against the circle) */
+#define CC_PREDEFINED_KEY "Bimble/PredefinedType" /* the element property the IFC export writes as PredefinedType */
+/* An opening made by opening_add with shape "round": an extruded_polygon of CC_SLEEVE_SIDES corners
+ * at one radius around the opening's origin. 1 with the radius in *r (may be NULL), else 0. */
+int cc_opening_is_sleeve(const cc_opening *o, double *r);
+/* WAVE1B (B1): the exact cylinder against the polygon drawn: for each sleeve of `e` (a wall or slab
+ * generator host), (polygon area - pi r^2) x the host's thickness, in m3 (<= 0); 0 without one. The
+ * radius is the opening's own parameter (its polygon's circumradius), not read from the mesh. */
+double cc_sleeve_volume_fix_m3(const cc_element *e);
+/* The element's PredefinedType property (CC_PREDEFINED_KEY), NULL when it has none. */
+const cc_str *cc_element_predefined(const cc_element *e);
 #endif

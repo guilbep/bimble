@@ -13,9 +13,14 @@ import { t } from "../i18n";
 import { RIBBON, type RibbonTool } from "../shell/ribbon-tabs";
 import { viewName } from "../shell/viewName";
 import { shortcutFor } from "../shell/keys"; // KEY1: the shortcut shown is the one the key table runs
+import { notYetAction } from "../shell/capability"; // DEAD1
 import { currentDialog } from ".";
+import { send } from "../shell/send";
+import { pickedSchedule } from "../pages/quantitiesPick";
 
-interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null }
+interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null;
+  /** DEAD1: a disabled row says why: "not available yet" (an action of a capability this core does not serve), or the ribbon tool's reason it is off now. */
+  notYet?: boolean; why?: string | undefined }
 
 // Icons copied from the reference (and the navigator's, for plans).
 const CUBE = '<path d="M12 3 20 7v10l-8 4-8-4V7z"/><path d="M4 7l8 4 8-4M12 11v10"/>';
@@ -28,7 +33,7 @@ const LIST = '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="5" cy="6" r="1"/><c
 const tools = new Map<string, RibbonTool>();
 for (const groups of Object.values(RIBBON)) for (const g of groups) for (const tool of g.tools) if (tool.action && !tools.has(tool.action)) tools.set(tool.action, tool);
 // Rust tab (`ActionState.tab`) → the tab bar's copy, else `actionTab.<tab>` (i18n/parts/actions.ts).
-const TAB: Record<string, string> = { File: "quick.file", Project: "tab.project", Collaborate: "tab.collaborate", Annotate: "tab.annotate", View: "tab.view", Sheets: "tab.sheets" };
+const TAB: Record<string, string> = { File: "quick.file", Project: "tab.project", Collaborate: "tab.collaborate", Annotate: "tab.annotate", View: "tab.view", Sheets: "tab.sheets", Concrete: "tab.concrete", "Setting out": "tab.settingOut" /* SETOUT */ };
 const copy = (key: string, rust: string) => { const s = t(key); return s === key ? rust : s; };
 
 const items = computed<Item[]>(() => {
@@ -44,6 +49,9 @@ const items = computed<Item[]>(() => {
       icon: tool?.icon ?? "",
       enabled: a.enabled,
       go: () => runAction(a.name),
+      // DEAD1: why a row is off: not served by this core (capability), else the ribbon's reason, if any
+      notYet: !a.enabled && notYetAction(a.name),
+      why: a.enabled ? undefined : notYetAction(a.name) ? t("na.tooltip", { name: copy(`action.${a.name}`, a.label) }) : tool?.offTip ? `${copy(`action.${a.name}`, a.label)}: ${t(tool.offTip)}` : undefined,
     };
   });
   for (const v of openViews.value.views) {
@@ -52,10 +60,17 @@ const items = computed<Item[]>(() => {
   // ponytail: sheets throw without a model; no model, no entries. Schedules: the effective ones (`schedule_list`), as egui.
   try {
     for (const s of sheets()) list.push({ label: t("palette.goto", { name: `${s.number} ${s.name}` }), note: t("tab.sheets"), kbd: "—", icon: SHEET, enabled: true, go: () => tabCall("open", { type: "sheet", id: s.id }) });
-    for (const s of scheduleList() as ScheduleDef[]) list.push({ label: t("palette.goto", { name: s.name }), note: t("tab.quantities"), kbd: "—", icon: LIST, enabled: true, go: () => tabCall("open", { type: "schedule", name: s.name }) });
+    for (const s of scheduleList() as ScheduleDef[]) list.push({ label: t("palette.goto", { name: s.name }), note: t("tab.quantities"), kbd: "—", icon: LIST, enabled: true, go: () => goSchedule(s.name) });
   } catch { /* no model */ }
   return list;
 });
+
+/** DEAD1: a schedule is a page, not a view tab (the core's tab "open" takes views only: it answered
+ *  400): the Quantities page on that schedule, through the shell. */
+function goSchedule(name: string): string | null {
+  pickedSchedule.value = name;
+  return send({ do: "showPage", page: "quantities" }) ? null : `the Quantities page cannot be shown now`;
+}
 
 // Filtering is Rust's (`palette_match`, egui's word-start matcher, accent-insensitive), on the label
 // joined with the Rust label: "sec" finds "Zone de coupe" through "Section box".
@@ -134,9 +149,9 @@ onBeforeUnmount(() => ro?.disconnect());
       <div style="border-top:1px solid var(--bb-sunk)"></div>
       <div ref="list" class="rows" data-bb="palette-list">
         <a v-for="(item, i) in shown" :key="i" href="#" class="ti" :class="{ sel: i === index, off: !item.enabled }" style="padding:8px 12px;gap:12px"
-          :aria-disabled="!item.enabled || undefined" data-bb="palette-item" @click.prevent="run(i)">
+          :aria-disabled="!item.enabled || undefined" :title="item.why" :data-not-yet="item.notYet ? '' : undefined" data-bb="palette-item" @click.prevent="run(i)">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="item.icon"></svg>
-          <span class="lab">{{ item.label }}</span><span class="note">{{ item.note }}</span><span class="kbd">{{ item.kbd }}</span>
+          <span class="lab">{{ item.label }}</span><span v-if="item.notYet" class="note ny" data-bb="palette-not-yet">{{ t('palette.notYet') }}</span><span class="note">{{ item.note }}</span><span class="kbd">{{ item.kbd }}</span>
         </a>
       </div>
       <div class="note" style="padding:4px 12px" data-bb="palette-help">{{ t('palette.help') }}</div>

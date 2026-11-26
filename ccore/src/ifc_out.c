@@ -10,6 +10,7 @@
 #include "ifc_math.h"
 #include "guid.h"
 #include "json_w.h"
+#include "refplane.h" /* WAVE1B */
 
 /* No memchr or qsort in the freestanding wasm32 build: these two instead. */
 static const char *find_byte(const void *p, int c, size_t n) {
@@ -423,7 +424,21 @@ static uint64_t write_geometry(W *w, const cc_generator *g, uint64_t world, uint
     return end(w, solid);
 }
 
+/* CONC1 (ADR 0077): the PredefinedType property the Concrete tab's tools set (model.h
+ * CC_PREDEFINED_KEY), written when it is one of the class's enumeration in IFC4 and IFC2x3. */
+static const char *predefined_property(const cc_element *e) {
+    static const char *const SLAB[] = {".FLOOR.", ".ROOF.", ".LANDING.", ".BASESLAB."};
+    static const char *const FOOTING[] = {".FOOTING_BEAM.", ".PAD_FOOTING.", ".PILE_CAP.", ".STRIP_FOOTING."};
+    const cc_str *v = cc_element_predefined(e);
+    const char *const *t = e->cls == CC_IFC_SLAB ? SLAB : e->cls == CC_IFC_FOOTING ? FOOTING : NULL;
+    if (!v || !t) return NULL;
+    for (int i = 0; i < 4; i++)
+        if (v->n + 2 == strlen(t[i]) && !memcmp(v->p, t[i] + 1, v->n)) return t[i];
+    return NULL;
+}
+
 static const char *predefined(const cc_element *e) {
+    if (predefined_property(e)) return predefined_property(e); /* CONC1 */
     switch (e->cls) {
     case CC_IFC_COLUMN: return ".COLUMN.";
     case CC_IFC_BEAM: return ".BEAM.";
@@ -633,7 +648,7 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
      * placed at a whole metre near the model (the mean of the elements' origins), turned by the
      * building's angle; elements are placed in its frame. None for the default georeference or an
      * empty model: the building sits at the world origin. */
-    int framed = !cc_georef_is_default(&m->georef) && m->nelements > 0;
+    int framed = cc_georef_places(&m->georef) && m->nelements > 0; /* SETOUT: the survey point is no place */
     double fat[3] = {0, 0, 0}, fcos = 1.0, fsin = 0.0;
     uint64_t bldg_axes = world;
     if (framed) {
@@ -735,6 +750,31 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
         uint64_t pl = begin(w);
         put(w, "IFCLOCALPLACEMENT("), ref(w, st_pl[el_st[i]]), put(w, ","), ref(w, a), put(w, ")"), end(w, pl);
 
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B (ADR 0075): a reference plane, its outline as a closed
+                                                   * polyline in its own frame (z = 0), ObjectType REFERENCE_PLANE */
+            double pw, ph;
+            cc_refplane_size(e, &pw, &ph);
+            static const double S[5][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}, {-1, -1}};
+            uint64_t pts[5];
+            for (int q = 0; q < 4; q++) {
+                double c[3] = {S[q][0] * pw / 2.0, S[q][1] * ph / 2.0, 0.0};
+                pts[q] = point3(w, c);
+            }
+            pts[4] = pts[0];
+            uint64_t poly = begin(w);
+            put(w, "IFCPOLYLINE(("), refs(w, pts, 5), put(w, "))"), end(w, poly);
+            uint64_t vshape = begin(w);
+            put(w, "IFCSHAPEREPRESENTATION("), ref(w, body), put(w, ",'Reference','Curve3D',("), ref(w, poly);
+            put(w, "))"), end(w, vshape);
+            uint64_t vpds = begin(w);
+            put(w, "IFCPRODUCTDEFINITIONSHAPE($,$,("), ref(w, vshape), put(w, "))"), end(w, vpds);
+            uint64_t vel = begin(w);
+            put(w, "IFCVIRTUALELEMENT("), gid_lit(w, &e->id), put(w, ",$,"), cstr(w, e->name), put(w, ",$,'REFERENCE_PLANE',");
+            ref(w, pl), put(w, ","), ref(w, vpds), put(w, ",$)");
+            el_ent[i] = end(w, vel);
+            element_psets(w, e, vel);
+            continue;
+        }
         const char *repr;
         uint64_t solid = write_geometry(w, &e->generator, world, z, &repr);
         uint64_t shape = begin(w);
@@ -770,7 +810,64 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
         put(w, "IFCRELDEFINESBYPROPERTIES("), gid_id(w, "rel-pset/", &e->id), put(w, ",$,$,$,("), ref(w, el);
         put(w, "),"), ref(w, pset), put(w, ")"), end(w, rel);
 
-        /* No openings in the C model. Property sets beyond the material (ADR 0032). */
+        /* Openings (lib.rs:498-524, CONC1): IfcOpeningElement voids of this element, geometry
+         * relative to it; the opening's own GlobalId when it has one, else derived from its index. */
+        for (size_t k = 0; k < e->nopenings && !w->err; k++) {
+            const cc_opening *op = &e->openings[k];
+            uint64_t oo = point3(w, op->placement.origin), oz = dir3(w, op->placement.z_axis);
+            uint64_t ox = dir3(w, op->placement.x_axis);
+            uint64_t oa = begin(w);
+            put(w, "IFCAXIS2PLACEMENT3D("), ref(w, oo), put(w, ","), ref(w, oz), put(w, ","), ref(w, ox), put(w, ")");
+            end(w, oa);
+            uint64_t opl = begin(w);
+            put(w, "IFCLOCALPLACEMENT("), ref(w, pl), put(w, ","), ref(w, oa), put(w, ")"), end(w, opl);
+            const char *orepr;
+            double sr;
+            uint64_t osolid;
+            if (cc_opening_is_sleeve(op, &sr)) { /* WAVE1B (B1): the exact circle, IfcCircleProfileDef */
+                uint64_t cp = begin(w);
+                put(w, "IFCCIRCLEPROFILEDEF(.AREA.,$,$,"), real(w, sr), put(w, ")"), end(w, cp);
+                osolid = begin(w);
+                put(w, "IFCEXTRUDEDAREASOLID("), ref(w, cp), put(w, ","), ref(w, world), put(w, ","), ref(w, z);
+                put(w, ","), real(w, op->generator.u.poly.height), put(w, ")"), end(w, osolid);
+                orepr = "SweptSolid";
+            } else osolid = write_geometry(w, &op->generator, world, z, &orepr);
+            uint64_t oshape = begin(w);
+            put(w, "IFCSHAPEREPRESENTATION("), ref(w, body), put(w, ",'Body','"), put(w, orepr), put(w, "',(");
+            ref(w, osolid), put(w, "))"), end(w, oshape);
+            uint64_t opds = begin(w);
+            put(w, "IFCPRODUCTDEFINITIONSHAPE($,$,("), ref(w, oshape), put(w, "))"), end(w, opds);
+            char idx[24];
+            int ni = 0;
+            for (size_t v = k;; v /= 10) {
+                idx[ni++] = (char)('0' + v % 10);
+                if (v < 10) break;
+            }
+            uint64_t opening = begin(w);
+            put(w, "IFCOPENINGELEMENT(");
+            if (op->has_id) gid_lit(w, &op->id);
+            else {
+                Buf *sd = seed_begin(w);
+                buf_puts(sd, "opening/"), buf_append(sd, e->id.c, 22), buf_putc(sd, '/');
+                for (int q = ni - 1; q >= 0; q--) buf_putc(sd, idx[q]);
+                gid_end(w);
+            }
+            /* A sleeve (ADR 0077): ObjectType SLEEVE, PredefinedType USERDEFINED. */
+            int sleeve = cc_opening_is_sleeve(op, NULL);
+            put(w, sleeve ? ",$,$,$,'SLEEVE'," : ",$,$,$,$,"), ref(w, opl), put(w, ","), ref(w, opds);
+            put(w, sleeve ? ",$,.USERDEFINED.)" : ",$,.OPENING.)"), end(w, opening);
+            uint64_t rv = begin(w);
+            put(w, "IFCRELVOIDSELEMENT(");
+            if (op->has_id) gid_id(w, "voids/", &op->id);
+            else {
+                Buf *sd = seed_begin(w);
+                buf_puts(sd, "voids/"), buf_append(sd, e->id.c, 22), buf_putc(sd, '/');
+                for (int q = ni - 1; q >= 0; q--) buf_putc(sd, idx[q]);
+                gid_end(w);
+            }
+            put(w, ",$,$,$,"), ref(w, el), put(w, ","), ref(w, opening), put(w, ")"), end(w, rv);
+        }
+        /* Property sets beyond the material (ADR 0032). */
         element_psets(w, e, el);
     }
     if (w->err) goto done;
@@ -789,6 +886,9 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
     group(el_mat, ne, nm, start, order);
     for (size_t k = 0; k < nm; k++) {
         if (start[k] == start[k + 1]) continue;
+        size_t real_els = 0; /* WAVE1B: a reference plane is not made of the material */
+        for (size_t q = start[k]; q < start[k + 1]; q++) real_els += m->elements[order[q]].cls != CC_IFC_VIRTUAL_ELEMENT;
+        if (!real_els) continue;
         const cc_material *mat = &m->materials[k];
         uint64_t me = begin(w);
         put(w, "IFCMATERIAL("), cstr(w, mat->name), put(w, ",$,");
@@ -824,7 +924,8 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
             put(w, "),"), ref(w, me), put(w, ")"), end(w, mp);
         }
         w->tmp.n = 0;
-        for (size_t q = start[k]; q < start[k + 1]; q++) ids_push(&w->tmp, el_ent[order[q]]);
+        for (size_t q = start[k]; q < start[k + 1]; q++)
+            if (m->elements[order[q]].cls != CC_IFC_VIRTUAL_ELEMENT) ids_push(&w->tmp, el_ent[order[q]]);
         uint64_t rel = begin(w);
         put(w, "IFCRELASSOCIATESMATERIAL("), gid_id(w, "material/", &mat->id), put(w, ",$,$,$,(");
         refs(w, w->tmp.v, w->tmp.n), put(w, "),"), ref(w, me), put(w, ")"), end(w, rel);
@@ -849,7 +950,8 @@ static const char *const ROOTED[] = {"IFCPROJECT", "IFCSITE", "IFCBUILDING", "IF
                                      "IFCBEAM", "IFCSLAB", "IFCWALL", "IFCFOOTING", "IFCBUILDINGELEMENTPROXY",
                                      "IFCOPENINGELEMENT", "IFCPROPERTYSET", "IFCRELAGGREGATES",
                                      "IFCRELCONTAINEDINSPATIALSTRUCTURE", "IFCRELDEFINESBYPROPERTIES",
-                                     "IFCRELVOIDSELEMENT", "IFCRELASSOCIATESMATERIAL", "IFCGRID", NULL};
+                                     "IFCRELVOIDSELEMENT", "IFCRELASSOCIATESMATERIAL", "IFCGRID",
+                                     "IFCVIRTUALELEMENT" /* WAVE1B: a reference plane */, NULL};
 static const char *const DROPPED[] = {"IFCMATERIALPROPERTIES", "IFCPROJECTEDCRS", "IFCMAPCONVERSION", NULL};
 
 #define MAX_ARGS 64
@@ -966,7 +1068,8 @@ static int to_ifc2x3(const char *t, size_t n, Buf *out) {
                 args[na - 1] = (cc_str){"$", 1};
             } else if (NAME_IS("IFCMATERIAL")) {
                 if (na > 1) na = 1;
-            } else if (NAME_IS("IFCRECTANGLEPROFILEDEF") && na > 2 && args[2].n == 1 && args[2].p[0] == '$') {
+            } else if ((NAME_IS("IFCRECTANGLEPROFILEDEF") || NAME_IS("IFCCIRCLEPROFILEDEF") /* WAVE1B */) && na > 2 &&
+                       args[2].n == 1 && args[2].p[0] == '$') {
                 args[2] = (cc_str){at2s, at2n};
             }
 #undef NAME_IS

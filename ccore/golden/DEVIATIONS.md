@@ -763,10 +763,11 @@ folder), `ui_theme.rs` (themes, fonts, text sizes), `lib.rs:4023-4190` (Settings
 - **A file that is not a JSON object is left alone** (FS1's rule): the change is kept for the
   session and `query settings` says so in `note`; Rust overwrites it with the defaults and the
   change.
-- **Applies**: `memory_share`, `moving_fps`, `moving_proxies` and `gpu_cull` are stored and round
+- **Applies**: `memory_share` and `gpu_cull` are stored and round
   tripped but used by nothing (the lab's viewport is the page's WebGL one, natively too): `query
-  settings` reports `applies: false` and what each would need. They are not shown in the lab's
-  dialog. `recent` does not apply in the browser (no paths).
+  settings` reports `applies: false` and what each would need. `moving_fps` applies since ticket
+  3D1, `moving_proxies` since ticket 3D2 (section 36), and both are shown in the lab's dialog; the
+  other two are not. `recent` does not apply in the browser (no paths).
 - **The look**: the lab maps Rust's theme ids onto its own design tokens (`web-ui/src/shell/theme.ts`).
   `grey`, Rust's default, is the lab's own default look (the Bimble design), not Rust's grey
   surfaces; the five others follow Rust's colours. `roboto`, Rust's default font, is the lab's own
@@ -1092,3 +1093,271 @@ N opening(s) not cut (no boolean kernel in the C core)`. In the goldens, the one
 - **A second `Host` or `Origin` header is malformed (400).** Rust's `read_head` (`serve.rs:164`)
   keeps the last one; which one a proxy or a browser checked is not known, so the C host trusts
   neither (`host/server.c` `parse_head`).
+
+## 32. Setting out: the survey point, the markers, north from the tab (ticket SETOUT, ADR 0075)
+
+Rust v0.19.0 has none of this: its Setting out tab was a placeholder (no survey point, no
+base-point marker, no project zero readout, no reference planes; `git grep -i "survey_point\|base
+point\|reference plane" oracle/rust -- crates/` finds only a DXF block's base point). The C core's
+own references are hand-computed in `test/setting_out_test.c`; no golden changes.
+
+- **Georef gains `survey_point_mm` (C only).** `cc_georef.has_survey_point`, `survey_point_mm`
+  (world mm `[x, y, z]`): file key `"survey_point_mm"` after Rust's six, left out when unset, so
+  every model without one keeps its bytes and hash (tested: `frame.json` saved before and after a
+  set-then-cleared georeference is the same bytes). Rust's `Georef` is `deny_unknown_fields`: Rust
+  v0.19.0 refuses a file that holds one (as it refuses a C file with `grids`). On load: finite,
+  `|x| <= 1e7` mm, exactly three numbers, no duplicate key; the unknown-field message still names
+  Rust's six fields. The IFC export does not change for it: `IfcMapConversion` stays the tie to the
+  map, and the building's place is decided by the six (`cc_georef_places`).
+- **`georef_set` brings angles into (-180, 180]** (`rotation_deg`, `map_rotation_deg`; 350 -> -10,
+  -180 -> 180, -0.0 -> 0.0). Before, any value up to ±360 was kept as typed. A C verb: no Rust
+  reference. New argument `survey_point_mm` (`[x, y, z]` sets, `[]` removes).
+- **Three actions after ISS71's** (`query actions`: 61 rows): `show_base_point`,
+  `show_survey_point` (session state, pressed when the marker is shown, enabled with an editable
+  model) and `view_true_north` (enabled when true north differs from project north; pressed and
+  run as the section box's orientation in 3D, as the active stored view's `true_north` in a plan or
+  a section: one `set_view` Command there).
+- **`query setting_out`** (C only, `session/setting_out.h`): the markers and the values the page
+  draws; null without an editable model. **`query capabilities`** gains `setting_out` (true),
+  `reference_planes` and `base_point_move` (false: not served yet).
+
+- **Reference planes (ticket WAVE1B, ADR 0075 decisions 9-12).** Rust v0.19.0 has none (`git grep
+  -n -i "reference plane\|work_plane\|workplane" oracle/rust -- crates/` finds nothing). A plane is
+  an element of a new class `IfcVirtualElement` (the C core's `cc_ifc_class` gains it after
+  `IfcElementAssembly`; Rust's `IfcClass` has no such variant, so Rust v0.19.0 refuses a file that
+  holds one, as it refuses `grids`): no `generator` key, no openings, properties
+  `Bimble/PlaneWidth` / `Bimble/PlaneHeight` (finite, [10, 1e6] mm, else the file is refused, as
+  is a `set_property` that would make it so), at most 1,000 (`src/refplane.h`). The scene draws
+  no mesh for it (no "could not mesh" warning), the IFC export writes `IFCVIRTUALELEMENT(...,
+  'REFERENCE_PLANE', ...)` with a `Curve3D` outline and the `Bimble` property set, without a
+  material association (IFC2x3: rooted with the owner history as every product); the import reads
+  it back (an `IfcVirtualElement` of another ObjectType is still skipped). New verb
+  `reference_plane_add`, new action `reference_planes` (71 rows), new query `reference_planes`,
+  new tool call `work_plane`; `query capabilities` says `reference_planes` true. The place tools'
+  plane (Rust's `storey_point`) and Measure's empty ray (Rust: no point) follow the work plane when
+  one is chosen; with none, the bytes are Rust's. Hand-computed references: `test/refplane_test.c`;
+  every model without a plane keeps its bytes (tested on `frame.json`).
+
+- **The grid axis tool (WAVE1B A2, ADR 0075 decision 13).** A tenth place kind `grid_axis` (after
+  CONC1's), action `place_grid_axis` (72 rows; enabled with an editable model that has a grid):
+  two clicks run `grid_axis_add`, the tag the next of its family. `set_placing {"kind":
+  "grid_axis"}` is accepted; Rust's kinds keep their bytes. Hand-computed: `test/setting_out_test.c`
+  (axis 2 after 1, B after A, the crossing snapped, Esc, undo).
+
+- **Grids in 3D (WAVE1B A3, ADR 0075 decision 14).** Rust draws grid axes on paper only (and the
+  lab, since G2, in plans); the lab draws them in the 3D view too, at the active level's elevation,
+  off when the view hides `IfcGrid`. Page-side only (`web-ui/src/glviewport.ts` with
+  `gl/grids.ts`); no core output changes. Checked by `test/lab_setting_out.mjs`.
+
+## 33. Views and sheets from the ribbon: New view…, the section tool, Place view…, Revision…, annotation types (ticket VIEWSHEET, ADR 0076)
+
+Rust v0.19.0 made views from the navigator's "New view…" menu (viewing.rs:806-840), placed views
+on sheets by dragging them from the navigator (layout.rs:449), kept one `revision` per sheet
+(`set_sheet`, dispatch.rs:105; the title block's `{revision}`, template.rs:189) and chose the text
+and dimension types of new annotations in its ribbon (ribbon.rs:1285 `annotation_types`, kept in
+the layout: `text_kind`, `dim_kind`). The C core adds no file field and changes no golden; its
+references are hand-computed in `test/view_sheet_test.c`.
+
+- **Four actions after SETOUT's** (`query actions`: 65 rows): `new_view` (enabled with an editable
+  model), `draw_section` (a switch, session state: enabled and pressed only while a floor plan of
+  an editable model is shown; it stops the place, annotate and measure tools and they stop it),
+  `sheet_place_view` and `sheet_revision` (enabled with an editable model and a sheet shown). The
+  three dialog actions answer ok and change nothing: the page opens its dialog, which runs the
+  verbs. `sheet_place_view` is not named `place_view`: the `place_` prefix is the place tool's.
+- **`view_add` takes `scale` (1 to 5000, a whole number) and a section's `depth_mm` (0 or more)**,
+  so a view made with its scale is one Command and one undo step. Rust's viewer set the scale
+  afterwards (a second `set_view`). Refused: a fraction, 0, 5001, a string, a depth on a plan, a
+  negative or out-of-range depth.
+- **`query annotation_types`** (C only): the standards' text and dimension types (the default
+  standards, `cc_style_default`: the C core keeps no other) and the ones in use, null for Default.
+  **Action `annotation_type`** (not listed, as `set_settings`): `{"text": name | null}` or
+  `{"dimension": name | null}`; an unknown name, a non-string, an empty or over-200-byte name, two
+  keys or a body that is not JSON is refused and the state kept. The annotate tool (`tool
+  annotate`) gives a new text the type's name as `kind` and its size (layout.rs:540-545, as Rust's
+  sheet text tool), a new dimension the type's name; Rust applied them to sheet annotations only
+  (the C core's sheet tools are not served yet, capability `sheet_tools` false).
+- **Revision**: Rust's one `revision` per sheet, nothing new (no revision table, no date, no
+  author: Rust had none; ADR 0076 decision 4).
+
+## 34. Concrete: footings, raft, openings and sleeves from the ribbon (ticket CONC1, ADR 0077)
+
+Rust v0.19.0 has the `pad_footing` generator and openings as data (`model.rs` `Opening`, exported
+by `bimble-ifc/src/lib.rs:498-524`), and no verb, command or tool that makes a footing, a raft, an
+opening or a sleeve (`git grep -i "opening\|footing\|raft\|sleeve" oracle/rust -- crates/`). The
+C core's references are hand-computed in `test/concrete_test.c` (volumes, positions, counts) and
+`test/lab_concrete.mjs` (the gestures in the lab). No golden changes.
+
+- **Verbs (C additions):** `footing_add`, `raft_add`, `opening_add`, `opening_set`,
+  `opening_remove` (`src/verbs_concrete.h`). Five actions after VIEWSHEET's (`query actions`: 70
+  rows): `place_footing`, `place_strip_footing`, `place_raft`, `place_opening`, `place_sleeve`,
+  enabled with an editable model, pressed while that kind is placed. `set_placing` takes
+  `"concrete": {sizes}`; `query placing` answers it while one of these kinds is chosen (Rust's
+  bytes otherwise).
+- **Command `set_openings {id, openings}`** (the C core's own, after `set_material`): an element's
+  whole opening list, the old one its inverse; each opening's placement and generator validated,
+  GlobalIds unique in the list, at most 10,000. `add_element` now writes and reads `openings` in
+  the command JSON (the session journal); before, the C parser refused them ("unsupported by the
+  C core: element openings") and the writer left them out.
+- **IFC export of openings** (Rust's, now ported): the C writer left every opening out ("No
+  openings in the C model"); it now writes `IfcOpeningElement` + `IfcRelVoidsElement` as Rust,
+  GlobalIds from the opening's own id or `opening/<element>/<i>`. A sleeve (a 32-gon opening) is
+  written with ObjectType `'SLEEVE'` and `.USERDEFINED.` (Rust has no sleeve).
+- **PredefinedType from the property `Bimble/PredefinedType`** when it is one of the class's
+  enumeration (slab: FLOOR, ROOF, LANDING, BASESLAB; footing: FOOTING_BEAM, PAD_FOOTING, PILE_CAP,
+  STRIP_FOOTING); otherwise Rust's (FLOOR, PAD_FOOTING…). No file without the property changes.
+- **`query element` `openings`**: the element's count (Rust's `e.openings.len()`, query.rs:146);
+  the C core answered 0.
+
+- **Openings selected and previewed (ticket WAVE1B B2, ADR 0077 decisions 11-12).** C additions
+  with no Rust counterpart: `query openings {host}` (each opening's kind, sizes as `opening_set`
+  takes them, centre and box corners in world mm; an opening without a GlobalId is "other"),
+  `query opening_at {ray}` (the opening a pointer ray enters before the first surface); the place
+  tool's answer carries a ghost for the opening and sleeve kinds (CONC1 answered `null`).
+  Hand-computed in `test/concrete_test.c`, gestures in `test/lab_concrete.mjs`.
+
+- **Sleeves (ticket WAVE1B B1, ADR 0077 decisions 13-16).** The quantities (`cc_measure`) add to a
+  host's mesh volume, for each sleeve, (32-gon area - pi r^2) x its thickness (`cc_view_info.
+  volume_fix_m3`, from the model only; a view file's and an IFC scene's stay 0, so Rust's
+  schedules of every model without a sleeve keep their bytes); `query opening_rows` lists every
+  opening (a sleeve's volume pi r^2 t). A plan draws a cross of two 45-degree diameters in a round
+  hole (24 corners or more, a square box, the circle's area within 3 %) of a slab seen from
+  above when the plan template's `opening_dimensions` (the "Openings" toggle) is on: a Rust plan
+  of a model with such a hole differs there. The IFC writer gives a sleeve's body an
+  `IFCCIRCLEPROFILEDEF(.AREA.,$,$,r)` (IFC2x3: placed); IfcOpenShell validates both. Without a
+  kernel (wasm) a wall's openings across its thickness, boxes and sleeves together, are cut as
+  holes of its face (`scene.c wall_holes`); before, a sleeve in a wall was drawn uncut. Hand-computed:
+  `test/concrete_test.c` (3.408 - pi 0.1^2 0.2 = 3.4017168 m3; run without the kernel too),
+  `test/quantity_test.c`, `test/draw_plan_test.c`.
+
+- **Openings in merge and diff (ticket WAVE1B B4, ADR 0077 decision 17).** Rust merges and diffs an
+  element's `openings` as a list (merge: picked whole, so two openings added on two branches are a
+  conflict; diff: by index, or the whole list when the lengths differ). The C core matches them by
+  their GlobalIds when every opening has one (`src/merge.c merge_openings`, `src/diff.c
+  diff_openings`): both added openings kept, a conflict per field of the same opening
+  (`openings.<id>.generator.width`), a diff path `openings.<id>…`. No Rust golden holds openings in
+  a merge or a diff (`golden/history`), so every reference keeps its bytes. Tests:
+  `test/repo_merge_test.c` (six checks that fail on the old code; the host-moved case passed
+  before too).
+
+- **Import of openings, strips and rafts (ticket WAVE1B B3, ADR 0077 decision 18).** Rust's import
+  (import.rs) reads every opening as a mesh in its host's frame; the C import reads a box or a
+  cylinder extrusion (rectangle or circle profile at its origin, along +z) as a `rect_column` or a
+  32-gon opening instead (the same solid; its GlobalId kept). `golden/ifc/import/opening.json` (Rust's
+  window box) changes no byte: its rectangle profile is placed off its origin (600, 100), which is
+  not this case, so it is read as before (the `ifc_in` and `ifc_read` suites pass unchanged). An `IfcFooting .STRIP_FOOTING.` or an `IfcSlab .BASESLAB.` without a
+  `Bimble/PredefinedType` property gets it from the attribute; a strip read as a pad becomes the
+  wall generator. Round trip: `test/concrete_test.c` (18 elements, 3 openings, the same), the lab
+  (`test/lab_concrete.mjs`: the export imported back).
+
+- **Foundations list (ticket WAVE1B B5, ADR 0077 decision 19).** `query foundation_rows` (C only):
+  each IfcFooting and each IfcSlab of PredefinedType BASESLAB with its kind (pad, strip, raft,
+  footing), level, name, section text and volume as `cc_measure` gives it. The schedules
+  (`schedule_list`, `schedule_rows`) keep Rust's bytes. Test: `test/concrete_test.c` (13 pads, 2
+  strips, the raft's 4.8 m3), `test/lab_concrete.mjs`.
+
+## 35. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
+
+Rust v0.19.0's default view range (view.rs:299 `ViewRange::default_for`) cuts a floor plan
+1200 mm above its level and a ceiling plan 2300 mm above it, the top at the level above. On a
+storey lower than that (the frame's Fondations: −800 mm, the level above at 0), the cut lies above
+the top and Rust's own check (view.rs:401 `resolve`) refuses its own default: "looking down, the
+planes must be in order". The C core's `view_add` of a plan or a ceiling plan then puts the cut
+half way up the storey (Fondations: −400 mm); a storey tall enough, or the highest one, keeps
+Rust's default, so no golden changes. Test: `test/dead1_test.c`.
+
+- **Query `level_refusals`** (C only, ticket DEAD1): what the Levels page's Remove and Building
+  storey would answer, told before the click (the verbs `level_remove` and `level_set` run dry):
+  the page disables the control with the core's text. Rust's page showed the refusal after the
+  click.
+
+## 36. The lab's 3D: copies sent once and drawn instanced, batches culled, a moving budget (ticket 3D1, ADR 0078)
+
+- **BMSH version 3** (C only, `ccore/src/scene_bmsh.h`): the rows of version 1, each shared shape
+  once in its own coordinates and a placement per element. Rust had no BMSH: its viewer drew the
+  scene in process (ADR 0034 phase 2). The page asks version 3 (`GET /mesh?shapes=1`, wasm
+  `host_mesh` flag 2); version 1 is unchanged for every other reader. Test: `test/scene_bmsh_test.c`
+  (each element placed from version 3 equals version 1 bit for bit; dedup's bounded work on a
+  hostile bucket).
+- **The page's draw** follows bimble-render: shapes of 4 copies or more instanced, fewer placed
+  into the merged buffers (the page places them as `cc_scene_world_mesh` does); batches of at most
+  32,768 triangles culled against the view; largest first inside a batch. **The moving rule differs
+  from Rust's**: Rust left out what was under `px` pixels (`next_moving_px`, up to 48 px) and drew
+  far cells as HLOD proxies; the lab has no proxies, so a moving frame draws the elements largest on
+  screen first until a triangle budget is spent (`moving_fps` times the triangles a ms of the last
+  frames, at least 20,000, never zero) and the unfinished batches as box outlines; after the stop
+  the rest comes in slices of the same budget (abandoned by the next move), then every edge again.
+  Rust drew the whole still picture in one frame. Other differences: the size is half the element's
+  box diagonal (Rust: its bounding radius); no MSAA to drop; culling ignores the section box (Rust
+  culled against it too). Tests: `test/cull_test.mjs`, `tools/frames.mjs` (not blank while dragging).
+- **Settings**: `moving_fps` applies (`query settings` `applies.moving_fps` true, no `needs` row);
+  `gpu_cull` (Rust's compute-shader test of copies) and `moving_proxies` (HLOD proxies, not ported)
+  still do not.
+
+## 37. Link IFC and link a folder: limits per format, caches beside the IFC, conversions in turn (ticket LINKF, ADR 0079)
+
+- **Each format its own limit.** Rust v0.19.0 opened any file up to `file.rs` `MAX_FILE_BYTES`
+  (8 GiB native, 1 GiB wasm) and an IFC through `read.rs` (64 GiB). The C session checked every
+  file against `CC_MAX_FILE_BYTES` (256 MiB, the `.bimble`'s JSON DOM cap) and refused large IFC
+  that Rust reads. Now an IFC is checked against `CC_IFC_MAX_FILE_BYTES` (the STEP reader's), a
+  `.bimbleview` against `CC_VIEWFILE_MAX_FILE_BYTES` (8 GiB native), a `.bimble` / `.json` keeps
+  256 MiB, on open and on link (`session/session.c` `cc_session_read_limit`). A C addition beside
+  it: a file whose reader would need more memory than the carrier says is free is refused before
+  a byte is read, "too large for this machine" with the numbers (`cc_session_fits`; Rust had no
+  such check). The native `read_file` reads a regular file into one buffer of its size (no
+  doubling). Test: `test/link_large_test.mjs` (a 270 MiB synthetic IFC opened and linked; refused
+  with 100 MB free); on the code before, both answered "larger than 268435456 bytes".
+- **The cache beside a linked IFC** (Rust re-read the IFC on every link): `<file>.ifc.bimbleview`
+  and `<file>.ifc.log.txt` (`session/link_cache.h`), in the user's cache folder when the IFC's
+  folder cannot be written. The view file is the writer's bytes (raw, not gzipped) plus a section
+  `SRCE` after the last ELEM chunk; `cc_viewfile_read` keeps it in `source` and skips nothing else
+  new (Rust's reader skips an unknown section: a cache stays a valid `.bimbleview` for it). The
+  shared-for-viewing files and every golden keep their bytes (no SRCE). Files under 1 MiB are read
+  as before, without a cache. Test: `viewfile_test.c` `link_cache_source` (hostile SRCE sections,
+  the matching rule), `test/link_folder_test.mjs`.
+- **Conversions in turn on the carrier's thread**: a link of an IFC of 1 MiB or more answers at
+  once with a queued row (`query links_panel` "state": queued, converting with "progress",
+  ready, failed, refused, unloaded); Rust read a link on its loader thread too
+  (`load_scene_progress`) but one link at a time from the user, with no queue. `link_model` of a
+  smaller file, and every link in the wasm module and the C suites, still read in the call.
+- **`link_folder {path, recursive?}`** (a C action, the last row of `query actions`) and its one
+  undo step (link_folder's own steps beside the history; DEVIATIONS 29's links are otherwise not
+  undo steps, as Rust). `manage_links` gains `cancel`, `unload`, `load`, `reload_all`, `pin`,
+  `unpin`, `place` {origin, move_mm, rotation_deg} (refused while pinned) and `colour`, served by
+  `query links_panel`, saved in the `links` section (`origin`, `move_mm`, `rotation_deg`,
+  `pinned`: false, `colour`, each left out at its default) and applied where a link's geometry is
+  used: the placed scene for measure, Box to selection and paper, the LNKS trailer version 2 for
+  the page (ADR 0079 decision 10). Rust placed a link only by its georeference's offset
+  (`lib.rs:1499`, origin minus origin). `query link_log {name}`: the link's conversion report.
+  Test: `test/link_place_test.c` (hand-computed placements), `file2_test.c` (hostile values).
+- **`link_model {paths}`** (a C addition): several files in one call and one undo step; per path
+  linked, skipped (already linked) or a "refused" row with its reason (outside the file dialog's
+  roots: the native host's `path_allowed`). Test: `test/link_folder_test.mjs`.
+  `moving_proxies` applies since ticket 3D2 (below); `gpu_cull` (Rust's compute-shader test of
+  copies) still does not: WebGL2 has no compute shaders (the dialog says so).
+- **Ticket 3D2 (ADR 0078, amendment 2): the rest of Rust's 3D layer.**
+  - **HLOD proxies** (`src/hlod.h`, a port of `hlod.rs` with Rust's options): built in steps (Rust:
+    at once, each depth's cells in parallel) and served on their own as BPRX (`GET
+    /mesh?proxies=N`, wasm `host_proxies`; Rust had no wire format; `N` = 0: the octree alone). A vertex counts once per
+    element in its cluster's mean (Rust: once per chunk of 65,536 triangles), so the steps' chunks
+    do not change the result; the clusters are sorted arrays merged when they double (Rust: hash
+    maps), the final grid the same. The page cuts the tree at 3 px while moving (Rust's
+    `MOVING_PROXY_PX`) and at 1 px still (Rust drew stills exact), for models of at least 250,000
+    triangles (Rust: 1,000,000, slow GPUs only); while moving the proxies take at most half the
+    triangle budget, and a leaf the budget could not finish is drawn as a proxy instead of its box
+    outline where one fits. Not with a section box or in a plan (as Rust), not over a hidden,
+    revealed or selected element (Rust's `usable`). The batches never span two octree leaves.
+    Tests: `test/hlod_test.c` (Rust's three tests on `frame.json` and `frame2.json` tiled 3 x 3:
+    Rust used a 4 x 3 x 3 concrete frame the C core cannot generate; steps give the bytes of one
+    build; hostile input), `test/cull_test.mjs`, `test/wasm_run.mjs` (host_proxies = GET).
+  - **The box tree** (`src/bvh.h`, `bvh.rs` with its test): the measure tool's ray in the core;
+    boxes with equal centres split by index (Rust: unordered), non-finite boxes left out (Rust:
+    only min > max). The page's pick stays a linear box scan (Rust: `pick_hit_bvh`).
+  - **Occlusion queries** (ADR 0036 #1): per batch of the open model, nearest first, a hidden
+    batch's box asking when it shows again, with Rust's rule against a still view redrawing forever;
+    off by default (Rust: native backends only; on WebGL2 never). Not in a slice of the fill.
+  - **The first frame of a large mesh**: its element boxes as outlines before its draw lists, then
+    a budgeted frame and the fill (Rust drew the whole picture once uploaded).
+  - **A selection drawn over the kept picture** (Rust's #3 did the same with a highlight layer):
+    the elements whose colour changed, faces then edges, when the last frame was complete.
+  - **The moving rate** counts only a budgeted frame after a budgeted frame (3D1 counted a whole
+    frame too and could draw everything while moving).

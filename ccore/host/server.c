@@ -17,6 +17,7 @@
 #include "calls.h"
 #include "fs.h" /* FS1 */
 #include "host.h"
+#include "links.h" /* LINKF: cc_links_tick */
 #include "mesh.h"
 #include "session.h"
 
@@ -80,6 +81,7 @@ static void on_signal(int sig) {
 static const char *reason(int status) { /* serve.rs:306-316 */
     switch (status) {
     case 200: return "OK";
+    case 202: return "Accepted"; /* 3D2: GET /mesh?proxies=N, still building */
     case 204: return "No Content";
     case 400: return "Bad Request";
     case 403: return "Forbidden";
@@ -364,6 +366,9 @@ static int parse_head(const char *p, size_t len, Head *h) {
 }
 
 /* serve.rs:368-374: the first `key=value` pair with this key; no decoding. */
+/* 3D1: the BMSH version the page asked last (1, or 3 with ?shapes=1): what --warm prebuilds. */
+static int mesh_form = 1;
+
 static int query_param(Str q, const char *key, Str *out) {
     size_t kn = strlen(key), i = 0;
     while (i <= q.n) {
@@ -441,6 +446,7 @@ static void route_post(Conn *c, Str path, const char *body, size_t n, int keep) 
     } else {
         /* ---- FS1: the file dialog's queries, the native host's own (fs.h) ---- */
         int fs = !strcmp(opz, "query") ? cc_host_fs_query(namez, bz, n, &out) : -1;
+        if (!strcmp(opz, "action") && !strcmp(namez, "link_folder")) fs = cc_host_fs_check_link_folder(bz, n, &out); /* LINKF */
         /* ---- end FS1 ---- */
         status = fs >= 0 ? fs : cc_call(cfg->session, opz, namez, bz, n, &out);
         cc_session_persist_now(cfg->session); /* the session file has the change before the call answers */
@@ -571,7 +577,22 @@ static void handle_one(Conn *c, int *again) {
         size_t mn;
         uint32_t rev;
         double ms;
-        int st = cc_mesh_get(cfg->session, &mp, &mn, &rev, &ms);
+        /* 3D2 (ADR 0078): ?proxies=N, the HLOD proxies (mesh.h cc_mesh_proxies): N more triangles read
+         * per call, 202 with "read total" until built, then 200 with the BPRX bytes */
+        Str prx;
+        uint64_t budget = 0;
+        if (query_param(query, "proxies", &prx) && parse_u64(prx, &budget)) {
+            int st = cc_mesh_proxies(cfg->session, budget, &mp, &mn, &rev, &ms);
+            if (st == 200) fprintf(stderr, "bimble-ccore: proxies rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
+            char xr[80];
+            snprintf(xr, sizeof xr, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
+            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, xr, mp, mn, keep);
+            goto mesh_done;
+        }
+        /* 3D1 (ADR 0078): ?shapes=1, BMSH version 3 (each shape once, a placement per element) */
+        Str shp;
+        mesh_form = query_param(query, "shapes", &shp) && str_eq(shp, "1") ? 3 : 1;
+        int st = cc_mesh_get_form(cfg->session, mesh_form, &mp, &mn, &rev, &ms);
         if (ms > 0) fprintf(stderr, "bimble-ccore: mesh rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
         char xrev[80];
         snprintf(xrev, sizeof xrev, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
@@ -587,6 +608,7 @@ static void handle_one(Conn *c, int *again) {
         }
         /* ---- end TEST1 ---- */
         respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 200 ? xrev : NULL, mp, mn, keep);
+    mesh_done:;
     } else if (is_static) {
         const cc_static_file *f = cc_static_find(cfg->web, path.p, path.n);
         if (f)
@@ -743,13 +765,23 @@ int cc_host_run(const cc_host_config *config) {
         static uint32_t warmed;
         int want_warm = cfg->warm && cc_session_model(cfg->session) && cc_session_rev(cfg->session) != warmed;
         if (want_warm) timeout = 0;
+        /* LINKF: a link conversion runs on its own thread (links.h): look every 100 ms */
+        int linking = cc_links_busy(cfg->session);
+        if (linking && timeout > 100) timeout = 100;
         int r = net_poll(pfd, n, timeout);
+        if (linking && cc_links_tick(cfg->session)) {
+            Buf lc;
+            buf_init(&lc);
+            cc_change_json(cfg->session, &lc);
+            if (!lc.oom) cc_host_publish_change(lc.p ? lc.p : "", lc.len);
+            buf_free(&lc);
+        }
         if (want_warm && r == 0) {
             const char *mp;
             size_t mn;
             uint32_t rev;
             double ms;
-            cc_mesh_get(cfg->session, &mp, &mn, &rev, &ms);
+            cc_mesh_get_form(cfg->session, mesh_form, &mp, &mn, &rev, &ms); /* 3D1: the form the page asked last */
             warmed = rev;
             fprintf(stderr, "bimble-ccore: warm: mesh rev %u built in %.3f ms (scene included)\n", (unsigned)rev, ms);
             continue;

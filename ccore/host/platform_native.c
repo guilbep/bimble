@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h> /* LINKF: spawn */
 
 static int np_read_file(void *ctx, const char *path, size_t max, char **out, size_t *n) {
     (void)ctx;
@@ -25,6 +26,16 @@ static int np_read_file(void *ctx, const char *path, size_t max, char **out, siz
     FILE *f = fopen(path, "rb");
     if (!f) return CC_PF_NOT_FOUND;
     size_t cap = 1 << 16, len = 0;
+    /* LINKF: a regular file's size first: refused before a byte is read when too large, else read
+     * into one buffer of its size (doubling took 1 GiB and a copy for a 0.87 GB IFC) */
+    struct stat sb;
+    if (!fstat(fileno(f), &sb) && S_ISREG(sb.st_mode)) {
+        if ((uint64_t)sb.st_size > (uint64_t)max) {
+            fclose(f);
+            return CC_PF_TOO_LARGE;
+        }
+        if ((uint64_t)sb.st_size + 1 > (uint64_t)cap) cap = (size_t)sb.st_size + 1; /* +1: EOF seen, no regrow */
+    }
     char *p = malloc(cap + 1);
     while (p) {
         if (len == cap) {
@@ -176,9 +187,91 @@ static int np_make_dir(void *ctx, const char *path) {
 }
 /* ---- end FS1 ---- */
 
+/* ---- LINKF (platform.h) ---- */
+/* MemAvailable of /proc/meminfo (Linux); elsewhere unknown (0). BIMBLE_MEM_AVAILABLE (bytes)
+ * overrides it: the tests refuse a file without needing a small machine. */
+static uint64_t np_mem_available(void *ctx) {
+    (void)ctx;
+    const char *e = getenv("BIMBLE_MEM_AVAILABLE");
+    if (e && *e) return strtoull(e, NULL, 10);
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return 0;
+    char line[256];
+    uint64_t kb = 0;
+    while (fgets(line, sizeof line, f))
+        if (!strncmp(line, "MemAvailable:", 13)) {
+            kb = strtoull(line + 13, NULL, 10);
+            break;
+        }
+    fclose(f);
+    return kb * 1024;
+}
+
+static int np_read_range(void *ctx, const char *path, uint64_t off, size_t n, char *p, size_t *got) {
+    (void)ctx;
+    *got = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return errno == ENOENT ? CC_PF_NOT_FOUND : CC_PF_IO;
+    while (*got < n) {
+        ssize_t k = pread(fd, p + *got, n - *got, (off_t)(off + *got));
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) break;
+        *got += (size_t)k;
+    }
+    close(fd);
+    return CC_PF_OK;
+}
+
+static int np_cache_dir(void *ctx, char *out, size_t n) {
+    const char *e = getenv("BIMBLE_CACHE_DIR"), *x = getenv("XDG_CACHE_HOME"), *h = getenv("HOME");
+    int w;
+    if (e && *e) w = snprintf(out, n, "%s", e);
+    else if (x && *x == '/') w = snprintf(out, n, "%s/bimble", x);
+    else if (h && *h) {
+        char c[4096];
+        if ((size_t)snprintf(c, sizeof c, "%s/.cache", h) < sizeof c) np_make_dir(ctx, c);
+        w = snprintf(out, n, "%s/.cache/bimble", h);
+    } else return -1;
+    if (w < 0 || (size_t)w >= n) return -1;
+    return np_make_dir(ctx, out);
+}
+
+typedef struct {
+    void (*fn)(void *);
+    void *arg;
+} np_thread_arg;
+
+static void *np_thread(void *a) {
+    np_thread_arg t = *(np_thread_arg *)a;
+    free(a);
+    t.fn(t.arg);
+    return NULL;
+}
+
+static int np_spawn(void *ctx, void (*fn)(void *), void *arg) {
+    (void)ctx;
+    np_thread_arg *a = malloc(sizeof *a);
+    if (!a) return -1;
+    a->fn = fn, a->arg = arg;
+    pthread_attr_t at;
+    pthread_t t;
+    if (pthread_attr_init(&at)) return free(a), -1;
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setstacksize(&at, (size_t)8 << 20);
+    int rc = pthread_create(&t, &at, np_thread, a);
+    pthread_attr_destroy(&at);
+    if (rc) return free(a), -1;
+    return 0;
+}
+/* The dialog's path rule, set by fs.c when the host lists folders (cc_host_fs_init); none: all. */
+int (*cc_host_path_rule)(const char *path);
+static int np_path_allowed(void *ctx, const char *path) { return (void)ctx, cc_host_path_rule ? cc_host_path_rule(path) : 1; }
+/* ---- end LINKF ---- */
+
 static const cc_platform NATIVE = {
     NULL, 1, np_read_file, np_exists, np_write_file, np_now_ms, np_unix_s, np_random, np_log, np_list_dir,
     np_stat_path, np_real_path, np_make_dir, /* FS1 */
+    np_mem_available, np_read_range, np_cache_dir, np_spawn, np_path_allowed, /* LINKF */
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }

@@ -137,6 +137,7 @@ int cc_host_fs_add_root(const char *dir) {
 }
 
 void cc_host_fs_init(void) {
+    cc_host_path_rule = cc_host_fs_path_allowed; /* LINKF: link_model {paths} follows the dialog's rule */
 #ifdef _WIN32
     const char *h = cc_host_getenv("USERPROFILE");
 #else
@@ -346,6 +347,40 @@ end:
     return rc;
 }
 
+/* LINKF: action link_folder {path}: the folder must be under a root, as fs_list's `dir` (fs.h). */
+int cc_host_fs_check_link_folder(const char *body, size_t n, Buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = n ? jr_parse(&a, body, n, &je) : NULL;
+    const JrVal *d = v && v->type == JR_OBJ ? jr_get(v, "path") : NULL;
+    int rc = -1;
+    char nd[FS_MAX_PATH + 2], rd[FS_MAX_PATH + 1];
+    const cc_platform *pf = cc_platform_native();
+    if (d && d->type == JR_STR && strlen(d->s) == d->n && d->n && d->n <= FS_MAX_PATH) {
+        int lx = fsr_normalise(d->s, FSR_WIN, nd, sizeof nd);
+        if (lx == FSR_DEVICE || (lx == FSR_UNC && !unc_root())) buf_puts(out, "link_folder: path: network and device paths are refused"), rc = CC_ERR;
+        else if (lx == FSR_BAD) buf_puts(out, "link_folder: path: an absolute path"), rc = CC_ERR;
+        else if (!in_roots_lexical(nd) || (!pf->real_path(pf->ctx, d->s, rd, sizeof rd) && !in_roots(rd)))
+            buf_puts(out, "link_folder: the folder is " FS_OUTSIDE), rc = CC_ERR;
+    }
+    arena_free(&a);
+    return rc; /* -1: the session answers (also a body it refuses) */
+}
+
+static char stage_dir[FS_MAX_PATH + 1];
+
+int cc_host_fs_path_allowed(const char *path) {
+    char nd[FS_MAX_PATH + 2], rd[FS_MAX_PATH + 1];
+    const cc_platform *pf = cc_platform_native();
+    if (!path || !*path || strlen(path) > FS_MAX_PATH) return 0;
+    int lx = fsr_normalise(path, FSR_WIN, nd, sizeof nd);
+    if (lx == FSR_BAD || lx == FSR_DEVICE || (lx == FSR_UNC && !unc_root())) return 0;
+    if (pf->real_path(pf->ctx, path, rd, sizeof rd)) return in_roots_lexical(nd); /* not there: the reader says so */
+    if (stage_dir[0] && fsr_under(rd, stage_dir, FSR_WIN)) return 1; /* a dropped file's staged copy */
+    return in_roots_lexical(nd) && in_roots(rd);
+}
+
 int cc_host_fs_query(const char *name, const char *body, size_t n, Buf *out) {
     if (!strcmp(name, "fs_list")) return fs_list(body, n, out);
     if (!strcmp(name, "fs_home")) { /* {purpose?}: also the folder that purpose listed last */
@@ -386,8 +421,9 @@ int cc_host_fs_query(const char *name, const char *body, size_t n, Buf *out) {
 }
 
 /* ---- POST /stage: a dropped file (fs.h) ---- */
+/* stage_dir: declared above (LINKF: cc_host_fs_path_allowed) */
 
-static char stage_dir[FS_MAX_PATH + 1];
+
 #define FS_STAGED_MAX 256
 static char *staged[FS_STAGED_MAX]; /* the files written there, removed at exit */
 static int nstaged;

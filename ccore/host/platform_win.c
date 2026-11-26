@@ -355,6 +355,7 @@ static const cc_platform NATIVE = {
     wp_stat_path, wp_real_path, wp_make_dir, /* FS1 */
 };
 
+int (*cc_host_path_rule)(const char *path); /* LINKF: host.h (not asked here: no path_allowed yet) */
 const cc_platform *cc_platform_native(void) { return &NATIVE; }
 #else
 typedef int cc_platform_win_empty; /* ISO C wants a declaration in every translation unit */

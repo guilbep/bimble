@@ -25,4 +25,19 @@ const cc_model *cc_mesh_model(const cc_session *s, uint32_t *rev, cc_error *err)
  * the BMSH bytes, 404 (nothing open) or 500 (the scene cannot be built) with a UTF-8 text. `*p`
  * stays valid until the next call on `s`. `*build_ms` is the build time, 0 when served from cache. */
 int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double *build_ms);
+/* 3D1 (ADR 0078): the same in BMSH version `form`: 1 (above), or 3 (src/scene_bmsh.h: each shared
+ * shape once and a placement per element; the LNKS trailer's blocks in version 3 too). One form is
+ * cached at a time. */
+int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_t *rev, double *build_ms);
+/* 3D2 (ADR 0078): the HLOD proxies (src/hlod.h) of the scene the version 3 mesh holds (the open
+ * model's, or the read-only IFC's; not the links'), built in steps so that no call takes long (ADR
+ * 0074; the wasm core runs on the page's thread): each call reads about `budget` triangles more and
+ * returns 202 with "read total" (the triangles read so far and in all) until it is done, then 200
+ * with the BPRX bytes (hlod.h), the same on every later call of that rev; 404 when nothing is open or
+ * the scene was not built (no proxies: the page draws without), 500 with the error. A budget of 0
+ * reads nothing: 200 with the tree alone while building (hlod.h cc_hlod_bprx_tree: the cells, no
+ * proxy), the whole BPRX once built. `*p` stays valid
+ * until the next call on `s`; `*ms` is the build time so far. */
+int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, uint32_t *rev, double *ms);
+void cc_mesh_proxies_free(cc_session *s);
 #endif

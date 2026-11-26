@@ -25,6 +25,7 @@
 #include "mesh.h"
 #include "sheet_svg.h"
 #include "toggles.h" /* KEY1 */
+#include "setting_out.h" /* SETOUT */
 #include "query.h"
 #include "scene.h"
 #include "session.h"
@@ -36,6 +37,7 @@
 #include "view_only.h"
 #include "annot.h"
 #include "measure.h" /* ticket T1 */
+#include "quantity_rows.h" /* WAVE1B (B5) */
 #include "versions.h" /* ticket H1 */
 #include "links_dxf.h" /* L2 */
 #include "links_panel.h" /* LNK1 */
@@ -47,6 +49,7 @@
 #include "georef.h"  /* SEC1: cc_georef_plan_turn */
 #include "ifc_math.h" /* SEC1: cc_sin, cc_cos */
 #include "settings.h"      /* SET1 */
+#include "concrete.h"      /* CONC1 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -144,10 +147,34 @@ static const ActionRow ACTIONS[] = {
     {"box_north_project", "Section box: project north", "View", 0, 0},
     {"box_north_true", "Section box: true north", "View", 0, 0},
     /* ---- end ISS71 ---- */
+    /* ---- SETOUT (ADR 0075): the Setting out tab's markers and the view's north (DEVIATIONS 32) ---- */
+    {"show_base_point", "Project base point", "Setting out", 0, 0},
+    {"show_survey_point", "Survey point", "Setting out", 0, 0},
+    {"view_true_north", "True / project north", "Setting out", 0, 0},
+    /* ---- end SETOUT ---- */
+    /* ---- VIEWSHEET (ADR 0076): the View and Sheets tabs' tools (view_sheet.h, DEVIATIONS 33) ---- */
+    {"new_view", "New view…", "View", 0, 0},
+    {"draw_section", "Section", "View", 0, 0},
+    {"sheet_place_view", "Place view…", "Sheets", 0, 0},
+    {"sheet_revision", "Revision…", "Sheets", 0, 0},
+    /* ---- end VIEWSHEET ---- */
+    /* ---- CONC1 (ADR 0077): the Concrete tab's place kinds (concrete.h, DEVIATIONS 34) ---- */
+    {"place_footing", "Place: Footing", "Concrete", 0, 0},
+    {"place_strip_footing", "Place: Strip footing", "Concrete", 0, 0},
+    {"place_raft", "Place: Raft", "Concrete", 0, 0},
+    {"place_opening", "Place: Opening", "Concrete", 0, 0},
+    {"place_sleeve", "Place: Sleeve", "Concrete", 0, 0},
+    /* ---- end CONC1 ---- */
+    {"reference_planes", "Reference plane by three points", "Setting out", 0, 0}, /* WAVE1B (refplanes.h) */
+    {"place_grid_axis", "Place: Grid axis", "Setting out", 0, 0},                 /* WAVE1B (A2) */
+    {"link_folder", "Link a folder…", "Collaborate", 0, 0}, /* LINKF (links.h) */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 2 + 1, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 2, LINKF 1");
 
-static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab"}; /* verbs.rs:28 snake_case */
+static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab", /* verbs.rs:28 snake_case */
+                                        "footing", "strip_footing", "raft", "opening", "sleeve", /* CONC1 */
+                                        "grid_axis"};                                            /* WAVE1B (A2) */
+_Static_assert(sizeof KIND_NAME / sizeof KIND_NAME[0] == CC_KIND_COUNT, "a name per kind");
 static const char *const SIZE_KEY[] = {"column", "beam_width", "beam_height", "wall", "slab"}; /* verbs.rs:78 */
 /* Sizes serialized through json! (a sorted map): beam_height, beam_width, column, slab, wall. */
 static const int SIZE_SORTED[] = {2, 1, 0, 4, 3};
@@ -177,6 +204,7 @@ static const cc_scene *scene_now(cc_session *s) {
     if (s->view == CC_VIEW_FILE) return &s->vscene;
     if (!s->open) return NULL;
     if (s->scene_rev != s->rev) {
+        if (s->hlod_scene == &s->scene) cc_mesh_proxies_free(s); /* 3D2: built on the old scene */
         if (s->scene_rev) cc_scene_free(&s->scene);
         cc_error e;
         s->scene_ok = cc_scene_build(&s->scene, &s->model, &e) == 0;
@@ -187,6 +215,30 @@ static const cc_scene *scene_now(cc_session *s) {
 }
 
 const cc_scene *cc_session_scene(cc_session *s) { return scene_now(s); }
+
+/* ---- MEAS1: the element boxes of the scenes the pointer can hit (measure.h cc_mboxes), one slot
+ * per layer, kept while the slot's scene and key (rev, links_gen, view) hold ---- */
+void cc_session_mboxes_free(cc_session *s) {
+    for (size_t i = 0; i < s->nmboxes; i++) cc_mboxes_free(&s->mboxes[i]);
+    free(s->mboxes);
+    s->mboxes = NULL, s->nmboxes = 0;
+}
+
+static const float (*mboxes_of(cc_session *s, size_t slot, const cc_scene *sc))[6] {
+    if (!s->mboxes) {
+        s->mboxes = calloc(1 + CC_MAX_LINKS, sizeof *s->mboxes);
+        if (!s->mboxes) return NULL; /* the call makes its own */
+        s->nmboxes = 1 + CC_MAX_LINKS;
+    }
+    cc_mboxes *b = &s->mboxes[slot];
+    uint64_t key[3] = {s->rev, s->links_gen, (uint64_t)s->view};
+    if (b->sc != sc || memcmp(b->key, key, sizeof key)) {
+        if (cc_mboxes_build(b, sc)) return NULL;
+        memcpy(b->key, key, sizeof key);
+    }
+    return (const float(*)[6])b->box;
+}
+/* ---- end MEAS1 ---- */
 
 /* ---- history step ids and selection (lib.rs:1725-1805) ---- */
 
@@ -224,6 +276,7 @@ static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *ou
             return CC_ERR;
         }
         s->nredo_ids = 0;
+        cc_links_undo_clear_redo(s); /* LINKF: a new step: link_folder's redo goes too */
         cc_session_note_apply(s, cmds, n); /* the session file logs the step with these */
     }
     rebuild(s);
@@ -233,6 +286,7 @@ static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *ou
 /* lib.rs:1744 `undo_redo`: nothing to take back is no change. */
 static void undo_redo(cc_session *s, int undo) {
     if (!s->open) return;
+    if (cc_links_undo_step(s, undo)) return; /* LINKF: link_folder was the last step (links.h) */
     if (undo ? cc_history_undo(&s->hist, &s->model) : cc_history_redo(&s->hist, &s->model)) {
         if (undo && s->nundo_ids) {
             if (!push_id(&s->redo_ids, &s->nredo_ids, &s->cap_redo_ids, s->undo_ids[s->nundo_ids - 1])) s->nundo_ids--;
@@ -247,9 +301,12 @@ static void undo_redo(cc_session *s, int undo) {
 /* ---- placing (edit.rs:387-460) ---- */
 
 static const char *hint(const cc_session *s) { /* edit.rs:84-95 `Placing::hint` */
+    if (cc_conc_kind(s->placing_kind)) return cc_conc_hint(s); /* CONC1 */
     if (s->placing_kind == CC_KIND_SLAB && s->polygon) /* edit.rs:402-405 (SLAB1: the second text) */
         return s->tool.npoints < 3 ? "Click the next corner of the slab." : "Click the next corner; click the first corner or Enter closes.";
     if (s->placing_kind == CC_KIND_COLUMN) return "Click where the column goes (on the storey level). Esc stops.";
+    if (s->placing_kind == CC_KIND_GRID_AXIS) /* WAVE1B (A2) */
+        return s->tool.npoints ? "Click the axis' end (Shift: along x or y). Esc cancels." : "Click the axis' start. Esc cancels.";
     if (!s->tool.npoints) return s->placing_kind == CC_KIND_SLAB ? "Click a corner of the slab." : "Click the start point.";
     return s->placing_kind == CC_KIND_SLAB ? "Click the opposite corner." : "Click the end point.";
 }
@@ -259,7 +316,8 @@ static void placing_json(cc_session *s, JsonW *w) { /* edit.rs:387-408, json! so
     const cc_storey *st = s->has_storey ? cc_model_storey(&s->model, &s->storey) : NULL;
     jw_obj_begin(w);
     jw_key(w, "active"), jw_bool(w, s->placing);
-    jw_key(w, "clicks_needed"), jw_u64(w, kind == CC_KIND_COLUMN ? 1 : 2);
+    jw_key(w, "clicks_needed"), jw_u64(w, kind == CC_KIND_COLUMN ? 1 : cc_conc_kind(kind) ? (uint64_t)cc_conc_clicks(kind) : 2);
+    if (cc_conc_kind(kind)) jw_key(w, "concrete"), cc_conc_json(s, w); /* CONC1: only for its kinds (Rust's bytes kept) */
     jw_key(w, "hint");
     if (s->placing) jw_str(w, hint(s));
     else jw_null(w);
@@ -294,6 +352,7 @@ static void place_action(cc_session *s, cc_kind k) {
     s->placing = !on;
     cc_tool_clear(&s->tool);
     if (!on) s->placing_kind = k, s->kind = k;
+    if (!on) s->vsh.section_draw = 0; /* VIEWSHEET: one tool at a time */
 }
 
 /* serde_json Value's Display: compact JSON (numbers as their token). */
@@ -377,7 +436,7 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
         goto end;
     }
     size_t nm = sorted_members(v, ms);
-    const JrVal *kind = 0, *storey = 0, *material = 0, *sizes = 0, *top = 0;
+    const JrVal *kind = 0, *storey = 0, *material = 0, *sizes = 0, *top = 0, *conc = 0;
     int has_polygon = 0, polygon = 0;
     cc_kind k = CC_KIND_COLUMN;
     cc_gid sid;
@@ -387,7 +446,7 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
         if (jr_key_is(m, "kind")) {
             int found = -1;
             if (x->type == JR_STR)
-                for (int j = 0; j < 4; j++)
+                for (int j = 0; j < CC_KIND_COUNT; j++)
                     if (strlen(KIND_NAME[j]) == x->n && !memcmp(KIND_NAME[j], x->s, x->n)) found = j;
             if (found < 0) {
                 buf_puts(out, "kind: ");
@@ -427,6 +486,8 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
                 goto end;
             }
             top = x;
+        } else if (jr_key_is(m, "concrete")) { /* CONC1 (concrete.h) */
+            conc = x;
         } else if (jr_key_is(m, "shape")) {
             if (x->type == JR_STR && x->n == 9 && !memcmp(x->s, "rectangle", 9)) polygon = 0;
             else if (x->type == JR_STR && x->n == 7 && !memcmp(x->s, "polygon", 7)) polygon = 1;
@@ -504,6 +565,7 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
         buf_puts(out, " is not a finite value within ±10000000 mm");
         goto end;
     }
+    if (conc && cc_conc_set(s, conc, out)) goto end; /* CONC1: the last check, all or nothing */
     memcpy(s->sizes, ns, sizeof ns);
     if (has_polygon && polygon != s->polygon) s->polygon = polygon, s->tool.npoints = 0; /* points cleared */
     if (top) s->top_offset_mm = top->num + 0.0; /* no -0.0 */
@@ -620,6 +682,20 @@ static float iss71_yaw(cc_session *s, int true_north) {
 }
 /* ---- end ISS71 ---- */
 
+/* ---- VIEWSHEET: a plan (not a ceiling plan, not a section) of an editable model shown, no sheet
+ * over it; a sheet shown ---- */
+static int vs_sheet_shown(cc_session *s) { return s->sheet_shown && cc_sheet_known(s, &s->sheet); }
+static int vs_plan_shown(cc_session *s) {
+    if (!s->open || !s->tab_open || !s->has_active || vs_sheet_shown(s)) return 0;
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int plan = cc_sv_active(s, &a, &v) == 1 && v.kind == CC_VIEW_PLAN && v.look == CC_LOOK_DOWN;
+    arena_free(&a);
+    return plan;
+}
+/* ---- end VIEWSHEET ---- */
+
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
@@ -638,13 +714,15 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
      * again), with something to edit (Deviation: any element, not structural_count). */
     if (!strcmp(name, "convert_open")) return s->view == CC_VIEW_IFC && s->pf->files && s->ifc->scene.nelements > 0;
     if (!strcmp(name, "save")) return cc_session_unsaved(s);
-    if (!strcmp(name, "undo")) return s->open && s->hist.nundo > 0;
-    if (!strcmp(name, "redo")) return s->open && s->hist.nredo > 0;
+    if (!strcmp(name, "undo")) return s->open && (s->hist.nundo > 0 || cc_links_can_undo(s, 1)); /* LINKF */
+    if (!strcmp(name, "redo")) return s->open && (s->hist.nredo > 0 || cc_links_can_undo(s, 0));
+    if (!strcmp(name, "place_grid_axis")) return s->open && s->model.ngrids > 0; /* WAVE1B (A2): an axis of a grid */
     if (!strncmp(name, "place_", 6)) return s->open;
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) return s->open; /* ribbon.rs:577 */
     if (!strcmp(name, "home")) return 1;
     /* Links (ticket B5, links.h): ribbon.rs:596 ManageLinks `loaded`, LinkModel `_ => loaded`. */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return loaded(s);
+    if (!strcmp(name, "link_folder")) return loaded(s); /* LINKF: natively a folder; the browser page picks several files (ccore.ts) */
     if (!strcmp(name, "measure")) return loaded(s); /* ribbon.rs:612 `_ => loaded` (ticket T1) */
     /* ---- KEY1: the plan annotation toggles (toggles.h): ribbon.rs:612 `_ => loaded` ---- */
     if (cc_toggle_index(name) >= 0) return loaded(s);
@@ -665,6 +743,13 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* ISS71: the box's orientation, a choice only when true north differs from project north */
     if (!strcmp(name, "box_north_project") || !strcmp(name, "box_north_true"))
         return loaded(s) && !in_2d(s) && iss71_yaw(s, 0) != iss71_yaw(s, 1);
+    /* ---- SETOUT: the markers of an editable model's georeference; the view's north when true
+     * north differs from project north (in 3D the section box's, ISS71; in a plan or a section the
+     * stored view's true_north, ADR 0045) ---- */
+    if (cc_setout_index(name) >= 0) return s->open;
+    if (!strcmp(name, "reference_planes")) return s->open && loaded(s); /* WAVE1B */
+    if (!strcmp(name, "view_true_north")) return s->open && iss71_yaw(s, 0) != iss71_yaw(s, 1);
+    /* ---- end SETOUT ---- */
     /* ---- FAKE1: pages the lab serves and the sheet verbs. project: ribbon.rs:611 `_ => loaded`,
      * history: ribbon.rs:590 editable(), new_sheet: ribbon.rs:611 `_ => loaded` (the C core
      * answers the project query and stores sheets in an editable model only: a read-only IFC
@@ -673,6 +758,13 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "materials")) return loaded(s); /* MAT1: ribbon.rs:611 `_ => loaded` (read only: the list) */
     if (!strcmp(name, "close_sheet")) return loaded(s) && s->sheet_shown && cc_sheet_known(s, &s->sheet);
     /* ---- end FAKE1 ---- */
+    /* ---- VIEWSHEET (view_sheet.h): New view… with an editable model; Section with a plan shown
+     * (on or off); Place view… and Revision… with a sheet shown; the annotation types any time ---- */
+    if (!strcmp(name, "new_view")) return s->open;
+    if (!strcmp(name, "draw_section")) return vs_plan_shown(s);
+    if (!strcmp(name, "sheet_place_view") || !strcmp(name, "sheet_revision")) return s->open && vs_sheet_shown(s);
+    if (!strcmp(name, "annotation_type")) return 1;
+    /* ---- end VIEWSHEET ---- */
     /* ---- PAPER1: ribbon.rs:597 PaperView two_pictures(); OnPaper (Export view) `_ => loaded`
      * (the C core draws a model's views only: s->open) ---- */
     if (!strcmp(name, "paper_view")) return two_pictures(s);
@@ -697,13 +789,59 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     return 0;
 }
 
+/* ---- SETOUT: the view's north (view_true_north): a plan or a section shown says its stored
+ * true_north (ADR 0045), the 3D view the section box's (ISS71) ---- */
+static int setout_true_north(cc_session *s) {
+    if (!s->open) return 0;
+    if (!in_2d(s)) return s->vis.true_north;
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int on = cc_sv_active(s, &a, &v) == 1 && v.true_north;
+    arena_free(&a);
+    return on;
+}
+
+/* Flips it: in a plan or a section one set_view (add_view) Command, a history step; in 3D the
+ * section box's orientation (box_north_project / box_north_true, session state). */
+static int vis_action_do(cc_session *s, const char *name, cc_buf *out);
+static int setout_flip_north(cc_session *s, cc_buf *out) {
+    if (!in_2d(s)) return vis_action_do(s, s->vis.true_north ? "box_north_project" : "box_north_true", out) ? CC_ERR : CC_OK;
+    cc_cmds l;
+    cc_cmds_init(&l);
+    cc_view v;
+    int r = cc_sv_active(s, &l.arena, &v), rc = CC_OK;
+    if (r == 1 && cc_view_dup(&l.arena, &v)) r = -1;
+    if (r != 1) {
+        cc_cmds_free(&l);
+        if (r < 0) buf_puts(out, "out of memory");
+        return r < 0 ? CC_ERR : CC_OK;
+    }
+    v.true_north = !v.true_north;
+    Buf why;
+    buf_init(&why);
+    cc_command *c = NULL;
+    if (cc_view_validate(&s->model, &v, &why)) buf_append(out, why.p, why.len), rc = CC_ERR;
+    else if (!(c = cc_cmds_push(&l, cc_model_view(&s->model, &v.id) ? CC_CMD_SET_VIEW : CC_CMD_ADD_VIEW)))
+        buf_puts(out, "out of memory"), rc = CC_ERR;
+    else c->view = v, rc = try_apply(s, l.v, l.n, out);
+    buf_free(&why);
+    cc_cmds_free(&l);
+    return rc;
+}
+/* ---- end SETOUT ---- */
+
 static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strncmp(a->name, "place_", 6)) return s->open && s->placing && !strcmp(a->name + 6, KIND_NAME[s->placing_kind]);
     if (!strcmp(a->name, "section_box")) return s->vis.section_on; /* ribbon.rs:629 */
     if (!strcmp(a->name, "box_north_project")) return !s->vis.true_north; /* ISS71 */
     if (!strcmp(a->name, "box_north_true")) return s->vis.true_north;     /* ISS71 */
+    if (cc_setout_index(a->name) >= 0) return s->open && cc_setout_on(&s->setout, cc_setout_index(a->name)); /* SETOUT */
+    if (!strcmp(a->name, "view_true_north")) return s->open && setout_true_north(s); /* SETOUT */
+    if (!strcmp(a->name, "draw_section")) return s->vsh.section_draw && vs_plan_shown(s); /* VIEWSHEET */
     if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
-    if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on; /* ribbon.rs:625 (ticket T1) */
+    if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on && !s->wp.pick; /* ribbon.rs:625 (ticket T1); WAVE1B */
+    if (!strcmp(a->name, "reference_planes")) return s->open && s->wp.pick; /* WAVE1B */
     if (!strcmp(a->name, "edges")) return s->edges;               /* Q2: ribbon.rs:626 opts.edges */
     if (!strcmp(a->name, "hatching")) return s->hatching;         /* Q2: ribbon.rs:627 opts.hatching */
     if (!strcmp(a->name, "orthographic")) return s->orthographic; /* Q2: ribbon.rs:628 camera.orthographic */
@@ -1137,6 +1275,7 @@ static int verb_query(cc_session *s, const char *name, const char *body, size_t 
     return CC_ERR;
 }
 
+static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out); /* WAVE1B: opening_at */
 static int call_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     JsonW w;
     jw_init(&w, out, 0);
@@ -1207,6 +1346,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "view_references")) return cc_refs_view_references(s, body, n, out) ? CC_ERR : CC_OK;
     /* ---- LNK1: the Links panel's rows (links_panel.h) ---- */
     if (!strcmp(name, "links_panel")) return cc_links_panel_json(s, out) ? (out->oom = 1, CC_ERR) : CC_OK;
+    if (!strcmp(name, "link_log")) return cc_link_log_text(s, body, n, out) ? CC_ERR : CC_OK; /* LINKF: a link's report, by its name */
     /* ---- end LNK1 ---- */
     if (!strcmp(name, "scene_tree")) return cc_scene_tree_json(s, out) ? CC_ERR : CC_OK; /* FIXUI, links.h */
     if (!strcmp(name, "scene_elements")) { /* FIXUI: {"storey", "class"?, "limit"?} (links.h) */
@@ -1250,6 +1390,31 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         }
         arena_free(&a);
         if (rc != -2) return rc ? CC_ERR : CC_OK;
+    }
+    if (!strcmp(name, "level_refusals")) { /* DEAD1, a C addition (calls.h): what the core refuses, told before */
+        jw_obj_begin(&w);
+        for (size_t i = 0; s->open && i < s->model.nstoreys; i++) {
+            const cc_storey *st = &s->model.storeys[i];
+            jw_key_n(&w, st->id.c, 22), jw_obj_begin(&w);
+            for (int k = 0; k < 2; k++) { /* level_remove {id}; level_set {id, storey: false} (a storey only) */
+                jw_key(&w, k ? "storey" : "remove");
+                if (k && st->not_storey) { jw_null(&w); continue; }
+                char args[80];
+                snprintf(args, sizeof args, k ? "{\"id\":\"%.22s\",\"storey\":false}" : "{\"id\":\"%.22s\"}", st->id.c);
+                cc_cmds l;
+                cc_cmds_init(&l);
+                Buf e;
+                buf_init(&e);
+                if (cc_verb_run_ex(&s->model, k ? "level_set" : "level_remove", args, strlen(args), 1, -1, s->rev, &l, &e)) jw_str_n(&w, e.p ? e.p : "", e.len);
+                else jw_null(&w);
+                if (e.oom) w.b->oom = 1;
+                buf_free(&e);
+                cc_cmds_free(&l);
+            }
+            jw_obj_end(&w);
+        }
+        jw_obj_end(&w);
+        return done(&w);
     }
     if (!strcmp(name, "measurements")) { /* calls.rs:425, state.rs measurements_json (ticket T1) */
         cc_measurements_json(&w, s->measure.dims, s->measure.n);
@@ -1299,6 +1464,70 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "materials_page")) return cc_materials_page_query(s, out);
     if (!s->open && !strcmp(name, "material_library")) return cc_query(&s->model, name, body, n, out) == 200 ? CC_OK : CC_ERR;
     /* ---- end MAT1 ---- */
+    if (!strcmp(name, "annotation_types")) { /* VIEWSHEET (view_sheet.h): the standards' types, the ones in use */
+#ifdef CC_VIEW_ONLY
+        buf_puts(out, "null"); /* no standards in the viewer-only build (draw_style.c is left out) */
+        return CC_OK;
+#else
+        Arena sa;
+        arena_init(&sa, 0);
+        cc_style st;
+        if (cc_style_default(&st, &sa)) {
+            arena_free(&sa);
+            return out->oom = 1, CC_ERR;
+        }
+        cc_vs_types_json(&s->vsh, &st.paper, &w);
+        arena_free(&sa);
+        return done(&w);
+#endif
+    }
+    if (!strcmp(name, "opening_at")) return measure_tool(s, "opening_at", body, n, out); /* WAVE1B (B2) */
+    if (!strcmp(name, "foundation_rows")) { /* WAVE1B (B5, quantity_rows.h): footings and rafts */
+        if (!s->open) return buf_puts(out, READ_ONLY), CC_ERR;
+        const cc_scene *sc = scene_now(s);
+        if (!sc) return buf_puts(out, "the scene could not be built"), CC_ERR;
+        JsonW w;
+        jw_init(&w, out, 0);
+        if (cc_foundation_rows_json(&s->model, sc, &w)) return buf_clear(out), buf_puts(out, "out of memory"), CC_ERR;
+        return done(&w);
+    }
+    if (!strcmp(name, "opening_rows")) { /* WAVE1B (B1, concrete.h): the openings and sleeves of the model */
+        if (!s->open) return buf_puts(out, READ_ONLY), CC_ERR;
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_conc_opening_rows_json(&s->model, &w);
+        return done(&w);
+    }
+    if (!strcmp(name, "openings")) { /* WAVE1B (B2, concrete.h): {"host"}: its openings */
+        if (!s->open) return buf_puts(out, READ_ONLY), CC_ERR;
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = n ? jr_parse(&a, body, n, &je) : NULL, *h = v && v->type == JR_OBJ ? jr_get(v, "host") : NULL;
+        cc_gid hid;
+        const cc_element *e = NULL;
+        if (h && h->type == JR_STR && cc_gid_valid(h->s, h->n)) memcpy(hid.c, h->s, 22), e = cc_model_element(&s->model, &hid);
+        arena_free(&a);
+        if (!e) return buf_puts(out, "openings: {\"host\": the GlobalId of an element}"), CC_ERR;
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_conc_openings_json(&s->model, e, &w);
+        return done(&w);
+    }
+    if (!strcmp(name, "reference_planes")) { /* WAVE1B (refplanes.h): null without an editable model */
+        JsonW w;
+        jw_init(&w, out, 0);
+        if (s->open) cc_wplane_json(&s->wp, &s->model, &w);
+        else jw_null(&w);
+        return done(&w);
+    }
+    if (!strcmp(name, "setting_out")) { /* SETOUT (setting_out.h): null without an editable model */
+        if (!s->open) return buf_puts(out, "null"), CC_OK;
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_setout_json(&s->setout, &s->model, &w);
+        return done(&w);
+    }
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     if (!strcmp(name, "north") || !strcmp(name, "coordinates")) { /* ADR 0045, query.h: null without a model */
         buf_puts(out, "null");
@@ -1781,6 +2010,53 @@ static int vis_action(cc_session *s, const char *name, cc_buf *out) {
 }
 /* ---- end ISS72 ---- */
 
+/* LINKF: manage_links place {origin?, move_mm?: [x, y, z], rotation_deg?} (links.h): refused while
+ * the link is pinned; every value checked before any is set. */
+static int link_place(cc_session *s, cc_link *k, const JrVal *v, cc_buf *out) {
+    if (k->pinned) {
+        buf_puts(out, "the link is pinned: unpin it to move it");
+        return -1;
+    }
+    const JrVal *o = jr_get(v, "origin"), *m = jr_get(v, "move_mm"), *r = jr_get(v, "rotation_deg");
+    int origin = k->origin;
+    double mv[3] = {k->move_mm[0], k->move_mm[1], k->move_mm[2]}, rot = k->rotation_deg;
+    if (o) {
+        origin = -1;
+        for (int i = 0; o->type == JR_STR && i < 4; i++)
+            if (!strcmp(o->s, CC_LINK_ORIGIN_NAME[i])) origin = i;
+        if (origin < 0) {
+            buf_puts(out, "origin: one of file, origin, base_point, survey_point");
+            return -1;
+        }
+    }
+    if (m) {
+        if (m->type != JR_ARR || m->n < 2 || m->n > 3) {
+            buf_puts(out, "move_mm: [x, y] or [x, y, z] in mm");
+            return -1;
+        }
+        mv[2] = 0;
+        for (size_t i = 0; i < m->n; i++) {
+            double x = m->items[i].num;
+            if (m->items[i].type != JR_NUM || !(x > -1e9 && x < 1e9)) {
+                buf_puts(out, "move_mm: finite numbers within 1000 km");
+                return -1;
+            }
+            mv[i] = x;
+        }
+    }
+    if (r) {
+        if (r->type != JR_NUM || !(r->num > -1e6 && r->num < 1e6)) {
+            buf_puts(out, "rotation_deg: a number");
+            return -1;
+        }
+        rot = r->num;
+    }
+    k->origin = origin, k->rotation_deg = rot + 0.0; /* + 0.0: never -0.0 */
+    for (int i = 0; i < 3; i++) k->move_mm[i] = mv[i] + 0.0;
+    s->links_gen++;
+    return 0;
+}
+
 /* link_model and manage_links (links.h). */
 static int link_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     Arena a;
@@ -1798,6 +2074,44 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
     if (v && v->type != JR_OBJ) {
         buf_puts(out, !strcmp(name, "link_model") ? "the action's body is {\"path\": string}"
                                                   : "the action's body is {\"op\": string, \"name\": string}");
+        goto end;
+    }
+    if (!strcmp(name, "link_folder")) { /* ---- LINKF (links.h): every IFC of a folder, one undo step ---- */
+        const JrVal *p = v ? jr_get(v, "path") : NULL, *rec = v ? jr_get(v, "recursive") : NULL;
+        if (!p || p->type != JR_STR || !p->n || strlen(p->s) < p->n) {
+            buf_puts(out, "link_folder: send {\"path\": \"<folder>\", \"recursive\"?: bool}");
+            goto end;
+        }
+        if (rec && rec->type != JR_BOOL && rec->type != JR_NULL) {
+            buf_puts(out, "recursive: true or false");
+            goto end;
+        }
+        cc_error err;
+        size_t added = 0;
+        if (cc_links_add_folder(s, p->s, rec && rec->type == JR_BOOL && rec->b, &added, &err)) {
+            buf_puts(out, err.msg);
+            goto end;
+        }
+        rc = CC_OK;
+        goto end;
+    }
+    if (!strcmp(name, "link_model") && v && jr_get(v, "paths")) { /* ---- LINKF: several files, one undo step ---- */
+        const JrVal *ps = jr_get(v, "paths");
+        if (ps->type != JR_ARR || !ps->n || ps->n > CC_MAX_LINKS) {
+            buf_puts(out, "paths: 1 to 64 file paths");
+            goto end;
+        }
+        const char *list[CC_MAX_LINKS];
+        for (size_t i = 0; i < ps->n; i++) {
+            const JrVal *x = &ps->items[i];
+            if (x->type != JR_STR || !x->n || strlen(x->s) < x->n) {
+                buf_puts(out, "paths: each a file path, not empty, without NUL");
+                goto end;
+            }
+            list[i] = x->s;
+        }
+        cc_error err;
+        rc = cc_links_add_list(s, list, ps->n, out, &err) ? (buf_clear(out), buf_puts(out, err.msg), CC_ERR) : CC_OK;
         goto end;
     }
     if (!strcmp(name, "link_model")) {
@@ -1839,12 +2153,22 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         rc = done(&w);
         goto end;
     }
-    static const char *const OPS_L[] = {"remove", "reload", "show", "hide", "locate" /* LNK1 */};
+    static const char *const OPS_L[] = {"remove", "reload", "show", "hide", "locate" /* LNK1 */,
+                                        "cancel", "unload", "load", "pin", "unpin", "place", "colour", "reload_all" /* LINKF */};
     int o = -1;
-    for (int q = 0; q < 5; q++)
+    for (int q = 0; q < 13; q++)
         if (op->n == strlen(OPS_L[q]) && !memcmp(op->s, OPS_L[q], op->n)) o = q;
     if (o < 0) {
-        buf_puts(out, "op: one of list, remove, reload, show, hide, locate");
+        buf_puts(out, "op: one of list, remove, reload, show, hide, locate, cancel, unload, load, pin, unpin, place, colour, reload_all");
+        goto end;
+    }
+    if (o == 12) { /* LINKF: reload_all: each link read again (its cache when the IFC did not change) */
+        for (size_t i = 0; i < s->nlinks; i++) {
+            cc_error err;
+            if (s->links[i].state != CC_LS_MISSING && cc_links_reload(s, (int)i, &err))
+                cc_log(s->pf, "bimble-ccore: reload %s: %s", s->links[i].name, err.msg);
+        }
+        rc = CC_OK;
         goto end;
     }
     if (!nm || nm->type != JR_STR) {
@@ -1866,6 +2190,29 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         if (cc_links_locate(s, li, p->s, &err)) {
             buf_puts(out, err.msg);
             goto end;
+        }
+    } else if (o >= 5) { /* ---- LINKF ---- */
+        cc_link *k = &s->links[li];
+        if (o == 5) cc_links_cancel(s, li);
+        else if (o == 6) cc_links_unload(s, li);
+        else if (o == 7) {
+            cc_error err;
+            if (cc_links_load(s, li, &err)) {
+                buf_puts(out, err.msg);
+                goto end;
+            }
+        } else if (o == 8 || o == 9) {
+            if (k->pinned != (o == 8)) k->pinned = o == 8, s->links_gen++;
+        } else if (o == 10) {
+            if (link_place(s, k, v, out)) goto end;
+        } else {
+            const JrVal *c = jr_get(v, "colour");
+            if (!c || (c->type != JR_NULL && (c->type != JR_NUM || c->num != (double)(int)c->num || c->num < 0 || c->num > 11))) {
+                buf_puts(out, "colour: a palette index 0..11, or null (its own colours)");
+                goto end;
+            }
+            k->colour = c->type == JR_NULL ? -1 : (int)c->num;
+            s->links_gen++;
         }
     } else if (o == 0) cc_links_remove(s, li);
     else if (o == 1) {
@@ -1900,7 +2247,8 @@ static int new_sheet_action(cc_session *s, cc_buf *out) {
 
 /* Actions the C core runs that the ribbon does not list (above). */
 static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */,
-                                             "commit", "branch_create", "branch_switch" /* H2a */, "merge" /* H2b */};
+                                             "commit", "branch_create", "branch_switch" /* H2a */, "merge" /* H2b */,
+                                             "annotation_type" /* VIEWSHEET */};
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -1949,6 +2297,31 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "settings") || !strcmp(name, "about")) return CC_OK;
     if (!strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return cc_settings_action(s, name, body, n, out) ? CC_ERR : CC_OK;
     /* ---- end SET1 ---- */
+    /* ---- VIEWSHEET (view_sheet.h): the dialogs open in the page; the section tool is a switch
+     * (it stops the place, annotate and measure tools, as one tool at a time); the types ---- */
+    if (!strcmp(name, "new_view") || !strcmp(name, "sheet_place_view") || !strcmp(name, "sheet_revision")) return CC_OK;
+    if (!strcmp(name, "draw_section")) {
+        s->vsh.section_draw = !(s->vsh.section_draw && vs_plan_shown(s));
+        if (s->vsh.section_draw) {
+            cc_tool_clear(&s->tool), s->placing = 0;
+            if (s->measure.on) cc_measure_toggle(&s->measure);
+        }
+        return CC_OK;
+    }
+    if (!strcmp(name, "annotation_type")) {
+#ifdef CC_VIEW_ONLY
+        return fail(out, "annotation_type: no graphic standards in the viewer-only build");
+#else
+        Arena sa;
+        arena_init(&sa, 0);
+        cc_style st;
+        int trc = cc_style_default(&st, &sa) ? (buf_puts(out, "out of memory"), CC_ERR)
+                  : cc_vs_set_type(&s->vsh, &st.paper, body, n, out) ? CC_ERR : CC_OK;
+        arena_free(&sa);
+        return trc;
+#endif
+    }
+    /* ---- end VIEWSHEET ---- */
     /* ---- KEY1: ribbon.rs:729-744, the plan template's flag (no history step, rev unchanged) ---- */
     if (cc_toggle_index(name) >= 0) return cc_toggle_flip(s, cc_toggle_index(name)), CC_OK;
     /* ---- end KEY1 ---- */
@@ -1956,7 +2329,8 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         int vrc = cc_versions_action(s, name, body, n, out);
         if (vrc != -1) return vrc;
     }
-    if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
+    if (!strcmp(name, "link_model") || !strcmp(name, "manage_links") || !strcmp(name, "link_folder"))
+        return link_action(s, name, body, n, out);
     /* ---- FS1: recent_remove {path} (Home's remove; settings_file.h) ---- */
     if (!strcmp(name, "recent_remove")) {
         FileArgs ra;
@@ -1985,10 +2359,19 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "undo")) undo_redo(s, 1);
     else if (!strcmp(name, "redo")) undo_redo(s, 0);
     else if (!strncmp(name, "place_", 6)) {
-        for (int k = 0; k < 4; k++)
+        for (int k = 0; k < CC_KIND_COUNT; k++) /* CONC1: and the Concrete tab's kinds */
             if (!strcmp(name + 6, KIND_NAME[k])) place_action(s, (cc_kind)k);
-        if (s->placing) s->measure.on = 0, s->measure.has_first = s->measure.has_hover = 0; /* ribbon.rs:687 */
-    } else if (!strcmp(name, "measure")) cc_measure_toggle(&s->measure); /* ribbon.rs:691 (ticket T1) */
+        if (s->placing) s->measure.on = 0, s->measure.has_first = s->measure.has_hover = 0, s->wp.pick = 0; /* ribbon.rs:687; WAVE1B */
+    } else if (!strcmp(name, "measure")) { /* ribbon.rs:691 (ticket T1); VIEWSHEET: one tool; WAVE1B: the plane tool stops */
+        if (s->wp.pick) s->wp.pick = 0, s->measure.on = 0;
+        cc_measure_toggle(&s->measure), s->vsh.section_draw = 0;
+    } else if (!strcmp(name, "reference_planes")) { /* WAVE1B: the three-point plane tool (the measure tool's snapping) */
+        s->wp.pick = !s->wp.pick, s->wp.npick = 0;
+        if (s->wp.pick) cc_tool_clear(&s->tool), s->placing = 0, s->vsh.section_draw = 0;
+        if (!!s->measure.on != !!s->wp.pick) cc_measure_toggle(&s->measure);
+    }
+    else if (cc_setout_index(name) >= 0) cc_setout_flip(&s->setout, cc_setout_index(name)); /* SETOUT */
+    else if (!strcmp(name, "view_true_north")) return setout_flip_north(s, out); /* SETOUT */
     else if (vis_action(s, name, out)) return CC_ERR;
     /* home: the lab shows its own Home */
     return CC_OK;
@@ -2502,13 +2885,18 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
     if (sc) memcpy(org, sc->origin, sizeof org);
     if (!a->has_at && !a->has_ray) return; /* a click without a position: where the pointer was */
     t->has_hover = 0;
+    /* WAVE1B: a horizontal work plane is where the pointer lands; another one's trace on the level
+     * is where the point is moved to (wp_trace below) */
+    double wo[3], wn[3];
+    int wpl = s->open && cc_wplane_frame(&s->wp, &s->model, level, wo, wn);
+    double hit = wpl && (wn[2] > 0.999 || wn[2] < -0.999) ? wo[2] : level;
     if (a->has_at) p[0] = a->at[0], p[1] = a->at[1];
-    else if (cc_ray_plane(a->ray, level - org[2], p)) return;
+    else if (cc_ray_plane(a->ray, hit - org[2], p)) return;
     else p[0] += org[0], p[1] += org[1];
     if (a->has_tol) tol = a->tol;
     else if (a->has_ray && a->has_ray_tol) {
         double q[2];
-        if (!cc_ray_plane(a->ray_tol, level - org[2], q)) tol = cc_hypot(q[0] + org[0] - p[0], q[1] + org[1] - p[1]);
+        if (!cc_ray_plane(a->ray_tol, hit - org[2], q)) tol = cc_hypot(q[0] + org[0] - p[0], q[1] + org[1] - p[1]);
         if (!(tol <= CC_MAX_MM)) tol = 0.0;
     }
     int kind = CC_SNAP_NONE;
@@ -2523,7 +2911,8 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
             }
             size_t ng = 0; /* SLAB1: the grid axes */
             double(*grid)[4] = snap_grid_axes(s, &ng);
-            t->has_targets = !cc_snap_targets_build_grid(&t->targets, sc, level, next, (const double(*)[4])grid, ng);
+            const float(*box)[6] = sc == scene_now(s) ? mboxes_of(s, 0, sc) : NULL; /* MEAS1: the measure tool's slot 0 */
+            t->has_targets = !cc_snap_targets_build_boxes(&t->targets, sc, level, next, (const double(*)[4])grid, ng, box);
             free(grid);
             t->targets_rev = s->rev, t->targets_level = level, t->targets_links = s->links_gen;
         }
@@ -2534,6 +2923,16 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
         cc_ortho(t->points[t->npoints - 1], q, r);
         if (r[0] != q[0] || r[1] != q[1]) kind = CC_SNAP_NONE;
         q[0] = r[0], q[1] = r[1];
+    }
+    if (wpl && hit == level && s->placing_kind != CC_KIND_GRID_AXIS) { /* WAVE1B: onto the plane's trace on the level (n.x = n.o, z = level); a grid axis is drawn freely in plan */
+        double l2 = wn[0] * wn[0] + wn[1] * wn[1];
+        if (l2 > 1e-12) {
+            double c = wn[0] * wo[0] + wn[1] * wo[1] + wn[2] * (wo[2] - level), d = wn[0] * q[0] + wn[1] * q[1] - c;
+            if (d > 1e-9 || d < -1e-9) {
+                q[0] -= d * wn[0] / l2, q[1] -= d * wn[1] / l2;
+                kind = CC_SNAP_NONE;
+            }
+        }
     }
     t->has_hover = 1, t->hover[0] = q[0] + 0.0, t->hover[1] = q[1] + 0.0, t->hover_kind = kind;
 }
@@ -2557,7 +2956,117 @@ static void place_args(const cc_session *s, const double *a, const double *b, cc
 
 /* edit.rs Editor::click: the commands of `verb place` for points a, b (a run, or a dry run for
  * the ghost), a slab raised by top_offset_mm. 0 ok, -1 with the error in `err`. */
+/* WAVE1B: how far a horizontal work plane is above the storey's level (0: none or another one);
+ * what the place tools make is raised by it. */
+static double wp_dz(const cc_session *s) {
+    double wo[3], wn[3], level = storey_level(s);
+    if (!s->open || !cc_wplane_frame(&s->wp, &s->model, level, wo, wn) || !(wn[2] > 0.999 || wn[2] < -0.999)) return 0.0;
+    return wo[2] - level;
+}
+static void wp_raise(const cc_session *s, cc_cmds *l) {
+    double dz = wp_dz(s);
+    for (size_t i = 0; dz != 0.0 && i < l->n; i++)
+        if (l->v[i].op == CC_CMD_ADD_ELEMENT) l->v[i].element.placement.origin[2] += dz;
+}
+static int place_cmds_(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err);
 static int place_cmds(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err) {
+    int rc = place_cmds_(s, a, b, dry_run, l, err);
+    if (!rc) wp_raise(s, l);
+    return rc;
+}
+/* WAVE1B (A2): the next free tag of an axis' family: a number after the highest number, or a
+ * letter after the highest letter tag (A..Z, AA..ZZ); `letters` chooses. */
+static void next_tag(const cc_grid *g, const int *fam, int want, int letters, char *out) {
+    uint64_t best = 0;
+    for (size_t k = 0; k < g->naxes; k++) {
+        if (fam && fam[k] != want) continue;
+        const cc_str *t = &g->axes[k].tag;
+        uint64_t v = 0;
+        int ok = t->n > 0 && t->n <= 6;
+        for (size_t i = 0; ok && i < t->n; i++) {
+            char c = t->p[i];
+            if (letters) ok = c >= 'A' && c <= 'Z', v = v * 26 + (uint64_t)(c - 'A' + 1);
+            else ok = c >= '0' && c <= '9', v = v * 10 + (uint64_t)(c - '0');
+        }
+        if (ok && v > best) best = v;
+    }
+    best++;
+    char tmp[16];
+    int n = 0;
+    if (letters)
+        for (uint64_t v = best; v && n < 15; v = (v - 1) / 26) tmp[n++] = (char)('A' + (v - 1) % 26);
+    else
+        for (uint64_t v = best; v && n < 15; v /= 10) tmp[n++] = (char)('0' + v % 10);
+    for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
+    out[n] = 0;
+}
+static int tag_is_letters(const cc_str *t) {
+    int ok = t->n > 0;
+    for (size_t i = 0; ok && i < t->n; i++) ok = t->p[i] >= 'A' && t->p[i] <= 'Z';
+    return ok;
+}
+/* The commands of a grid axis from a to b (verb grid_axis_add): the first grid that has an axis
+ * parallel to it (within 0.1 degree), else the first grid; its tag continues the parallel family's
+ * style (numbers or letters), else takes the other style than the grid's first axis. */
+static int grid_axis_cmds(cc_session *s, const double *a, const double *b, cc_cmds *l, cc_buf *err) {
+    if (!s->model.ngrids) {
+        buf_puts(err, "no grid: add one on the Levels & grids page first");
+        return -1;
+    }
+    double dx = b[0] - a[0], dy = b[1] - a[1], len = cc_hypot(dx, dy);
+    if (!(len >= 1.0)) {
+        buf_puts(err, "the two points are too close");
+        return -1;
+    }
+    const cc_grid *g = NULL;
+    size_t par = (size_t)-1;
+    for (size_t i = 0; i < s->model.ngrids && !g; i++)
+        for (size_t k = 0; k < s->model.grids[i].naxes; k++) {
+            const cc_grid_axis *x = &s->model.grids[i].axes[k];
+            double ex = x->end[0] - x->start[0], ey = x->end[1] - x->start[1], el = cc_hypot(ex, ey);
+            double cr = (dx * ey - dy * ex) / (len * (el > 0 ? el : 1));
+            if (cr < 0.0017 && cr > -0.0017) {
+                g = &s->model.grids[i], par = k;
+                break;
+            }
+        }
+    if (!g) g = &s->model.grids[0];
+    int letters;
+    char tag[20];
+    if (par != (size_t)-1) {
+        letters = tag_is_letters(&g->axes[par].tag);
+        int *fam = malloc((g->naxes + 1) * sizeof *fam);
+        if (!fam) return buf_puts(err, "out of memory"), -1;
+        for (size_t k = 0; k < g->naxes; k++) fam[k] = tag_is_letters(&g->axes[k].tag) == letters;
+        next_tag(g, fam, 1, letters, tag);
+        free(fam);
+    } else {
+        letters = g->naxes ? !tag_is_letters(&g->axes[0].tag) : dx * dx > dy * dy; /* along x: letters */
+        int *fam = malloc((g->naxes + 1) * sizeof *fam);
+        if (!fam) return buf_puts(err, "out of memory"), -1;
+        for (size_t k = 0; k < g->naxes; k++) fam[k] = tag_is_letters(&g->axes[k].tag) == letters;
+        next_tag(g, fam, 1, letters, tag);
+        free(fam);
+    }
+    Buf args;
+    buf_init(&args);
+    JsonW w;
+    jw_init(&w, &args, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "end"), jw_arr_begin(&w), jw_f64(&w, b[0]), jw_f64(&w, b[1]), jw_arr_end(&w);
+    jw_key(&w, "grid"), jw_str_n(&w, g->id.c, 22);
+    jw_key(&w, "start"), jw_arr_begin(&w), jw_f64(&w, a[0]), jw_f64(&w, a[1]), jw_arr_end(&w);
+    jw_key(&w, "tag"), jw_str(&w, tag);
+    jw_obj_end(&w);
+    jw_finish(&w);
+    int rc = args.oom ? (buf_puts(err, "out of memory"), -1) : cc_verb_run_ex(&s->model, "grid_axis_add", args.p, args.len, 0, -1, s->rev, l, err) ? -1 : 0;
+    buf_free(&args);
+    return rc;
+}
+
+static int place_cmds_(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err) {
+    if (cc_conc_kind(s->placing_kind)) return cc_conc_cmds(s, a, b, dry_run, l, err); /* CONC1 */
+    if (s->placing_kind == CC_KIND_GRID_AXIS) return b ? grid_axis_cmds(s, a, b, l, err) : (buf_puts(err, "click the axis' end"), -1); /* WAVE1B (A2) */
     if (!s->has_storey) {
         buf_puts(err, "choose a storey");
         return -1;
@@ -2576,7 +3085,9 @@ static int place_cmds(cc_session *s, const double *a, const double *b, int dry_r
 
 /* ---- SLAB1: the polygon slab by clicks (edit.rs:318-385) ---- */
 #define CLOSE_MM 100.0 /* edit.rs CLOSE_MM: a click this close to the first point closes */
-static int polygon_now(const cc_session *s) { return s->placing && s->placing_kind == CC_KIND_SLAB && s->polygon; }
+static int polygon_now(const cc_session *s) {
+    return s->placing && ((s->placing_kind == CC_KIND_SLAB && s->polygon) || s->placing_kind == CC_KIND_RAFT); /* CONC1: a raft */
+}
 /* edit.rs click: 3 points or more and `p` within CLOSE_MM of the first. */
 static int polygon_closes(const cc_tool *t, const double *p) {
     return t->npoints >= 3 && cc_hypot(t->points[0][0] - p[0], t->points[0][1] - p[1]) <= CLOSE_MM;
@@ -2587,9 +3098,11 @@ static int polygon_cmds(cc_session *s, const double (*pts)[2], size_t n, cc_cmds
         buf_puts(err, "choose a storey");
         return -1;
     }
+    if (s->placing_kind == CC_KIND_RAFT) return cc_conc_raft_cmds(s, pts, n, l, err) ? -1 : (wp_raise(s, l), 0); /* CONC1 */
     if (cc_verb_new_slab(&s->model, &s->storey, pts, n, s->sizes, s->material, l, err)) return -1;
     for (size_t i = 0; i < l->n; i++)
         if (l->v[i].op == CC_CMD_ADD_ELEMENT) l->v[i].element.placement.origin[2] += s->top_offset_mm;
+    wp_raise(s, l); /* WAVE1B */
     return 0;
 }
 /* edit.rs close_polygon (Enter, or a click on the first point): one slab with the clicked
@@ -2613,6 +3126,11 @@ static int polygon_close(cc_session *s, cc_buf *out) {
     return tool_json(s, has_id ? &id : NULL, out);
 }
 /* ---- end SLAB1 ---- */
+
+/* CONC1: a one-click kind (column, pad footing, sleeve). */
+static int one_click(const cc_session *s) {
+    return s->placing_kind == CC_KIND_COLUMN || (cc_conc_kind(s->placing_kind) && cc_conc_clicks(s->placing_kind) == 1);
+}
 
 /* The tool's state: {"active","ghost","ghost_error","hover","kind","placed","points"} (sorted).
  * ghost: what the next click adds (tool.h cc_tool_ghost), null without one; ghost_error: why a
@@ -2642,16 +3160,21 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
             has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
         }
         cc_cmds_free(&l);
-    } else if (s->placing && t->has_hover && !(s->placing_kind == CC_KIND_SLAB && s->polygon) &&
-        (s->placing_kind == CC_KIND_COLUMN || t->npoints >= 1)) {
+    } else if (s->placing && t->has_hover && !polygon_now(s) && s->placing_kind != CC_KIND_GRID_AXIS && /* WAVE1B: a line, no solid */
+               (one_click(s) || t->npoints >= 1 || s->placing_kind == CC_KIND_STRIP_FOOTING)) {
         cc_cmds l;
         cc_cmds_init(&l);
-        const double *a = s->placing_kind == CC_KIND_COLUMN ? t->hover : t->points[0];
-        if (!place_cmds(s, a, t->hover, 1, &l, &gerr)) {
+        const double *a = one_click(s) || !t->npoints ? t->hover : t->points[0];
+        if (!place_cmds(s, a, one_click(s) || !t->npoints ? NULL : t->hover, 1, &l, &gerr)) {
             const cc_scene *sc = scene_now(s);
             double org[3] = {0, 0, 0};
             if (sc) memcpy(org, sc->origin, sizeof org);
-            has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
+            if (s->placing_kind == CC_KIND_OPENING || s->placing_kind == CC_KIND_SLEEVE) { /* WAVE1B (B2): the void's solid */
+                cc_cmds g;
+                cc_cmds_init(&g);
+                has_ghost = !cc_conc_opening_ghost(&s->model, &l, &g) && !cc_tool_ghost(&w, &s->model, g.v, g.n, org, &gerr);
+                cc_cmds_free(&g);
+            } else has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
         }
         cc_cmds_free(&l);
     }
@@ -2667,7 +3190,7 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
         jw_key(&w, "snap");
         if (cc_snap_label(t->hover_kind)) jw_str(&w, cc_snap_label(t->hover_kind));
         else jw_null(&w);
-        jw_key(&w, "z"), jw_f64(&w, storey_level(s) + 0.0);
+        jw_key(&w, "z"), jw_f64(&w, storey_level(s) + wp_dz(s) + 0.0); /* WAVE1B: on a horizontal work plane */
         jw_obj_end(&w);
     } else jw_null(&w);
     jw_key(&w, "kind"), jw_str(&w, KIND_NAME[s->placing ? s->placing_kind : s->kind]);
@@ -2857,6 +3380,7 @@ static int annot_start(cc_session *s, const char *body, size_t n, cc_buf *out) {
     }
     cc_tool_clear(&s->tool);
     s->placing = 0;
+    s->vsh.section_draw = 0; /* VIEWSHEET: one tool at a time */
     s->tool.annot = mode;
     s->tool.annot_size = sz && sz->type == JR_NUM ? sz->num : 3.5;
     if (mode == 2) {
@@ -2905,7 +3429,18 @@ static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta
     if (t->annot == 2) {
         verb = "add_text";
         jw_key(&w, "at"), w_pair(&w, t->hover);
-        jw_key(&w, "size_mm"), jw_f64(&w, t->annot_size);
+        /* VIEWSHEET: the text type in use gives its name and size (layout.rs:540-545) */
+        Arena ka;
+        arena_init(&ka, 0);
+#ifdef CC_VIEW_ONLY
+        const cc_text_type *tt = NULL; /* the viewer-only build places nothing (view_only.c) */
+#else
+        cc_style kst;
+        const cc_text_type *tt = s->vsh.text_kind[0] && !cc_style_default(&kst, &ka) ? cc_vs_text_type(&kst.paper, s->vsh.text_kind) : NULL;
+#endif
+        if (tt) jw_key(&w, "kind"), jw_str(&w, s->vsh.text_kind);
+        jw_key(&w, "size_mm"), jw_f64(&w, tt ? (double)tt->size_mm : t->annot_size);
+        arena_free(&ka);
         jw_key(&w, "text"), jw_str(&w, t->annot_text ? t->annot_text : "");
     } else {
         if (t->npoints < 2) { /* a, then b (not on a) */
@@ -2930,6 +3465,7 @@ static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta
         jw_key(&w, "a"), annot_point_arg(&w, t, 0);
         jw_key(&w, "axis"), jw_str(&w, AXIS[ax]);
         jw_key(&w, "b"), annot_point_arg(&w, t, 1);
+        if (s->vsh.dim_kind[0]) jw_key(&w, "kind"), jw_str(&w, s->vsh.dim_kind); /* VIEWSHEET: the dimension type in use */
         jw_key(&w, "offset"), jw_f64(&w, annot_round(off));
     }
     jw_key(&w, "view"), jw_str_n(&w, v.id.c, 22);
@@ -2955,6 +3491,91 @@ static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta
     return annot_json(s, has_id ? &id : NULL, out);
 }
 
+/* WAVE1B: a click of the three-point plane tool (refplanes.h): the measure tool's hover (its
+ * snapping) is the point; the third makes the plane through them (verb reference_plane_add on the
+ * active storey, one history step). The answer is the measure tool's state. */
+static int plane_pick_click(cc_session *s, const char *body, size_t n, const cc_mview *mv, cc_buf *out) {
+    Buf tmp;
+    buf_init(&tmp);
+    int rc = cc_measure_call(&s->measure, "measure_pointer", body, n, mv, &tmp);
+    buf_free(&tmp);
+    if (rc != 200) return cc_measure_call(&s->measure, "measure_pointer", body, n, mv, out) == 200 ? CC_OK : CC_ERR;
+    if (s->measure.has_hover && s->wp.npick < 3) {
+        const cc_msnap *h = &s->measure.hover;
+        for (int k = 0; k < 3; k++) s->wp.pts[s->wp.npick][k] = (double)h->p[k] + h->org[k];
+        s->wp.npick++;
+    }
+    if (s->wp.npick == 3) {
+        s->wp.npick = 0;
+        if (!s->has_storey) return fail(out, "choose a storey");
+        Buf args;
+        buf_init(&args);
+        JsonW w;
+        jw_init(&w, &args, 0);
+        jw_obj_begin(&w);
+        jw_key(&w, "points"), jw_arr_begin(&w);
+        for (int i = 0; i < 3; i++) {
+            jw_arr_begin(&w);
+            for (int k = 0; k < 3; k++) jw_f64(&w, cc_round10(s->wp.pts[i][k] * 10.0) / 10.0 + 0.0); /* to 1 mm */
+            jw_arr_end(&w);
+        }
+        jw_arr_end(&w);
+        jw_key(&w, "storey"), jw_str_n(&w, s->storey.c, 22);
+        jw_obj_end(&w);
+        jw_finish(&w);
+        cc_cmds l;
+        cc_cmds_init(&l);
+        int vrc = args.oom ? (buf_puts(out, "out of memory"), CC_ERR)
+                  : cc_verb_run_ex(&s->model, "reference_plane_add", args.p, args.len, 0, -1, s->rev, &l, out) ? CC_ERR
+                                                                                                              : try_apply(s, l.v, l.n, out);
+        cc_cmds_free(&l);
+        buf_free(&args);
+        if (vrc != CC_OK) return vrc;
+        buf_clear(out);
+    }
+    return cc_measure_call(&s->measure, "measure_pointer", "{}", 2, mv, out) == 200 ? CC_OK : CC_ERR;
+}
+
+/* WAVE1B (B2): query opening_at {"ray": [ox, oy, oz, dx, dy, dz]} (scene coordinates, as the
+ * measure tool's): {"host", "id"} of the opening the ray enters before the first surface it meets
+ * (the measure tool's pick: the plan's range or the section box cuts), within 30 mm of its box;
+ * else null. */
+static int opening_at(cc_session *s, const char *body, size_t n, const cc_mview *mv, cc_buf *out) {
+    if (!s->open) return fail(out, READ_ONLY);
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = n ? jr_parse(&a, body, n, &je) : NULL, *r = v && v->type == JR_OBJ ? jr_get(v, "ray") : NULL;
+    double ray[6];
+    int ok = r && r->type == JR_ARR && r->n == 6;
+    for (int k = 0; ok && k < 6; k++) ok = r->items[k].type == JR_NUM && r->items[k].num - r->items[k].num == 0.0, ray[k] = ok ? r->items[k].num : 0;
+    arena_free(&a);
+    if (!ok) return fail(out, "opening_at: {\"ray\": [ox, oy, oz, dx, dy, dz]}");
+    double t = -1.0, d = cc_sqrt(ray[3] * ray[3] + ray[4] * ray[4] + ray[5] * ray[5]);
+    cc_msnap sn;
+    cc_mview m2;
+    if (mv) {
+        m2 = *mv, m2.plane = NULL;
+        if (cc_measure_snap(&m2, ray, NULL, 0.0, 1, &sn) == 1 && d > 0) {
+            double q[3] = {sn.p[0] - ray[0], sn.p[1] - ray[1], sn.p[2] - ray[2]};
+            t = cc_sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
+        }
+    }
+    double w[6] = {ray[0], ray[1], ray[2], ray[3], ray[4], ray[5]};
+    if (mv && mv->org)
+        for (int k = 0; k < 3; k++) w[k] += mv->org[k];
+    cc_gid host, id;
+    JsonW jw;
+    jw_init(&jw, out, 0);
+    if (cc_conc_opening_at(&s->model, w, t, 30.0, &host, &id)) {
+        jw_obj_begin(&jw);
+        jw_key(&jw, "host"), jw_str_n(&jw, host.c, 22);
+        jw_key(&jw, "id"), jw_str_n(&jw, id.c, 22);
+        jw_obj_end(&jw);
+    } else jw_null(&jw);
+    return done(&jw);
+}
+
 /* The measure tool (ticket T1, measure.h): the shown scene and its visible links, the box that
  * cuts (a plan's range, else the section box when on). */
 static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -2964,6 +3585,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
     float mn[3], mx[3], yaw = 0.0f; /* ISS71: the section box's turn */
     int has_box = 0;
     if (sc) {
+        memset(layers, 0, sizeof layers);
         layers[nl].sc = sc, layers[nl].vis = &s->vis, memset(layers[nl].off, 0, sizeof layers[nl].off), nl++;
         for (size_t i = 0; i < s->nlinks && nl < 1 + CC_MAX_LINKS; i++) { /* lib.rs snap_at `theirs` */
             const cc_scene *ls = s->links[i].visible ? cc_link_scene(&s->links[i]) : NULL;
@@ -2972,6 +3594,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
             for (int k = 0; k < 3; k++) layers[nl].off[k] = (float)(ls->origin[k] - sc->origin[k]); /* lib.rs:1499 */
             nl++;
         }
+        for (size_t i = 0; i < nl; i++) layers[i].box = mboxes_of(s, i, layers[i].sc), layers[i].index = layers[i].box ? &s->mboxes[i] : NULL; /* MEAS1, 3D2: the box tree */
         Arena a;
         arena_init(&a, 0);
         cc_view v;
@@ -2988,7 +3611,19 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
         }
         arena_free(&a);
     }
-    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw};
+    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw, NULL, 0, NULL};
+    double wplane[6]; /* WAVE1B: the work plane in scene coordinates (a ray that meets nothing ends on it) */
+    if (sc && s->open && cc_wplane_frame(&s->wp, &s->model, storey_level(s), wplane, wplane + 3)) {
+        for (int k = 0; k < 3; k++) wplane[k] -= sc->origin[k];
+        mv.plane = wplane;
+    }
+    if (!strcmp(name, "opening_at")) return opening_at(s, body, n, sc ? &mv : NULL, out); /* WAVE1B (B2) */
+    if (s->wp.pick && s->open && !strcmp(name, "measure_click")) return plane_pick_click(s, body, n, sc ? &mv : NULL, out);
+    if (s->wp.pick && s->open && !strcmp(name, "measure_cancel")) { /* WAVE1B: the last point back, then the tool stops */
+        if (s->wp.npick) s->wp.npick--;
+        else s->wp.pick = 0, s->measure.on = 0, s->measure.has_hover = 0;
+        return cc_measure_call(&s->measure, "measure_pointer", "{}", 2, sc ? &mv : NULL, out) == 200 ? CC_OK : CC_ERR;
+    }
     return cc_measure_call(&s->measure, name, body, n, sc ? &mv : NULL, out) == 200 ? CC_OK : CC_ERR;
 }
 
@@ -3003,6 +3638,15 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
         return cc_vis_tool(&s->vis, name, body, n, out) == 200 ? CC_OK : CC_ERR;
     }
     if (!strcmp(name, "annotate")) return annot_start(s, body, n, out);
+    if (!strcmp(name, "work_plane")) { /* WAVE1B (refplanes.h): the place tools' and Measure's plane */
+        if (!s->open) return fail(out, READ_ONLY);
+        if (cc_wplane_set(&s->wp, &s->model, body, n, out)) return CC_ERR;
+        s->tool.has_targets = 0;
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_wplane_json(&s->wp, &s->model, &w);
+        return done(&w);
+    }
     int pointer = !strcmp(name, "pointer"), click = !strcmp(name, "click"), cancel = !strcmp(name, "cancel");
     int close = !strcmp(name, "close"); /* SLAB1: Enter closes a polygon slab */
     if (!pointer && !click && !cancel && !close) {
@@ -3049,7 +3693,17 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     }
     if (t->npoints >= CC_TOOL_MAX_POINTS) t->npoints = 0;
     t->points[t->npoints][0] = t->hover[0], t->points[t->npoints][1] = t->hover[1], t->npoints++;
-    if (t->npoints < (s->placing_kind == CC_KIND_COLUMN ? 1u : 2u)) return tool_json(s, NULL, out);
+    int on_wall = 0; /* CONC1: a strip footing's first click on a wall places it along the wall */
+    if (s->placing_kind == CC_KIND_STRIP_FOOTING && t->npoints == 1) {
+        cc_cmds d;
+        cc_cmds_init(&d);
+        Buf derr;
+        buf_init(&derr);
+        on_wall = !cc_conc_cmds(s, t->points[0], NULL, 1, &d, &derr);
+        cc_cmds_free(&d);
+        buf_free(&derr);
+    }
+    if (!on_wall && t->npoints < (one_click(s) ? 1u : 2u)) return tool_json(s, NULL, out);
     double pa[2] = {t->points[0][0], t->points[0][1]}, pb[2] = {t->points[t->npoints - 1][0], t->points[t->npoints - 1][1]};
     t->npoints = 0; /* edit.rs: the points are taken, also when the element fails */
     cc_cmds l;
@@ -3057,9 +3711,10 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     int rc = CC_ERR;
     cc_gid id;
     int has_id = 0;
-    if (!place_cmds(s, pa, pb, 0, &l, out)) {
+    if (!place_cmds(s, pa, on_wall ? NULL : pb, 0, &l, out)) {
         for (size_t i = 0; i < l.n; i++)
-            if (l.v[i].op == CC_CMD_ADD_ELEMENT) id = l.v[i].element.id, has_id = 1;
+            if (l.v[i].op == CC_CMD_ADD_ELEMENT || l.v[i].op == CC_CMD_SET_OPENINGS) /* CONC1: an opening's host */
+                id = l.v[i].op == CC_CMD_ADD_ELEMENT ? l.v[i].element.id : l.v[i].id, has_id = 1;
         rc = try_apply(s, l.v, l.n, out);
     }
     cc_cmds_free(&l);
@@ -3067,7 +3722,18 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     return tool_json(s, has_id ? &id : NULL, out);
 }
 
+static int call_op(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out);
+
+/* LINKF: the links' placed scenes follow their placement and the host's georeference before and
+ * after every call (links.h cc_links_sync_placement). */
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
+    if (s->nlinks) cc_links_sync_placement(s);
+    int rc = call_op(s, op, name, body, n, out);
+    if (s->nlinks) cc_links_sync_placement(s);
+    return rc;
+}
+
+static int call_op(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
     if (cc_view_only_refuses(op, name, out)) return CC_ERR; /* view build only (view_only.h) */
     if (!strcmp(op, "query")) return call_query(s, name, body, n, out);
     if (!strcmp(op, "action")) return call_action(s, name, body, n, out);

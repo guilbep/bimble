@@ -6,14 +6,16 @@ export const capability = "settings"; // SET1: query settings, action set_settin
 // Settings (ticket SET1): Rust's window (crates/bimble-viewer/src/lib.rs:4127 settings_ui): You (name,
 // e-mail: lib.rs:4023), Coordinates (coords.rs:57), Appearance (theme, font, text size: lib.rs:4041).
 // The same file as the Rust app (settings.rs): every change is one `set_settings`, applied at once
-// (ADR 0052: no OK/Cancel). The memory share and the three performance fields are kept in the file
-// but not shown: the lab's viewport has no use for them (`query settings` applies, DEVIATIONS 23).
+// (ADR 0052: no OK/Cancel). The memory share and two performance fields are kept in the file but not
+// shown: the lab's viewport has no use for them (`query settings` applies, DEVIATIONS 23); "While the
+// view moves" (moving_fps) is shown since it applies (ticket 3D1, ADR 0078), and "Far parts simplified"
+// (moving_proxies, HLOD proxies) since ticket 3D2.
 import { computed, ref, watch } from "vue";
 import { setSettings, userSettings, type SettingsValues } from "../bimble";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/settings";
 import { currentDialog } from ".";
-import { TEXT_SIZE } from "../shell/theme";
+import { TEXT_SIZE, fontInstalled } from "../shell/theme";
 
 type K = keyof typeof copy.fr;
 const tx = (k: K, v: Record<string, string | number> = {}) => t(k, v);
@@ -46,6 +48,8 @@ const commitEpsg = () => { const c = epsg.value.trim(); if (/^\d{1,5}$/.test(c))
 // Appearance.
 const themes = computed(() => s.value?.themes ?? []);
 const fonts = computed(() => s.value?.fonts ?? []);
+/** DEAD1: a font this computer lacks cannot be chosen (it would change nothing): disabled with where its files go. */
+const installed = computed(() => new Map(fonts.value.map((f) => [f, fontInstalled(f)])));
 const sizes = computed<[number, number]>(() => s.value?.text_sizes ?? [10, 16]);
 const isDefaultLook = computed(() => !v.value || (v.value.theme === "grey" && v.value.ui_font === "roboto" && v.value.text_size === TEXT_SIZE));
 const close = () => { currentDialog.value = null; };
@@ -93,13 +97,24 @@ const close = () => { currentDialog.value = null; };
           </select></label>
         <div class="row" role="radiogroup" :aria-label="tx('settings.font')" data-setting="ui_font"><span>{{ tx('settings.font') }}</span>
           <span style="display:flex;gap:14px">
-            <label v-for="f in fonts" :key="f" class="radio"><input type="radio" name="bb-font" :checked="v.ui_font === f" :data-bb="`settings-font-${f}`" @change="set({ ui_font: f })"><span>{{ tx(`settings.font.${f}` as K) }}</span></label>
+            <label v-for="f in fonts" :key="f" class="radio" :title="installed.get(f) === false ? tx('settings.fontMissing') : undefined"><input type="radio" name="bb-font" :checked="v.ui_font === f" :disabled="installed.get(f) === false" :data-bb="`settings-font-${f}`" @change="set({ ui_font: f })"><span>{{ tx(`settings.font.${f}` as K) }}</span><span v-if="installed.get(f) === false" class="note" :data-bb="`settings-font-missing-${f}`">{{ tx('settings.fontNotInstalled') }}</span></label>
           </span></div>
         <label class="row"><span>{{ tx('settings.textSize') }}</span>
           <span style="display:flex;gap:8px;align-items:center">
             <input type="range" :min="sizes[0]" :max="sizes[1]" step="0.5" :value="v.text_size" data-bb="settings-text-size" data-setting="text_size" @change="set({ text_size: Number(($event.target as HTMLInputElement).value) })">
             <span class="mono" data-bb="settings-text-size-value">{{ v.text_size }} pt</span>
           </span></label>
+        <!-- 3D1 (ADR 0078): the moving budget follows moving_fps (Rust's choices: lib.rs settings_ui) -->
+        <label v-if="s?.applies.moving_fps" class="row"><span>{{ tx('settings.moving') }}</span>
+          <select class="inp" :value="v.moving_fps" data-bb="settings-moving-fps" data-setting="moving_fps" @change="set({ moving_fps: Number(($event.target as HTMLSelectElement).value) })">
+            <option v-for="f in [0, 15, 30, 60, 120, 240]" :key="f" :value="f">{{ f === 0 ? tx('settings.moving.0') : tx('settings.moving.fps', { fps: f }) }}</option>
+          </select></label>
+        <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ tx('settings.movingNote') }}</p>
+        <!-- 3D2 (ADR 0078): HLOD proxies (moving_proxies, Rust's setting): far cells drawn as stand-ins -->
+        <label v-if="s?.applies.moving_proxies" class="row"><span>{{ tx('settings.proxies') }}</span>
+          <input type="checkbox" :checked="v.moving_proxies" data-bb="settings-moving-proxies" data-setting="moving_proxies" @change="set({ moving_proxies: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.moving_proxies" class="note" data-bb="settings-proxies-note">{{ tx('settings.proxiesNote') }}</p>
+        <p v-if="s && !s.applies.gpu_cull" class="note" data-bb="settings-gpu-cull">{{ tx('settings.gpuCull') }}</p>
         <button v-if="!isDefaultLook" class="btn s" type="button" style="align-self:flex-start" data-bb="settings-default-look" @click="set({ theme: 'grey', ui_font: 'roboto', text_size: TEXT_SIZE })">{{ tx('settings.defaultLook') }}</button>
       </section>
 

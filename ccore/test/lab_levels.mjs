@@ -7,7 +7,8 @@
 //     first; a level added by the page's form is one history step and a row; renamed in its row;
 //     Niveau 2 set from +3.00 to +3.30 in its row moves its elements 300 mm up in the 3D mesh
 //     (window.__bbGl.elementBox) and the row says +3.30; undo puts both back; × on Fondations (12
-//     elements) shows the verb's refusal and keeps the row; × on the new empty level removes it.
+//     elements) is disabled with the core's refusal (a dry run) next to it, as is its Building
+//     storey box (DEAD1), and a click keeps the row; × on the new empty level removes it.
 //   Grids: the page's form adds a 3 x 2 grid (x 0 6000 12000, y 0 5000): 5 axes tagged 1 2 3 A B;
 //     in the ground plan (gl/grids.ts) 5 axes and 10 bubbles are drawn, ink pixels lie on axis 2
 //     where the viewport projects (6000, 2500) (window.__bbGl.toScreen) and none at (3000, 2500);
@@ -199,11 +200,19 @@ async function levels(mode, S, evalJs) {
   // Refused: Fondations holds 12 elements.
   const fd = byName(st2, "Fondations");
   const u2 = await undoN();
+  // DEAD1: the core's refusal is told before the click (a dry run): × disabled, its reason next to it
+  const REFUSED = "level_remove: the level Fondations holds 12 elements: move or delete them first";
+  const rm = () => evalJs(`(() => { const r = document.querySelector('[data-bb-level="${fd.id}"]'), b = r?.querySelector('[data-bb=level-remove]'), c = r?.querySelector('[data-bb=level-storey]');
+    return { disabled: b?.disabled, title: b?.title, why: r?.querySelector('[data-bb=level-why]')?.textContent.trim() ?? null, storeyDisabled: c?.disabled, storeyTitle: c?.title }; })()`);
+  const r0d = await rm();
+  check(`${mode}: × on Fondations is disabled with the core's reason next to it (DEAD1)`, r0d.disabled === true && r0d.title === REFUSED && r0d.why === REFUSED, JSON.stringify(r0d));
+  check(`${mode}: Building storey of Fondations is disabled with the core's reason (DEAD1)`,
+    r0d.storeyDisabled === true && r0d.storeyTitle === "level_set: the level Fondations holds 12 elements: it stays a storey", JSON.stringify(r0d));
   await click(`[data-bb-level="${fd.id}"] [data-bb=level-remove]`);
-  await waitFor(`${mode}: the refusal`, 3000, async () => !!(await errText())).catch(() => {});
-  check(`${mode}: × on Fondations: the verb's refusal shown, the level kept, no step`,
-    (await errText()) === "level_remove: the level Fondations holds 12 elements: move or delete them first" && !!byName(await storeys(), "Fondations") && (await undoN()) === u2,
-    String(await errText()));
+  await sleep(300);
+  check(`${mode}: × on Fondations: the level kept, no step`, !!byName(await storeys(), "Fondations") && (await undoN()) === u2, String(await errText()));
+  const r3 = rowsDom && (await evalJs(`document.querySelector('[data-bb-level="${n3.id}"] [data-bb=level-remove]')?.disabled`));
+  check(`${mode}: × on the empty level is enabled`, r3 === false, String(r3));
   await click(`[data-bb-level="${n3.id}"] [data-bb=level-remove]`);
   await waitFor(`${mode}: Toiture removed`, 5000, async () => (await storeys()).length === 3).catch(() => {});
   await waitFor(`${mode}: three rows`, 5000, async () => (await rowsDom()).length === 3).catch(() => {});
