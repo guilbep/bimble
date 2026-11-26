@@ -93,6 +93,11 @@ CC=clang CFLAGS="-fsanitize=address,undefined" ccore/test/run.sh json      # ASa
 CC=clang CFLAGS="-fsanitize=memory -fno-omit-frame-pointer" CC_NO_KERNEL=1 ccore/test/run.sh json   # MSan
 ```
 
+The host program under the sanitizers (`ci/run.sh san` and `full` do it): `ccore/build.sh asan`
+(the host alone, clang -O1, ASan and UBSan, in `ccore/out/asan/`), then
+`ccore/test/san_host.sh host_test fs_test` (each node suite on that host, one at a time; any
+sanitizer report fails the suite and is printed).
+
 MSan needs every byte of code instrumented, so it runs without the kernel (`CC_NO_KERNEL=1`:
 manifold is C++ built without MSan). All 38 C suites under MSan: no MSan report (25 Nov); `ifc_in`
 and `ifc_read` fail their `deep_nesting` golden there, as with plain clang and `CC_NO_KERNEL=1`
