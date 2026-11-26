@@ -336,8 +336,15 @@ static int parse_head(const char *p, size_t len, Head *h) {
             if (!colon) return H_MALFORMED;
             Str k = trim((Str){line.p, (size_t)(colon - line.p)});
             Str v = trim((Str){colon + 1, line.n - (size_t)(colon - line.p) - 1});
-            if (ieq(k, "origin")) h->origin = v, h->has_origin = 1;
-            else if (ieq(k, "host")) h->host = v, h->has_host = 1;
+            /* FIXSES: a second Host or Origin is malformed (Rust keeps the last one): which one a
+             * proxy or a browser checked is not known, so neither is trusted (DEVIATIONS 31). */
+            if (ieq(k, "origin")) {
+                if (h->has_origin) return H_MALFORMED;
+                h->origin = v, h->has_origin = 1;
+            } else if (ieq(k, "host")) {
+                if (h->has_host) return H_MALFORMED;
+                h->host = v, h->has_host = 1;
+            }
             else if (ieq(k, "content-length")) {
                 uint64_t n;
                 if (!parse_u64(v, &n)) return H_MALFORMED;

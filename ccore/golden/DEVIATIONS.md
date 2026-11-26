@@ -1064,3 +1064,31 @@ the kernel's within 1e-6 (`test/prism_cut_test.c` with and without the kernel in
 L slab, a shaft touching the outline, a mesh host) stays uncut with the warning `<class> <name>:
 N opening(s) not cut (no boolean kernel in the C core)`. In the goldens, the one opening
 (`ifc/import/opening.json`: a wall and a box window) is case (a); `frame2.json` has no opening.
+
+## 31. Unsaved work and the host's guards (ticket FIXSES)
+
+- **The session file is set aside, never overwritten (a C addition: Rust has no session file).**
+  A session file the host cannot keep whole (written for another model path, a model file changed
+  since, a line that does not replay) and that holds steps not saved is renamed
+  `<session>.orphan-<unix time>` (its model side files with it) before a new snapshot is written.
+  `query state` then has the C-only field `session_set_aside` (the path; left out when none, so
+  every other state answer keeps its bytes). A model path spelt otherwise (`m.json`, `./m.json`)
+  is the same model once the carrier resolved both (`session/session.c` `same_model_path`,
+  `set_aside`).
+- **Switch and merge refuse a link not saved.** Rust's linked models live in the viewer and
+  survive a branch switch; the C core keeps them in the `.bimble` (section 29) and a switch or a
+  merge reopens the working file, so `branch_switch` answers 400 `links changed and not saved:
+  save them first, or send {"discard": true}` and `merge` 400 `links changed and not saved: save
+  them first` (`session/versions.c`).
+- **A switch or merge whose working file cannot be written changes nothing.** Rust (`lib.rs:2082`)
+  moves HEAD, keeps the new model in memory and shows the save error (the model then unsaved). The
+  C session's model is its file: the call answers 400 `<path>: cannot write` and HEAD (switch) or
+  HEAD's ref (merge; the merge commit stays unreferenced in the store) is put back.
+- **Export and share of a new model need a path.** Rust asks where with a dialog. The C host has
+  none: `export_ifc4`, `export_ifc2x3` and `share_for_viewing` of an untitled model without
+  `path` answer 400 (before, `Untitled.<ext>` was written in the host's working folder). The wasm
+  module, without files, still writes under the current name. The "never over the open file"
+  check compares the resolved paths too (`session/calls.c` `is_open_file`).
+- **A second `Host` or `Origin` header is malformed (400).** Rust's `read_head` (`serve.rs:164`)
+  keeps the last one; which one a proxy or a browser checked is not known, so the C host trusts
+  neither (`host/server.c` `parse_head`).

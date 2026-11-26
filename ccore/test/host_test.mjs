@@ -155,6 +155,23 @@ try {
   check("one-word request line -> 400 and connection closed", g2.closed && status(g2.out) === 400, g2.out.split("\r\n")[0]);
   const big2 = await raw(`GET /x HTTP/1.1\r\n${"X-A: b\r\n".repeat(3000)}\r\n`);
   check("header block > 16 KiB -> 431", status(big2.out) === 431, big2.out.split("\r\n")[0]);
+  // FIXSES: the request smuggling guards (server.c parse_head): a Transfer-Encoding header, two
+  // Content-Length that differ, and (new) a second Host or Origin are malformed: 400, closed.
+  // Before, removing either of the first two guards passed every test.
+  const smug = [
+    ["Transfer-Encoding: chunked", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n`],
+    ["Transfer-Encoding with a Content-Length", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n{}`],
+    ["two Content-Length that differ", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nContent-Length: 2\r\nContent-Length: 0\r\n\r\n{}`],
+    ["two Host (another, then ours)", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: evil.example\r\nHost: ${HOST}\r\nContent-Length: 0\r\n\r\n`],
+    ["two Host (ours twice)", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nhost: ${HOST}\r\nContent-Length: 0\r\n\r\n`],
+    ["two Origin (another, then an allowed one)", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nOrigin: http://evil.example\r\nOrigin: http://localhost:5173\r\nContent-Length: 0\r\n\r\n`],
+  ];
+  for (const [what, text] of smug) {
+    const r = await raw(text);
+    check(`${what} -> 400 and connection closed`, r.closed && status(r.out) === 400, r.out.split("\r\n")[0]);
+  }
+  const same = await raw(`POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nContent-Length: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+  check("two Content-Length that agree -> 200", status(same.out) === 200, same.out.split("\r\n")[0]);
   const alive = await call("query", "state");
   check("server alive after garbage", alive.status === 200);
 
