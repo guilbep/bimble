@@ -63,6 +63,12 @@ async function cleanup() {
   }
   rmSync(tmp, { recursive: true, force: true });
 }
+// the temporary folder (six IFC of 16 MB, their caches, Chromium's profile) goes on a signal too
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { cleanup().finally(() => process.exit(130)); });
+process.on("exit", () => {
+  for (const p of procs) if (p.exitCode === null && p.signalCode === null) try { process.kill(-p.pid, "SIGKILL"); } catch {}
+  try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+});
 async function waitFor(what, ms, fn) {
   const until = Date.now() + ms;
   let last;

@@ -3,13 +3,13 @@
 // Each link is bench/mesh_heavy_model.py's model (golden/frame.json plus `proxies` closed meshes of about
 // `tris` triangles), its GlobalIds rewritten per link (SHA-256 of "lnk3d/<k>/<id>" in the IFC
 // alphabet, first character 0-3) so no two links share an id, opened in a running host and exported
-// as IFC4 (action export_ifc4): link_<k>.ifc in `dir`. Deterministic but for the IFC header's timestamp.
+// as IFC4 (action export_ifc4): link_<k>.ifc in `dir`; the intermediate models in `work` are removed (also on failure). Deterministic but for the IFC header's timestamp.
 // `unique`: each closed mesh's vertices moved by their own few mm ((5 j + 3 i + axis) mod 7, j the mesh, i
 // the vertex; its first two vertices by j mod 13 and j / 13 mod 13 more: not an affine map of another), so no two are copies of one shape (an imported folder's
 // geometry is mostly unique: no instancing, every triangle in the GPU's buffers).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,11 +49,16 @@ export async function makeLinkFolder({ hcall, dir, work, n, proxies = 96, tris =
     });
     const src = join(work, `lnk3d-link-${k}.json`), out = resolve(dir, `link_${k}.ifc`);
     writeFileSync(src, t);
-    let r = await hcall("action", "open", { path: src, discard: true });
-    if (r.status !== 200) throw new Error(`open ${src}: ${r.text}`);
-    r = await hcall("action", "export_ifc4", { path: out });
-    if (r.status !== 200) throw new Error(`export_ifc4: ${r.text}`);
+    try {
+      let r = await hcall("action", "open", { path: src, discard: true });
+      if (r.status !== 200) throw new Error(`open ${src}: ${r.text}`);
+      r = await hcall("action", "export_ifc4", { path: out });
+      if (r.status !== 200) throw new Error(`export_ifc4: ${r.text}`);
+    } finally {
+      rmSync(src, { force: true }); // its model only fed the export (the IFC stays, in `dir`)
+    }
     files.push(out);
   }
+  rmSync(base, { force: true });
   return files;
 }

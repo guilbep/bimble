@@ -128,6 +128,15 @@ async function cleanup() {
   for (const p of procs) await stop(p);
   rmSync(tmp, { recursive: true, force: true });
 }
+// LNK3D: the temporary folder (models, links, their caches, Chromium's profile: GBs in /tmp, which is memory
+// here) goes on every exit: a signal (timeout, Ctrl-C) too, and a crash; the children are killed first
+let cleaning = false;
+const onSignal = (sig) => { if (cleaning) return; cleaning = true; log(`${sig}: cleaning up`); cleanup().finally(() => process.exit(130)); };
+process.on("SIGINT", onSignal), process.on("SIGTERM", onSignal), process.on("SIGHUP", onSignal);
+process.on("exit", () => {
+  for (const p of procs) if (p.exitCode === null && p.signalCode === null) try { process.kill(-p.pid, "SIGKILL"); } catch { /* gone */ }
+  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
+});
 async function waitFor(what, ms, fn, every = 100) {
   const until = Date.now() + ms;
   let last;
