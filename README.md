@@ -19,7 +19,7 @@ and as an MCP server for agents (ADR 0067–0069, ADR 0072).
 <!-- status:begin -->
 <!-- Written by `node ccore/tools/status.mjs --write` from ccore/results/. Do not edit between the markers: `ci/run.sh unit` checks them. -->
 
-## Status (version `0.1.0-preview.3`)
+## Status (version `0.1.0-preview.4`)
 
 A preview. Each number is copied from a generated report under `ccore/results/`; the sources and
 the conditions of each number are listed under the list.
@@ -44,7 +44,7 @@ the conditions of each number are listed under the list.
   (Ctrl N: the browser keeps it). The Rust answers were dumped from a development build that
   reports `bimble 0.18.1`, not from v0.19.0.
   6 controls still shown are not served by the C core; the report lists them.
-- **Size** [3]: 63,988 lines of C; the viewer wasm 474,452 bytes (222,856 gzip, 47.4 % of
+- **Size** [3]: 67,381 lines of C; the viewer wasm 474,452 bytes (222,856 gzip, 47.4 % of
   its 1,000,000-byte limit), the editor wasm 1,141,885 bytes (465,526 gzip), the native program
   3,280,328 bytes (stripped), the Linux aarch64 release archive 2,729,221 bytes.
   That archive was built on the dev machine with a stale `web/ccore/` copy inside (1,665,828 bytes
