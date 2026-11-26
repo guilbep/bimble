@@ -50,6 +50,10 @@ typedef struct {
     cc_gidset by_view;
     size_t view_lists;
     /* ---- end SEC1 ---- */
+    /* ---- ISS72 ---- the Show previous stacks (below), one per view, oldest first */
+    struct cc_vis_prev *prev;
+    size_t nprev, capprev;
+    /* ---- end ISS72 ---- */
 } cc_vis;
 
 void cc_vis_init(cc_vis *v);
@@ -86,4 +90,33 @@ void cc_vis_sets_json(const cc_vis *v, JsonW *w);
 int cc_vis_tool(cc_vis *v, const char *name, const char *body, size_t n, Buf *out);
 /* 1 if `name` is one of the box tool's calls. */
 int cc_vis_tool_name(const char *name);
+
+/* ---- ISS72 ---- Show all and Show previous (GitHub issue #72; C additions, DEVIATIONS 24).
+ * A visibility state: what is hidden or isolated for now (the temporary set) and what the view
+ * stores (hidden_elements, isolated_elements and its family, class, storey, link and material
+ * lists). The reveal switch and the section box are not part of it. Behaviour: calls.c, ISS72. */
+#define CC_VIS_PREV_MAX 32 /* states kept per view */
+typedef struct {
+    int has_temp, temp_isolate;
+    cc_gidset temp, hidden, isolated;
+    Buf lists; /* the view's five other lists, packed (visibility.c) */
+} cc_vis_state;
+/* The state now: `v`'s sets and the view's lists `lists` (NULL: none, a read-only scene). A hide
+ * for now that hides nothing is no temporary state. 0 ok, -1 out of memory (`out` freed). */
+int cc_vis_capture(const cc_vis *v, const cc_visibility *lists, cc_vis_state *out);
+void cc_vis_state_free(cc_vis_state *st);
+int cc_vis_state_eq(const cc_vis_state *a, const cc_vis_state *b);
+/* The state's temporary and element sets become `v`'s (the view's lists: cc_vis_state_lists).
+ * 0 ok, -1 out of memory. */
+int cc_vis_restore(cc_vis *v, const cc_vis_state *st);
+/* The state's five other lists into `out` (hidden_families … hidden_materials; strings in `a`);
+ * the element lists are left as they are. 0 ok, -1 out of memory. */
+int cc_vis_state_lists(const cc_vis_state *st, Arena *a, cc_visibility *out);
+/* The stack of the view `view`: push takes `st` (moved: the caller's copy is emptied), the oldest
+ * state of that view goes past CC_VIS_PREV_MAX; top is NULL when empty; pop frees the top. */
+int cc_vis_prev_push(cc_vis *v, const cc_gid *view, cc_vis_state *st);
+const cc_vis_state *cc_vis_prev_top(const cc_vis *v, const cc_gid *view);
+void cc_vis_prev_pop(cc_vis *v, const cc_gid *view);
+size_t cc_vis_prev_count(const cc_vis *v, const cc_gid *view);
+/* ---- end ISS72 ---- */
 #endif

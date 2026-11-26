@@ -3,7 +3,7 @@
 // from web-ui/ on 5191 (needs web-ui/node_modules: `npm ci` there), headless /usr/bin/chromium
 // over raw CDP; opens /?native=1&port=47312&token=…, waits for the first change to reach the page
 // and checks: no uncaught page error; no console error but the listed ones; startError is null;
-// the ribbon renders with tools; the page holds the host's 54 actions. Prints
+// the ribbon renders with tools; the page holds the host's 56 actions (Rust's 54 + ISS72's 2). Prints
 // "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -148,7 +148,7 @@ async function main() {
   const startError = await bb("b.startError.value");
   check("startError is null", startError === null, String(startError));
   const n = await bb("b.actions.value.length");
-  check("page holds 54 actions", booted && n === 54, String(n));
+  check("page holds 56 actions (Rust's 54 + ISS72's show_all, show_previous)", booted && n === 56, String(n));
   const stateFile = await bb("JSON.stringify(b.state.value)");
   console.log(`page state: ${stateFile}`);
   const ribbon = await evalJs("(() => { const r = document.querySelector('[data-bb=ribbon]'); return r ? r.querySelectorAll('[data-bb^=ribbon-tool-]').length : -1; })()");

@@ -7,6 +7,11 @@
 //     element (bounds of GET /mesh plus ClipBox::around's margin, f32), printed as serde prints f32;
 //   the box tool (op tool): box_set, box_press/box_move/box_release/box_cancel (a face follows the
 //     pointer ray, 10 mm minimum; the session's box changes only on release);
+//   ISS72 (GitHub issue #72, C additions): show_all (everything shown: clear_temporary + show_all_in_view,
+//     one undo step when the view stored something) and show_previous (the state before the last
+//     visibility change; pressed twice: back and forth), their enable rules, a stack per view,
+//     cleared by another model, the stored part undoable; on the code before ISS72 both answer
+//     400 "unknown action" and every ISS72 check fails;
 //   session state only: rev and history never change, but for the "in view" calls: since SEC1 they
 //     store what the view hides in the view, one history step each, as Rust's save_visibility and
 //     show_all_in_view (viewing.rs:452-500: store_view, a SetView / AddView); a new model resets it all.
@@ -115,7 +120,8 @@ try {
   // ---- nothing hidden, no box ----
   await same("loaded", vis({}));
   check("loaded: view signature [0,0,0,0,0,0,0,1]", (await view()) === "[0,0,0,0,0,0,0,1]", await view());
-  for (const n of ["hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide", "clear_temporary", "show_all_in_view", "box_to_selection"])
+  for (const n of ["hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide", "clear_temporary", "show_all_in_view", "box_to_selection",
+    "show_all", "show_previous" /* ISS72 */])
     check(`no selection, nothing hidden: ${n} disabled`, !(await enabled(n)));
   check("section_box and reveal_hidden enabled with a model", (await enabled("section_box")) && (await enabled("reveal_hidden")));
   const off = await act("hide_now");
@@ -242,6 +248,73 @@ try {
   check("rev unchanged by every other visibility call", (await change()).rev === rev1, `${rev1} -> ${(await change()).rev}`);
   check("no other history step", (await q("history")) === hist1, await q("history"));
 
+  // ---- ISS72: show all, show previous ----
+  const v3dId = JSON.parse(await q("open_views")).views[0].id;
+  const ok = async (name) => { const r = await act(name); check(`${name} -> 200`, r.status === 200, `${r.status} ${r.text}`); };
+  const undoN = async () => JSON.parse(await q("history")).undo.length;
+  await call("select", "-", "[]");
+  const box9 = JSON.parse(await q("visibility")).section_box.box; // the box (off) the drag left: not part of a visibility state
+  const visB = (o) => vis({ ...o, box: { min: box9.min, max: box9.max } });
+  check("ISS72: before: nothing hidden, show_all disabled", (await q("visibility")).includes('"hidden_now":{"count":0') && !(await enabled("show_all")));
+  const acts = JSON.parse(await q("actions")).slice(-2);
+  check("ISS72: query actions lists show_all, show_previous last (View, no shortcut, never pressed)",
+    JSON.stringify(acts.map((x) => [x.name, x.label, x.tab, x.shortcut, x.pressed])) ===
+    JSON.stringify([["show_all", "Show all", "View", null, false], ["show_previous", "Show previous", "View", null, false]]), JSON.stringify(acts));
+  // hide A -> isolate B -> previous = A hidden only -> previous = B isolated -> show all = everything
+  await call("select", "-", JSON.stringify([a]));
+  await ok("hide_now");
+  check("ISS72: something hidden for now: show_all enabled", await enabled("show_all"));
+  await call("select", "-", JSON.stringify([b]));
+  await ok("isolate_now");
+  const u0 = await undoN();
+  await ok("show_previous");
+  await same("ISS72: hide a, isolate b, show_previous: a hidden only", visB({ hiddenNow: [a] }));
+  await ok("show_previous");
+  await same("ISS72: show_previous again: b isolated (back and forth)", visB({ isolatedNow: [b] }));
+  await ok("show_all");
+  await same("ISS72: show_all: everything shown", visB({}));
+  check("ISS72: show_all disabled now, show_previous enabled", !(await enabled("show_all")) && (await enabled("show_previous")));
+  check("ISS72: the for-now changes made no history step", (await undoN()) === u0, `${u0} -> ${await undoN()}`);
+  await ok("show_previous");
+  await same("ISS72: show_previous after show_all: b isolated again", visB({ isolatedNow: [b] }));
+  await ok("show_all");
+  // In the view and for now at once: show_all clears both, one undo step; show_previous brings both back.
+  await call("select", "-", JSON.stringify([c]));
+  await ok("hide_in_view");
+  await call("select", "-", JSON.stringify([d]));
+  await ok("hide_now");
+  await same("ISS72: c hidden in the view, d for now", visB({ hiddenInView: [c], hiddenNow: [d] }));
+  const u1 = await undoN();
+  await ok("show_all");
+  await same("ISS72: show_all clears the view's hides and the temporary ones", visB({}));
+  check("ISS72: show_all: one undo step (stored in the view)", (await undoN()) === u1 + 1 && JSON.parse(await q("history")).undo[0] === "change the view 3D",
+    `${u1} -> ${await undoN()}`);
+  await ok("show_previous");
+  await same("ISS72: show_previous: c in the view and d for now again", visB({ hiddenInView: [c], hiddenNow: [d] }));
+  check("ISS72: show_previous: the stored part is one more undo step", (await undoN()) === u1 + 2, `${u1} -> ${await undoN()}`);
+  // Undo takes back the stored part of show_previous (the temporary part is session state).
+  await call("undo");
+  await same("ISS72: undo of show_previous's step: the view's hides as show_all left them", visB({ hiddenNow: [d] }));
+  await call("redo");
+  await same("ISS72: redo: c hidden in the view again", visB({ hiddenInView: [c], hiddenNow: [d] }));
+  check("ISS72: in view only: show_all enabled", (await act("clear_temporary")).status === 200 && (await enabled("show_all")));
+  await ok("show_all");
+  await same("ISS72: show_all with the view's hides only", visB({}));
+  // A stack per view: a plan has its own (empty at first); the 3D view's is kept.
+  const ov = JSON.parse(await q("open_views")), v3d = ov.views[0].id, plan = ov.views[2].id;
+  const tab = (op, id) => call("tab", "-", JSON.stringify({ op, tab: { type: "view", id } }));
+  check("ISS72: open a plan -> 200", (await tab("open", plan)).status === 200);
+  check("ISS72: the plan's stack is empty: show_previous disabled there", !(await enabled("show_previous")));
+  await call("select", "-", JSON.stringify([a]));
+  await ok("hide_now");
+  await ok("show_previous");
+  await same("ISS72: in the plan, show_previous: back to nothing hidden", visB({}));
+  check("ISS72: back to the 3D view -> 200", (await tab("activate", v3d)).status === 200);
+  check("ISS72: the 3D view's stack is still there: show_previous enabled", await enabled("show_previous"));
+  await ok("show_previous");
+  await same("ISS72: the 3D view's previous state (c hidden in the view)", visB({ hiddenInView: [c] }));
+  await ok("show_all");
+
   // ---- a new model: all reset ----
   await call("select", "-", JSON.stringify([a]));
   await act("hide_in_view");
@@ -252,6 +325,8 @@ try {
   check("new model: nothing hidden, no box (lib.rs:1657-1676)",
     vNew.hidden_in_view.count === 0 && vNew.section_box.on === false && vNew.section_box.box === null, JSON.stringify(vNew));
   check("new model: view [0,0,0,0,0,0,0,1]", (await view()) === "[0,0,0,0,0,0,0,1]", await view());
+  check("ISS72: new model: the stacks are cleared (show_previous disabled; its 3D view has the same id)",
+    !(await enabled("show_previous")) && !(await enabled("show_all")) && JSON.parse(await q("open_views")).views[0].id === v3dId);
   const closed = await call("action", "close", JSON.stringify({ discard: true }));
   check("close (discarding the new model) -> 200", closed.status === 200, closed.text);
   const none = await call("tool", "box_press", JSON.stringify({ ray: ray(top) }));

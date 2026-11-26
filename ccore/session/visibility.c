@@ -57,6 +57,8 @@ static int set_copy(cc_gidset *s, const cc_gid *g, size_t n) {
 
 /* ---- state ---- */
 
+static void prev_clear(cc_vis *v); /* ISS72 */
+
 void cc_vis_init(cc_vis *v) {
     memset(v, 0, sizeof *v);
     v->drag_face = -1;
@@ -65,6 +67,7 @@ void cc_vis_init(cc_vis *v) {
 void cc_vis_free(cc_vis *v) {
     free(v->hidden.v), free(v->isolated.v), free(v->temp.v);
     free(v->by_view.v); /* SEC1 */
+    prev_clear(v), free(v->prev); /* ISS72 */
     cc_vis_init(v);
 }
 
@@ -74,6 +77,7 @@ void cc_vis_reset(cc_vis *v) {
     v->has_temp = v->temp_isolate = v->reveal = 0;
     v->section_on = v->has_box = 0;
     v->drag_face = -1;
+    prev_clear(v); /* ISS72: the Show previous stacks belong to the model that was open */
 }
 
 int cc_vis_hidden(const cc_vis *v, const cc_gid *g) {
@@ -499,3 +503,181 @@ answer:
     tool_json(v, out);
     return out->oom ? 400 : 200;
 }
+
+/* ---- ISS72 ---- Show all and Show previous (GitHub issue #72; visibility.h, calls.c ISS72).
+ *
+ * The issue: Isolate and Reveal hidden work; missing are "Show all" (back to everything visible)
+ * and "Show previous" (back to the visibility before the last hide or isolate). Both are C
+ * additions (Rust has neither; DEVIATIONS 24). The behaviour:
+ *
+ *   A visibility state = the temporary set (hidden or isolated for now, session only) + what the
+ *   active view stores (hidden_elements, isolated_elements, and its family, class, storey, link
+ *   and material lists). Reveal hidden (a display switch) and the section box are not part of it.
+ *
+ *   show_all: everything visible in the current view, whatever hid it: clear_temporary, then
+ *     show_all_in_view (the view's lists cleared and stored: one undo step when the view stored
+ *     something, none otherwise; a read-only scene keeps "in view" in the session). Enabled when
+ *     something is hidden (a temporary state, or anything stored in the view). The issue asks for
+ *     one button that always ends with everything shown ("revenir à la situation où on voit
+ *     tout"); Rust's two partial actions (clear_temporary, show_all_in_view) each leave the other
+ *     part hidden, so show_all is both, in that order.
+ *   show_previous: the state before the last visibility change of this view. Each action that
+ *     changes the state (hide_now, isolate_now, hide_in_view, isolate_in_view, unhide,
+ *     clear_temporary, show_all_in_view, show_all, show_previous) pushes the state it left on the
+ *     view's stack (an action that changes nothing pushes nothing). show_previous pops the top,
+ *     pushes the state it leaves, and restores the popped one: pressed twice it goes back and
+ *     forth between the last two states ("previous view" in CAD tools). The stored part is
+ *     restored as any "in view" change (one view_edit, one undo step; nothing stored changed: no
+ *     step). Enabled when this view's stack is not empty.
+ *   The stacks: one per view (by view id), CC_VIS_PREV_MAX (32) states each, the oldest dropped;
+ *   session state (not saved, not in the session file: the stored part's steps are); cleared when
+ *   a model is loaded or closed (cc_vis_reset). Undo and redo are not visibility actions: they
+ *   push nothing (an undone in-view change is undone in the model; show_previous then restores the
+ *   state before the last action, which is one more step). */
+
+struct cc_vis_prev {
+    cc_gid view;
+    cc_vis_state st;
+};
+
+static int set_dup(cc_gidset *d, const cc_gidset *s) {
+    memset(d, 0, sizeof *d);
+    if (!s->n) return 0;
+    d->v = malloc(s->n * sizeof *d->v);
+    if (!d->v) return -1;
+    memcpy(d->v, s->v, s->n * sizeof *d->v);
+    d->n = d->cap = s->n;
+    return 0;
+}
+
+static int set_eq(const cc_gidset *a, const cc_gidset *b) {
+    return a->n == b->n && (!a->n || !memcmp(a->v, b->v, a->n * sizeof *a->v));
+}
+
+static int set_assign(cc_gidset *d, const cc_gidset *s) {
+    d->n = 0;
+    if (s->n > d->cap) {
+        cc_gid *p = realloc(d->v, s->n * sizeof *p);
+        if (!p) return -1;
+        d->v = p, d->cap = s->n;
+    }
+    if (s->n) memcpy(d->v, s->v, s->n * sizeof *d->v);
+    d->n = s->n;
+    return 0;
+}
+
+static void put_u32(Buf *b, size_t x) {
+    unsigned char c[4] = {(unsigned char)x, (unsigned char)(x >> 8), (unsigned char)(x >> 16), (unsigned char)(x >> 24)};
+    buf_append(b, (const char *)c, 4);
+}
+
+static size_t get_u32(const unsigned char *p) { return (size_t)p[0] | (size_t)p[1] << 8 | (size_t)p[2] << 16 | (size_t)p[3] << 24; }
+
+void cc_vis_state_free(cc_vis_state *st) {
+    free(st->temp.v), free(st->hidden.v), free(st->isolated.v);
+    buf_free(&st->lists);
+    memset(st, 0, sizeof *st);
+}
+
+int cc_vis_capture(const cc_vis *v, const cc_visibility *lists, cc_vis_state *out) {
+    memset(out, 0, sizeof *out);
+    buf_init(&out->lists);
+    out->has_temp = v->has_temp && (v->temp_isolate || v->temp.n);
+    out->temp_isolate = out->has_temp && v->temp_isolate;
+    if ((out->has_temp && set_dup(&out->temp, &v->temp)) || set_dup(&out->hidden, &v->hidden) || set_dup(&out->isolated, &v->isolated))
+        return cc_vis_state_free(out), -1;
+    if (lists) {
+        const cc_strs *l[5] = {&lists->hidden_families, &lists->hidden_classes, &lists->hidden_storeys, &lists->hidden_links,
+                               &lists->hidden_materials};
+        for (int k = 0; k < 5; k++) {
+            put_u32(&out->lists, l[k]->n);
+            for (size_t i = 0; i < l[k]->n; i++) put_u32(&out->lists, l[k]->v[i].n), buf_append(&out->lists, l[k]->v[i].p, l[k]->v[i].n);
+        }
+    }
+    if (out->lists.oom) return cc_vis_state_free(out), -1;
+    return 0;
+}
+
+int cc_vis_state_eq(const cc_vis_state *a, const cc_vis_state *b) {
+    return a->has_temp == b->has_temp && a->temp_isolate == b->temp_isolate && set_eq(&a->temp, &b->temp) &&
+           set_eq(&a->hidden, &b->hidden) && set_eq(&a->isolated, &b->isolated) &&
+           a->lists.len == b->lists.len && (!a->lists.len || !memcmp(a->lists.p, b->lists.p, a->lists.len));
+}
+
+int cc_vis_restore(cc_vis *v, const cc_vis_state *st) {
+    if (set_assign(&v->temp, &st->temp) || set_assign(&v->hidden, &st->hidden) || set_assign(&v->isolated, &st->isolated)) return -1;
+    v->has_temp = st->has_temp, v->temp_isolate = st->temp_isolate;
+    return 0;
+}
+
+int cc_vis_state_lists(const cc_vis_state *st, Arena *a, cc_visibility *out) {
+    cc_strs *l[5] = {&out->hidden_families, &out->hidden_classes, &out->hidden_storeys, &out->hidden_links, &out->hidden_materials};
+    const unsigned char *p = (const unsigned char *)st->lists.p, *end = p + st->lists.len;
+    for (int k = 0; k < 5; k++) {
+        l[k]->v = NULL, l[k]->n = 0;
+        if (end - p < 4) continue; /* a read-only scene's state: no lists */
+        size_t n = get_u32(p);
+        p += 4;
+        cc_str *v = arena_alloc(a, (n ? n : 1) * sizeof *v, _Alignof(cc_str));
+        if (!v) return -1;
+        for (size_t i = 0; i < n; i++) {
+            size_t len = get_u32(p);
+            char *s = arena_dup(a, (const char *)p + 4, len);
+            if (!s) return -1;
+            v[i].p = s, v[i].n = len;
+            p += 4 + len;
+        }
+        l[k]->v = v, l[k]->n = n;
+    }
+    return 0;
+}
+
+size_t cc_vis_prev_count(const cc_vis *v, const cc_gid *view) {
+    size_t n = 0;
+    for (size_t i = 0; i < v->nprev; i++) n += !cc_gid_cmp(&v->prev[i].view, view);
+    return n;
+}
+
+static void prev_drop(cc_vis *v, size_t i) {
+    cc_vis_state_free(&v->prev[i].st);
+    memmove(v->prev + i, v->prev + i + 1, (v->nprev - i - 1) * sizeof *v->prev);
+    v->nprev--;
+}
+
+int cc_vis_prev_push(cc_vis *v, const cc_gid *view, cc_vis_state *st) {
+    if (cc_vis_prev_count(v, view) >= CC_VIS_PREV_MAX)
+        for (size_t i = 0; i < v->nprev; i++)
+            if (!cc_gid_cmp(&v->prev[i].view, view)) {
+                prev_drop(v, i);
+                break;
+            }
+    if (v->nprev == v->capprev) {
+        size_t c = v->capprev ? 2 * v->capprev : 8;
+        struct cc_vis_prev *p = realloc(v->prev, c * sizeof *p);
+        if (!p) return cc_vis_state_free(st), -1;
+        v->prev = p, v->capprev = c;
+    }
+    v->prev[v->nprev].view = *view;
+    v->prev[v->nprev++].st = *st;
+    memset(st, 0, sizeof *st);
+    return 0;
+}
+
+const cc_vis_state *cc_vis_prev_top(const cc_vis *v, const cc_gid *view) {
+    for (size_t i = v->nprev; i-- > 0;)
+        if (!cc_gid_cmp(&v->prev[i].view, view)) return &v->prev[i].st;
+    return NULL;
+}
+
+void cc_vis_prev_pop(cc_vis *v, const cc_gid *view) {
+    for (size_t i = v->nprev; i-- > 0;)
+        if (!cc_gid_cmp(&v->prev[i].view, view)) {
+            prev_drop(v, i);
+            return;
+        }
+}
+
+static void prev_clear(cc_vis *v) {
+    while (v->nprev) prev_drop(v, v->nprev - 1);
+}
+/* ---- end ISS72 ---- */

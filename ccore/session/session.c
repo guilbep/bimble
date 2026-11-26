@@ -1180,6 +1180,7 @@ static int restore(cc_session *s, size_t *keep, int *rewrite) {
     }
     *keep = at;
     P->log_bytes = at - P->snap_bytes, P->log_entries = ok;
+    cc_sv_vis_load(s); /* ISS72: what the active view hides, as the restored steps left it (SEC1's rebuild does it after a live edit) */
     if (at < n)
         cc_log(s->pf, "bimble-ccore: session %s ignored: from line %zu: %s; kept the snapshot and %zu entries",
                 P->sess_path, ok + 2, why, ok);

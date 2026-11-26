@@ -12,7 +12,7 @@
 //   host     the host call layer in the module (call, change_json, host_open_text, host_mesh,
 //            host_saved; ticket T13b) against the native host (out/tcc/bimble-ccore or $HOST_BIN,
 //            port 47351, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
-//            actions: 54 rows), open frame.json, the same calls on both (select, verb place,
+//            actions: 56 rows: Rust's 54 + ISS72's 2), open frame.json, the same calls on both (select, verb place,
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh; ticket E1:
 //            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename;
@@ -474,7 +474,7 @@ suite("host");
     const st0 = hcall("query", "state", "{}");
     check("boot: query state -> 200, no file", st0.status === 200 && JSON.parse(st0.text).file === null, st0.text);
     const ac0 = hcall("query", "actions", "{}");
-    check("boot: query actions -> 54 rows", ac0.status === 200 && JSON.parse(ac0.text).length === 54, ac0.text.slice(0, 200));
+    check("boot: query actions -> 56 rows (Rust's 54 + ISS72's 2)", ac0.status === 200 && JSON.parse(ac0.text).length === 56, ac0.text.slice(0, 200));
     check("unknown op -> 404", hcall("nope").status === 404);
     check("host_saved before a save -> 404", call(X.host_saved, []).status === 404);
 
@@ -519,6 +519,9 @@ suite("host");
       ["query", "visibility_sets", "{}"], ["query", "actions", "{}"], ["action", "section_box", ""], ["query", "visibility", "{}"],
       ["select", "-", JSON.stringify([firstId])], ["action", "unhide", ""], ["action", "isolate_in_view", ""], ["action", "box_to_selection", ""],
       ["query", "visibility", "{}"], ["action", "show_all_in_view", ""], ["action", "reveal_hidden", ""], ["query", "actions", "{}"],
+      // ISS72: show_previous (back before show_all_in_view), show_all, show_previous again
+      ["action", "show_previous", ""], ["query", "visibility_sets", "{}"], ["action", "show_all", ""], ["query", "visibility_sets", "{}"],
+      ["action", "show_previous", ""], ["query", "visibility_sets", "{}"], ["query", "actions", "{}"], ["action", "show_all", ""],
       ["tool", "box_set", JSON.stringify({ min: [0, 0, 0], max: [8000.5, 6000.25, 3000.1], on: true })],
       ["tool", "box_press", JSON.stringify({ ray: [-5000, 3000, 9000, 0.8320502943378437, 0, -0.5547001962252291], ray_tol: [-5000, 3150, 9000, 0.8320502943378437, 0, -0.5547001962252291] })],
       ["tool", "box_move", JSON.stringify({ ray: [-5000, 3000, 9000, 0.8, 0, -0.6] })], ["query", "visibility", "{}"],

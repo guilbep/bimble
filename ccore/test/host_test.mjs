@@ -100,9 +100,10 @@ try {
   let actions = [];
   try { actions = JSON.parse(ac.body); } catch {}
   const ORDER = JSON.stringify(["enabled", "label", "name", "pressed", "shortcut", "tab"]);
-  check("query actions -> 54 rows", ac.status === 200 && actions.length === 54, `${actions.length}`);
+  check("query actions -> 56 rows (Rust's 54, then ISS72's show_all, show_previous)", ac.status === 200 && actions.length === 56 &&
+    JSON.stringify(actions.slice(54).map((a) => a.name)) === '["show_all","show_previous"]', `${actions.length}`);
   check("query actions key order (calls.rs:325, json! sorted)", actions.length > 0 && actions.every((a) => JSON.stringify(Object.keys(a)) === ORDER));
-  check("query actions: unique names", new Set(actions.map((a) => a.name)).size === 54);
+  check("query actions: unique names", new Set(actions.map((a) => a.name)).size === 56);
   const enabled = actions.filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   // No model: save, undo, redo, place_* and export_ifc* need one (ribbon.rs:577-590); new, open
   // and import_ifc are always on (ribbon.rs:559; the C core runs them since ticket A5).

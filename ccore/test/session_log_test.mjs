@@ -9,7 +9,8 @@
 // restore from it does not read the model file (its content replaced by garbage of the same size and
 // mtime still restores). A side file that does not match (one byte changed, or missing) is ignored,
 // logged, and the model file opened. An old format-2 file (the model as JSON text in the line) still
-// restores. Prints "N passed, M failed".
+// restores. ISS72: the stored steps of hide_in_view, show_all, show_previous replay, and what the
+// view hides is read back after the restore. Prints "N passed, M failed".
 import { execFileSync, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -93,6 +94,18 @@ try {
   await stop(h, "SIGKILL");
   h = await startHost();
   check("after save + changes + SIGKILL: same state", (await state()) === s2);
+  // ISS72: hide in the view, Show all, Show previous: their stored steps are replayed, and the
+  // view's hides are read back after the restore (before ISS72 the session showed nothing hidden).
+  const e0 = (await q("elements", { limit: 1 }))[0].id;
+  await call("select", "-", JSON.stringify([e0]));
+  const st72 = [];
+  for (const a of ["hide_in_view", "show_all", "show_previous"]) st72.push(`${a} ${(await call("action", a)).status}`);
+  const v72 = JSON.stringify(await q("visibility_sets")), s72 = await state();
+  await stop(h, "SIGKILL");
+  h = await startHost();
+  check("ISS72: hide_in_view, show_all, show_previous; SIGKILL then restart: the view's hides and the steps back",
+    st72.join(",") === "hide_in_view 200,show_all 200,show_previous 200" && v72.includes(`"hidden_in_view":["${e0}"]`) &&
+    JSON.stringify(await q("visibility_sets")) === v72 && (await state()) === s72, `${st72} ${v72} -> ${JSON.stringify(await q("visibility_sets"))}`);
   // Past 2,000 entries: a new snapshot with the model text.
   for (let i = 7; i < 2010; i++) await place(i);
   const snap = snapshot();

@@ -797,3 +797,28 @@ Rust's (16 grades, values and sources). The action `materials` is enabled as Rus
   by the lab yet: the colour changes on screen at once, the hatch shows on paper drawings.
 - **Assign** (the selected elements to the material): Rust does it in the Properties panel; the C
   page has a button too, through Rust's verb `set_material`.
+## 24. Show all and Show previous (ticket ISS72, GitHub issue #72)
+
+**Oracle.** None: Rust v0.19.0 has neither action. Its nearest are `clear_temporary` ("Show all
+hidden for now") and `show_all_in_view` (`viewing.rs:490`), each of which leaves the other part
+hidden; `ribbon.rs:130` lists 54 actions. The office's engineer asked for both buttons (issue #72).
+
+**Differs (C additions).**
+- **`query actions` has 56 rows**: Rust's 54 in Rust's order, then `show_all` ("Show all") and
+  `show_previous` ("Show previous"), tab View, no shortcut, never pressed. Rust's rows are unchanged.
+- **`show_all`**: `clear_temporary` then `show_all_in_view`: everything shown in the current view,
+  whatever hid it (hidden or isolated for now, in the view, by the view's class, family, storey,
+  link or material lists). One undo step when the view stored something (as `show_all_in_view`),
+  none otherwise. Enabled when something is hidden for now or in the view.
+- **`show_previous`**: the visibility state before the last visibility change of the current view
+  (state = the temporary set + the view's stored lists; Reveal hidden and the section box are not
+  part of it). Every action that changes the state (hide, isolate, unhide, for now and in the view,
+  `clear_temporary`, `show_all_in_view`, `show_all`, `show_previous`) pushes the state it left on
+  the view's stack; `show_previous` restores the top one and pushes the state it leaves, so pressed
+  twice it goes back and forth. The stored part is one undo step (as any in-view change). One stack
+  per view, 32 states each, the oldest dropped; session state (not in the file nor the session
+  file), cleared when a model is opened, made or closed. Undo and redo push nothing. Enabled when
+  the current view's stack has a state.
+- **No shortcut**: Rust's H (`lib.rs:2983`, hatching) ignores the modifiers, so Shift H is taken.
+- Tests: `test/visibility_test.mjs` (ISS72 checks), `test/lab_visibility.mjs` (the ribbon buttons,
+  native and wasm), `test/wasm_run.mjs` and `test/wasm_view_run.mjs` (native = wasm).

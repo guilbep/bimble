@@ -135,8 +135,12 @@ static const ActionRow ACTIONS[] = {
     {"paper_view", "On paper", "View", 0, 0},
     {"clear_temporary", "Show all hidden for now", "View", 0, 0},
     {"show_all_in_view", "Show all in view", "View", 0, 0},
+    /* ---- ISS72: C additions after Rust's 54 (GitHub issue #72, visibility.c ISS72, DEVIATIONS 24) ---- */
+    {"show_all", "Show all", "View", 0, 0},
+    {"show_previous", "Show previous", "View", 0, 0},
+    /* ---- end ISS72 ---- */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54, "ribbon.rs:130 has 54 actions");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 2, "ribbon.rs:130 has 54 actions; ISS72 adds 2");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab"}; /* verbs.rs:28 snake_case */
 static const char *const SIZE_KEY[] = {"column", "beam_width", "beam_height", "wall", "slab"}; /* verbs.rs:78 */
@@ -585,6 +589,20 @@ static int set_on_paper(cc_session *s, int on) { /* paper.rs:70 (the camera stay
 }
 /* ---- end PAPER1 ---- */
 
+/* ---- ISS72 ---- the key of the current view's Show previous stack (visibility.c ISS72): the
+ * active view, or none (a zero id). */
+static cc_gid iss72_view(const cc_session *s) {
+    cc_gid g;
+    if (s->has_active) g = s->active;
+    else memset(&g, 0, sizeof g);
+    return g;
+}
+static size_t iss72_prev_count(const cc_session *s) {
+    cc_gid g = iss72_view(s);
+    return cc_vis_prev_count(&s->vis, &g);
+}
+/* ---- end ISS72 ---- */
+
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
@@ -638,6 +656,11 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* ---- end PAPER1 ---- */
     if (!strcmp(name, "clear_temporary")) return loaded(s) && s->vis.has_temp;
     if (!strcmp(name, "show_all_in_view")) return loaded(s) && cc_vis_hidden_in_view(&s->vis);
+    /* ---- ISS72: show_all when something is hidden (for now or in the view); show_previous when
+     * the current view's stack has a state (visibility.c ISS72) ---- */
+    if (!strcmp(name, "show_all")) return loaded(s) && (s->vis.has_temp || cc_vis_hidden_in_view(&s->vis));
+    if (!strcmp(name, "show_previous")) return loaded(s) && iss72_prev_count(s) > 0;
+    /* ---- end ISS72 ---- */
     if (!strcmp(name, "hide_now") || !strcmp(name, "isolate_now") || !strcmp(name, "hide_in_view") || !strcmp(name, "isolate_in_view"))
         return loaded(s) && s->has_primary;
     if (!strcmp(name, "unhide")) {
@@ -1481,7 +1504,10 @@ static int sec1_strs_eq(const cc_strs *x, const cc_strs *y) {
         if (x->v[i].n != y->v[i].n || (x->v[i].n && memcmp(x->v[i].p, y->v[i].p, x->v[i].n))) return 0;
     return 1;
 }
-static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
+static int sec1_store_vis_ex(cc_session *s, int all, const cc_vis_state *from, cc_buf *out); /* ISS72 */
+static int sec1_store_vis(cc_session *s, int all, cc_buf *out) { return sec1_store_vis_ex(s, all, NULL, out); }
+/* ISS72: `from` not NULL: the view's five other lists are that state's (show_previous). */
+static int sec1_store_vis_ex(cc_session *s, int all, const cc_vis_state *from, cc_buf *out) {
     if (!s->open || !s->has_active) return 0;
     cc_cmds l;
     cc_cmds_init(&l);
@@ -1500,6 +1526,11 @@ static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
         return -1;
     }
     if (all) w->hidden_families.n = w->hidden_classes.n = w->hidden_storeys.n = w->hidden_links.n = w->hidden_materials.n = 0;
+    if (from && cc_vis_state_lists(from, &l.arena, w)) { /* ISS72 */
+        cc_cmds_free(&l);
+        buf_puts(out, "out of memory");
+        return -1;
+    }
     int same = sec1_strs_eq(&old.hidden_elements, &w->hidden_elements) && sec1_strs_eq(&old.isolated_elements, &w->isolated_elements) &&
                sec1_strs_eq(&old.hidden_families, &w->hidden_families) && sec1_strs_eq(&old.hidden_classes, &w->hidden_classes) &&
                sec1_strs_eq(&old.hidden_storeys, &w->hidden_storeys) && sec1_strs_eq(&old.hidden_links, &w->hidden_links) &&
@@ -1522,7 +1553,7 @@ static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
 
 /* ribbon.rs:708-775: the section box and visibility actions. 0 ok (or not one of them), -1 with
  * the error in `out` (out of memory). Session state only: no history step, rev unchanged. */
-static int vis_action(cc_session *s, const char *name, cc_buf *out) {
+static int vis_action_do(cc_session *s, const char *name, cc_buf *out) {
     cc_vis *v = &s->vis;
     const cc_gid *primary = s->has_primary ? &s->primary : NULL;
     if (!strcmp(name, "section_box")) cc_vis_toggle(v, scene_now(s), primary);
@@ -1532,6 +1563,10 @@ static int vis_action(cc_session *s, const char *name, cc_buf *out) {
     else if (!strcmp(name, "show_all_in_view")) {
         cc_vis_show_all_in_view(v);
         if (sec1_store_vis(s, 1, out)) return -1; /* SEC1: viewing.rs:490, stored with the view */
+    } else if (!strcmp(name, "show_all")) { /* ---- ISS72: clear_temporary + show_all_in_view ---- */
+        cc_vis_clear_temporary(v);
+        cc_vis_show_all_in_view(v);
+        if (sec1_store_vis(s, 1, out)) return -1;
     } else {
         static const char *const HIDE[] = {"hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide"};
         int a = -1;
@@ -1551,6 +1586,72 @@ static int vis_action(cc_session *s, const char *name, cc_buf *out) {
     }
     return 0;
 }
+
+/* ---- ISS72 ---- Show previous (visibility.c ISS72 has the behaviour). */
+static int iss72_capture(cc_session *s, cc_vis_state *st) {
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int r = s->open ? cc_sv_active(s, &a, &v) : 0;
+    int rc = r < 0 ? -1 : cc_vis_capture(&s->vis, r == 1 ? &v.visibility : NULL, st);
+    arena_free(&a);
+    return rc;
+}
+
+static int iss72_oom(cc_buf *out) {
+    buf_puts(out, "out of memory");
+    return -1;
+}
+
+/* The top state of this view's stack restored; the state it leaves pushed instead (pressed twice:
+ * back and forth). The stored part as any "in view" change (one undo step). */
+static int iss72_show_previous(cc_session *s, cc_buf *out) {
+    cc_gid view = iss72_view(s);
+    const cc_vis_state *top = cc_vis_prev_top(&s->vis, &view);
+    if (!top) return 0;
+    cc_vis_state now, after;
+    if (iss72_capture(s, &now)) return iss72_oom(out);
+    /* The stack is not touched until the state is restored: `top` stays valid. */
+    int rc = cc_vis_restore(&s->vis, top) ? iss72_oom(out) : sec1_store_vis_ex(s, 0, top, out);
+    if (rc) { /* refused: the state as it was, the stack as it was */
+        cc_vis_restore(&s->vis, &now);
+        cc_sv_vis_load(s);
+        cc_vis_state_free(&now);
+        return -1;
+    }
+    cc_vis_prev_pop(&s->vis, &view);
+    if (iss72_capture(s, &after)) { /* the state it left, read back (the view's sets as stored) */
+        cc_vis_state_free(&now);
+        return iss72_oom(out);
+    }
+    if (!cc_vis_state_eq(&now, &after) && cc_vis_prev_push(&s->vis, &view, &now)) rc = iss72_oom(out);
+    cc_vis_state_free(&now), cc_vis_state_free(&after);
+    return rc;
+}
+
+/* The actions that change what is hidden: the state before is pushed when they change it. */
+static int vis_action(cc_session *s, const char *name, cc_buf *out) {
+    static const char *const TRACKED[] = {"hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide",
+                                          "clear_temporary", "show_all_in_view", "show_all"};
+    if (!strcmp(name, "show_previous")) return iss72_show_previous(s, out);
+    int tracked = 0;
+    for (size_t i = 0; i < sizeof TRACKED / sizeof TRACKED[0]; i++) tracked |= !strcmp(name, TRACKED[i]);
+    if (!tracked) return vis_action_do(s, name, out);
+    cc_gid view = iss72_view(s);
+    cc_vis_state before, after;
+    if (iss72_capture(s, &before)) return iss72_oom(out);
+    int rc = vis_action_do(s, name, out);
+    if (!rc) {
+        if (iss72_capture(s, &after)) rc = iss72_oom(out);
+        else {
+            if (!cc_vis_state_eq(&before, &after) && cc_vis_prev_push(&s->vis, &view, &before)) rc = iss72_oom(out);
+            cc_vis_state_free(&after);
+        }
+    }
+    cc_vis_state_free(&before);
+    return rc;
+}
+/* ---- end ISS72 ---- */
 
 /* link_model and manage_links (links.h). */
 static int link_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
