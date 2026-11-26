@@ -2,6 +2,7 @@
  * pretty.txt), plus writer, buf and arena unit checks. */
 #include <stdint.h>
 #include "../src/arena.h"
+#include "../src/json_r.h"
 #include "../src/json_w.h"
 #include "check.h"
 
@@ -184,8 +185,36 @@ int main(int argc, char **argv) {
     arena_reset(&a);
     check_true("arena reset keeps one block", a.head != NULL);
     check_true("arena after reset", arena_alloc(&a, 100, 8) != NULL);
+    /* FIXLIB: n * size checked (a count from a file; on wasm32 the product wrapped to a small
+     * block). SIZE_MAX / 8 + 1 items of 8 bytes wrap to 0 bytes without the check. */
+    check_true("arena_alloc_n overflow -> NULL", arena_alloc_n(&a, (size_t)-1 / 8 + 1, 8, 8) == NULL);
+    check_true("arena_alloc_n overflow, size 48", arena_alloc_n(&a, (size_t)-1 / 48 + 1, 48, 8) == NULL);
+    double *pn = arena_alloc_n(&a, 3, sizeof(double), 8);
+    check_true("arena_alloc_n 3 doubles", pn && pn[2] == 0.0);
     arena_free(&a);
     check_true("arena freed", a.head == NULL);
+
+    /* FIXLIB: the DOM budget (json_r.h), one for the text and the CBOR form */
+    {
+        JrBudget bud = {0, 0};
+        const char *why = NULL;
+        check_true("budget: 16 M values of 64 B fit", jr_budget_take(&bud, JR_MAX_NODES, 64, 0, &why) == 0);
+        check_true("budget: one more value refused", jr_budget_take(&bud, 1, 0, 0, &why) == -1 && why && !strcmp(why, JR_ERR_NODES));
+        check_true("budget: nothing taken on refusal", bud.nodes == JR_MAX_NODES && bud.bytes == JR_MAX_DOM_BYTES);
+        JrBudget b2 = {0, 0};
+        why = NULL;
+        check_true("budget: bytes over the limit refused",
+                   jr_budget_take(&b2, 10, 64, JR_MAX_DOM_BYTES, &why) == -1 && why && !strcmp(why, JR_ERR_BYTES) && b2.bytes == 0);
+        check_true("budget: a huge count refused before the multiply",
+                   jr_budget_take(&b2, (size_t)-1, (size_t)-1, 0, &why) == -1 && why && !strcmp(why, JR_ERR_NODES));
+        /* the text reader charges: an honest document parses, its values counted */
+        Arena ja;
+        arena_init(&ja, 0);
+        JrError je;
+        const char *doc = "{\"a\": [1, 2, \"xyz\"], \"b\": null}";
+        check_true("budget: a small document parses", jr_parse(&ja, doc, strlen(doc), &je) != NULL);
+        arena_free(&ja);
+    }
 
     buf_free(&b);
     return report("json");

@@ -37,6 +37,11 @@ void *arena_alloc(Arena *a, size_t size, size_t align) {
     return nb->data;
 }
 
+void *arena_alloc_n(Arena *a, size_t n, size_t size, size_t align) {
+    if (size && n > (size_t)-1 / size) return NULL;
+    return arena_alloc(a, n * size, align);
+}
+
 void *arena_dup(Arena *a, const void *src, size_t size) {
     void *p = arena_alloc(a, size ? size : 1, 1);
     if (p && size) memcpy(p, src, size);

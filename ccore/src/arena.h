@@ -12,6 +12,10 @@ typedef struct {
 void arena_init(Arena *a, size_t block_size); /* block_size 0 = 64 KiB */
 /* Zeroed memory, aligned to `align` (a power of two, at most 16). NULL when out of memory. */
 void *arena_alloc(Arena *a, size_t size, size_t align);
+/* `n` items of `size` bytes (a count read from a file): NULL when n * size overflows size_t (on
+ * wasm32 a product of two honest-looking numbers wraps to a small block, then out-of-range
+ * writes) or out of memory. Callers sizing n + 1 have n below a buffer's length already. */
+void *arena_alloc_n(Arena *a, size_t n, size_t size, size_t align);
 void *arena_dup(Arena *a, const void *src, size_t size);
 void arena_reset(Arena *a); /* keeps the newest block, drops the rest */
 /* arena_reset, and the newest block dropped too when it holds more than `keep` bytes: a worker's

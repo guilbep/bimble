@@ -267,6 +267,29 @@ static void robustness(void) {
         wrap((const char *)huge[i], 10, &b);
         expect_load_error("CBOR huge length", b.p, b.len, "length runs past the data");
     }
+    /* FIXLIB: the DOM budget (json_r.h), charged at the container's head, before the memory is
+     * taken. An array of 16 M + 1 zeros (one byte each, 16 MB inflated, 16 KB of gzip) asked for
+     * 1 GB at once and decoded it; a map of 14 M entries passes the byte budget first (80 bytes a
+     * member). Both refused now before any allocation (old code: "invalid type: sequence…"
+     * after a 1 GB DOM, or "out of memory" under an address-space cap). */
+    {
+        size_t cnt = JR_MAX_NODES + 1;
+        buf_clear(&c);
+        buf_fill(&c, 0, 5 + cnt);
+        c.p[0] = (char)0x9A;
+        for (int k = 0; k < 4; k++) c.p[1 + k] = (char)(cnt >> (24 - 8 * k));
+        wrap(c.p, c.len, &b);
+        double t1 = now_ms();
+        expect_load_error("CBOR array of 16 M + 1 one-byte items: the value budget", b.p, b.len, JR_ERR_NODES);
+        printf("  array bomb: %zu B file, %zu items, refused in %.0f ms\n", b.len, cnt, now_ms() - t1);
+        size_t mc = 14000000;
+        buf_clear(&c);
+        buf_fill(&c, 0, 5 + 2 * mc);
+        c.p[0] = (char)0xBA;
+        for (int k = 0; k < 4; k++) c.p[1 + k] = (char)(mc >> (24 - 8 * k));
+        wrap(c.p, c.len, &b);
+        expect_load_error("CBOR map of 14 M entries: the byte budget", b.p, b.len, JR_ERR_BYTES);
+    }
     /* other refused CBOR */
     static const struct {
         const char *what, *bytes;

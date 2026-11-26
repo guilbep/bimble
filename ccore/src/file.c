@@ -202,8 +202,7 @@ static int d_vec(D *d, const JrVal *v, double *out, size_t n) {
 
 static void *alloc_n(D *d, size_t n, size_t sz, size_t off) {
     if (n == 0) return NULL;
-    if (n > ((size_t)-1) / sz) { dfail(d, off, "out of memory", 0, 0); return NULL; }
-    void *p = arena_alloc(d->a, n * sz, 8);
+    void *p = arena_alloc_n(d->a, n, sz, 8); /* NULL also when n * sz overflows */
     if (!p) dfail(d, off, "out of memory", 0, 0);
     return p;
 }
@@ -420,7 +419,7 @@ static int map_entries(D *d, const JrVal *v, const char *expected, Ent **ents, s
     *count = 0;
     if (v->type != JR_OBJ) return type_err(d, v, expected);
     if (!v->n) return 0;
-    Ent *e = malloc(2 * v->n * sizeof *e);
+    Ent *e = v->n <= (size_t)-1 / (2 * sizeof *e) ? malloc(2 * v->n * sizeof *e) : NULL;
     if (!e) return dfail(d, v->off, "out of memory", 0, 0);
     for (size_t i = 0; i < v->n; i++) {
         e[i].key = v->members[i].key;
@@ -632,7 +631,7 @@ static int d_links(D *d, const JrVal *v, cc_model *m) {
     if (v->type != JR_ARR) return type_err(d, v, "a sequence");
     if (v->n > CC_MODEL_LINKS_MAX) return dfail(d, v->off, "links: too many linked models", 0, 0);
     if (!v->n) return 0;
-    m->links = arena_alloc(d->a, v->n * sizeof *m->links, sizeof(void *));
+    m->links = arena_alloc_n(d->a, v->n, sizeof *m->links, sizeof(void *));
     if (!m->links) return dfail(d, v->off, "out of memory", 0, 0);
     for (size_t i = 0; i < v->n; i++) {
         const JrVal *x = &v->items[i], *f[4];

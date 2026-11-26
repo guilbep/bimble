@@ -306,10 +306,10 @@ int cc_meshcodec_decode(const uint8_t *p, size_t n, Arena *a, cc_mesh *out, cons
     if (q)
         for (int k = 0; k < 3; k++) TRY(rd_f32(&r, &lo[k]));
     /* Counts are below n (checked above), so they fit u32 and size_t. */
-    out->pos = arena_alloc(a, ((size_t)nv + 1) * sizeof out->pos[0], 4);
-    out->idx = arena_alloc(a, ((size_t)ni + 1) * sizeof(uint32_t), 4);
-    out->edges = arena_alloc(a, ((size_t)ne + 1) * sizeof out->edges[0], 4);
-    out->normals = arena_alloc(a, ((size_t)nn + 1) * sizeof out->normals[0], 1);
+    out->pos = arena_alloc_n(a, (size_t)nv + 1, sizeof out->pos[0], 4);
+    out->idx = arena_alloc_n(a, (size_t)ni + 1, sizeof(uint32_t), 4);
+    out->edges = arena_alloc_n(a, (size_t)ne + 1, sizeof out->edges[0], 4);
+    out->normals = arena_alloc_n(a, (size_t)nn + 1, sizeof out->normals[0], 1);
     if (!out->pos || !out->idx || !out->edges || !out->normals) return CC_MC_OOM;
     int64_t prev[3] = {0, 0, 0};
     for (uint64_t i = 0; i < nv; i++) TRY(rd_point(&r, q, lo, prev, out->pos[i], why));

@@ -15,7 +15,8 @@
 #define CC_MAGIC_LEN 7
 #define CC_MAX_FILE_BYTES ((size_t)256 << 20) /* Rust allows 8 GiB; the JSON DOM caps lower */
 /* Binary: the file, and what it inflates to (a small file can unpack huge: a gzip bomb stops
- * here with an error). The CBOR is read into the same DOM as the JSON, so the same cap. */
+ * here with an error). The CBOR is read into the same DOM as the JSON, so the same cap, and the
+ * same DOM budget for both forms (json_r.h: 16 M values, 1 GiB; Rust has neither). */
 #define CC_MAX_BINARY_FILE_BYTES CC_MAX_FILE_BYTES
 #define CC_MAX_INFLATED_BYTES CC_MAX_FILE_BYTES
 

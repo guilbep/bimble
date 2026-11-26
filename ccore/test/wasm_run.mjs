@@ -34,6 +34,7 @@
 //            (inflated = golden/view/frame.bimbleview.raw) and host_open of it; shared again (the
 //            same raw stream) and share_for_viewing of the read-only mapped_item.ifc (opens with 5
 //            elements; ticket V1); close
+//   bounds   a binary .bimble whose CBOR array count wraps size_t on wasm32 (ticket FIXLIB): refused
 // Prints per-suite "N passed, M failed", the module size and timings; exits non-zero on a failure.
 // No dependencies.
 import { spawn } from "node:child_process";
@@ -906,6 +907,25 @@ suite("files");
   const s3 = q("state");
   check("close -> 200, no model", cl.status === 200 && s3.file === null, `${cl.text} ${JSON.stringify(s3)}`);
   Y.guid_seed(0n);
+  end();
+}
+
+// ---- bounds (ticket FIXLIB): a CBOR count whose DOM size wraps on wasm32 ----
+// 89,478,486 items x 48 bytes (sizeof(JrVal) on wasm32) is 2^32 + 32: the old cbor.c asked the
+// arena for 32 bytes, then wrote 89 M items past them. Now refused (the DOM budget, json_r.h) before
+// any allocation, the module still usable.
+suite("bounds");
+{
+  const cnt = 89478486;
+  const body = Buffer.alloc(5 + cnt);
+  body[0] = 0x9a;
+  body.writeUInt32BE(cnt, 1);
+  const file = Buffer.concat([Buffer.from("bimble\0", "latin1"), gzipSync(body, { level: 1 })]);
+  const o = openText(file);
+  check("a count that wraps on wasm32 -> 400, the value budget", o.status === 400 && /too many values/.test(o.text), `${o.status} ${o.text}`);
+  const again = openText(read("frame.json"));
+  check("frame.json still opens after it", again.status === 200, again.text);
+  if (again.status === 200) X.close(again.value);
   end();
 }
 

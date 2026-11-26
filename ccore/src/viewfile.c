@@ -172,7 +172,7 @@ int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const c
 /* viewfile.rs read -> Scene: what the file holds, as it is (share again = the same bytes). */
 int cc_viewfile_meta_from_file(cc_viewfile_meta *mt, const cc_viewfile *v) {
     cc_viewfile_meta_init(mt);
-    cc_view_info *info = arena_alloc(&mt->arena, (v->nelements + 1) * sizeof *info, 8);
+    cc_view_info *info = arena_alloc_n(&mt->arena, v->nelements + 1, sizeof *info, 8);
     if (!info) return -1;
     for (size_t k = 0; k < v->nelements; k++) {
         const cc_view_element *x = &v->elements[k];
@@ -469,13 +469,15 @@ static int mesh(Rd *r, Arena *a, cc_mesh *m, Err *e) {
 
 /* Arrays of the arena, sized by counts already checked against the bytes. */
 static void *alloc_n(Arena *a, size_t n, size_t size, Err *e) {
-    void *p = arena_alloc(a, (n + 1) * size, 8);
+    void *p = arena_alloc_n(a, n + 1, size, 8);
     if (!p) fail(e, E_OOM, NULL);
     return p;
 }
 
 static int grow(void **p, size_t *cap, size_t need, size_t size, Err *e) {
     if (need <= *cap) return 0;
+    /* a count from the file: c * size must not wrap (wasm32), nor the doubling below */
+    if (need > (size_t)-1 / 2 / size) return fail(e, E_OOM, NULL);
     size_t c = *cap ? *cap : 16;
     while (c < need) c *= 2;
     void *q = realloc(*p, c * size);

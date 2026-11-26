@@ -459,7 +459,7 @@ static int items(P *p, size_t depth, cc_sv **out, size_t *nout) {
         if (c == ')') {
             p->i++;
             size_t n = p->nstk - base;
-            cc_sv *a = arena_alloc(p->a, n * sizeof *a, 8);
+            cc_sv *a = arena_alloc_n(p->a, n, sizeof *a, 8);
             if (!a) { p->oom = 1; p->nstk = base; return perr(p, "out of memory"); }
             memcpy(a, p->stk + base, n * sizeof *a);
             p->nstk = base;
