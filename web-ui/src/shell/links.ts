@@ -161,3 +161,8 @@ export const modelSet = (op: "cancel" | "unload" | "load" | "pin" | "unpin" | "p
 
 /** LINKF: Reload all (manage_links {op: "reload_all"}): each link from its cache unless its IFC changed. */
 export const reloadAll = () => run(async () => { actionBody("manage_links", { op: "reload_all" }); return null; });
+
+/** LINKF: a link's conversion report (`query link_log {name}`: the file the core wrote, by the link's name). */
+export function linkLog(name: string): string {
+  try { return query<{ text: string }>("link_log", { name }).text; } catch (e) { return msg(e); }
+}

@@ -1273,3 +1273,39 @@ int cc_links_sync_placement(cc_session *s) {
     return rc ? -1 : ch;
 }
 /* ---- end LINKF positioning ---- */
+
+/* ---- LINKF: query link_log {name}: the conversion report of a link, read from the path the
+ * session wrote it to (never a path the caller gives); at most 4 MiB. ---- */
+int cc_link_log_text(cc_session *s, const char *body, size_t n, Buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = n ? jr_parse(&a, body, n, &je) : NULL, *nm = v && v->type == JR_OBJ ? jr_get(v, "name") : NULL;
+    int rc = -1;
+    if (!nm || nm->type != JR_STR) buf_puts(out, "link_log: send {\"name\": \"<linked file name>\"}");
+    else {
+        int li = cc_links_find(s, nm->s, nm->n);
+        if (li < 0) buf_puts(out, "no linked model "), buf_append(out, nm->s, nm->n);
+        else if (!s->links[li].log) buf_puts(out, "this link has no conversion report (read as it is: under 1 MiB, or not an IFC)");
+        else {
+            char *p = NULL;
+            size_t k = 0;
+            int st = s->pf->read_file(s->pf->ctx, s->links[li].log, (size_t)4 << 20, &p, &k);
+            if (st != CC_PF_OK) buf_puts(out, "the report cannot be read: "), buf_puts(out, s->links[li].log);
+            else if (jr_utf8_check(p, k) != -1) buf_puts(out, "the report is not UTF-8 text");
+            else { /* {"name", "path", "text"} */
+                JsonW w;
+                jw_init(&w, out, 0);
+                jw_obj_begin(&w);
+                jw_key(&w, "name"), jw_str(&w, s->links[li].name);
+                jw_key(&w, "path"), jw_str(&w, s->links[li].log);
+                jw_key(&w, "text"), jw_str_n(&w, p, k);
+                jw_obj_end(&w);
+                rc = jw_finish(&w) == JW_OK && !out->oom ? 0 : -1;
+            }
+            free(p);
+        }
+    }
+    arena_free(&a);
+    return rc;
+}

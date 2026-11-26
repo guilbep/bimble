@@ -169,7 +169,7 @@ interface Bmsh {
   /** Per element: 0 the open model, k + 1 the link k (merged meshes only). */
   model?: Uint8Array;
   /** The links of a merged mesh, in link order. */
-  links?: { name: string; visible: boolean; elements: number }[];
+  links?: { name: string; visible: boolean; elements: number; colour?: number }[];
   /** 3D1 (BMSH version 3, ccore/src/scene_bmsh.h): per element 0 (its own mesh, scene coordinates) or
    *  k + 1 (it places shape k: its row's ranges are the shape's, in the shape's own coordinates), and
    *  per element its placement (12 floats: columns x, y, z, t). Absent: version 1, every mesh placed. */
@@ -300,10 +300,12 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
   const dv = new DataView(ab);
   let o = main.size;
   if (ab.byteLength < o + 12 || dv.getUint32(o, true) !== 0x534b4e4c) throw new Error("BMSH: trailing bytes, not LNKS");
-  if (dv.getUint32(o + 4, true) !== 1) throw new Error(`LNKS version ${dv.getUint32(o + 4, true)}`);
+  const ver = dv.getUint32(o + 4, true);
+  if (ver !== 1 && ver !== 2) throw new Error(`LNKS version ${ver}`);
   const n = dv.getUint32(o + 8, true);
   o += 12;
-  const parts: { name: string; visible: boolean; m: Bmsh }[] = [];
+  // LINKF: version 2: per link its turn about Z (cos, sin), its placed origin (world mm) and its colour
+  const parts: { name: string; visible: boolean; m: Bmsh; c: number; s: number; at: number[] | null; colour: number }[] = [];
   const dec = new TextDecoder();
   for (let k = 0; k < n; k++) {
     if (ab.byteLength < o + 4) throw new Error("LNKS truncated");
@@ -311,13 +313,22 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
     if (ab.byteLength < o + 12 + L) throw new Error("LNKS truncated");
     const name = dec.decode(new Uint8Array(ab, o + 4, L));
     o += 4 + L + ((4 - (L % 4)) % 4);
-    const flags = dv.getUint32(o, true), B = dv.getUint32(o + 4, true);
+    const flags = dv.getUint32(o, true);
+    let c = 1, sn = 0, at: number[] | null = null, colour = -1;
+    if (ver === 2) {
+      if (ab.byteLength < o + 48) throw new Error("LNKS truncated");
+      c = dv.getFloat64(o + 4, true), sn = dv.getFloat64(o + 12, true);
+      at = [dv.getFloat64(o + 20, true), dv.getFloat64(o + 28, true), dv.getFloat64(o + 36, true)];
+      colour = dv.getInt32(o + 44, true);
+      o += 44;
+    }
+    const B = dv.getUint32(o + 4, true);
     o += 8;
     if (ab.byteLength < o + B) throw new Error("LNKS truncated");
     const m = parseBmsh(ab, o, false);
     if (m.size !== B) throw new Error(`LNKS ${name}: BMSH size ${B}, expected ${m.size}`);
     o += B;
-    parts.push({ name, visible: (flags & 1) === 1, m });
+    parts.push({ name, visible: (flags & 1) === 1, m, c, s: sn, at, colour });
   }
   if (o !== ab.byteLength) throw new Error(`LNKS: ${ab.byteLength - o} trailing bytes`);
   const all = [main, ...parts.map((p) => p.m)];
@@ -328,12 +339,15 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
     rev: main.rev, origin: main.origin, ids: [], cats: new Uint8Array(nE), v0: new Uint32Array(nE), nv: new Uint32Array(nE),
     i0: new Uint32Array(nE), ni: new Uint32Array(nE), s0: new Uint32Array(nE), ns: new Uint32Array(nE),
     pos: new Float32Array(3 * nV), idx: new Uint32Array(nI), edges: new Float32Array(6 * nS), normals: new Int8Array(8 * nS),
-    size: ab.byteLength, model: new Uint8Array(nE), links: parts.map((p) => ({ name: p.name, visible: p.visible, elements: p.m.ids.length })),
+    size: ab.byteLength, model: new Uint8Array(nE), links: parts.map((p) => ({ name: p.name, visible: p.visible, elements: p.m.ids.length, colour: p.colour })),
   };
   if (placed) out.shape = new Uint32Array(nE), out.place = new Float32Array(12 * nE);
   let e0 = 0, v0 = 0, i0 = 0, s0 = 0, sh0 = 0;
   all.forEach((m, k) => {
-    const d = [m.origin[0] - main.origin[0], m.origin[1] - main.origin[1], m.origin[2] - main.origin[2]];
+    const pl = k > 0 ? parts[k - 1] : null, c = pl?.c ?? 1, sn = pl?.s ?? 0, o = pl?.at ?? m.origin; // LINKF: R p + (placed origin - ours)
+    const d = [o[0]! - main.origin[0], o[1]! - main.origin[1], o[2]! - main.origin[2]];
+    const turn = sn !== 0 || c !== 1;
+    const rx = (x: number, y: number) => c * x - sn * y, ry = (x: number, y: number) => sn * x + c * y;
     // 3D1: the vertices and segments of shapes (version 3) stay in their own coordinates; the placement moves
     const inShape = new Uint8Array(m.pos.length / 3), segShape = new Uint8Array(m.edges.length / 6);
     let shMax = 0;
@@ -346,6 +360,10 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
         segShape.fill(1, m.s0[e] ?? 0, (m.s0[e] ?? 0) + (m.ns[e] ?? 0));
         out.shape![e0 + e] = sh + sh0;
         for (let j = 0; j < 12; j++) out.place![12 * (e0 + e) + j] = (m.place![12 * e + j] ?? 0) + (j >= 9 ? d[j - 9] ?? 0 : 0);
+        if (turn) for (let j = 0; j < 12; j += 3) { // each column (x, y, z, t) turned; t then moved
+          const q = 12 * (e0 + e) + j, x = m.place![12 * e + j] ?? 0, y = m.place![12 * e + j + 1] ?? 0;
+          out.place![q] = rx(x, y) + (j === 9 ? d[0]! : 0), out.place![q + 1] = ry(x, y) + (j === 9 ? d[1]! : 0);
+        }
       }
     for (let e = 0; e < m.ids.length; e++) {
       out.ids.push(m.ids[e] ?? "");
@@ -356,9 +374,21 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
       out.model![e0 + e] = k;
     }
     for (let i = 0; i < m.pos.length; i++) out.pos[3 * v0 + i] = (m.pos[i] ?? 0) + (inShape[Math.floor(i / 3)] ? 0 : d[i % 3] ?? 0);
+    if (turn) for (let v = 0; v < m.pos.length / 3; v++) if (!inShape[v]) { // LINKF: own vertices turned
+      const x = m.pos[3 * v] ?? 0, y = m.pos[3 * v + 1] ?? 0;
+      out.pos[3 * (v0 + v)] = rx(x, y) + d[0]!, out.pos[3 * (v0 + v) + 1] = ry(x, y) + d[1]!;
+    }
     for (let i = 0; i < m.idx.length; i++) out.idx[i0 + i] = (m.idx[i] ?? 0) + v0;
     for (let i = 0; i < m.edges.length; i++) out.edges[6 * s0 + i] = (m.edges[i] ?? 0) + (segShape[Math.floor(i / 6)] ? 0 : d[i % 3] ?? 0);
+    if (turn) for (let g = 0; g < m.edges.length / 6; g++) if (!segShape[g]) for (const h of [0, 3]) {
+      const x = m.edges[6 * g + h] ?? 0, y = m.edges[6 * g + h + 1] ?? 0;
+      out.edges[6 * (s0 + g) + h] = rx(x, y) + d[0]!, out.edges[6 * (s0 + g) + h + 1] = ry(x, y) + d[1]!;
+    }
     out.normals.set(m.normals, 8 * s0);
+    if (turn) for (let g = 0; g < m.edges.length / 6; g++) if (!segShape[g]) for (const h of [0, 4]) { // the face normals too
+      const x = m.normals[8 * g + h] ?? 0, y = m.normals[8 * g + h + 1] ?? 0;
+      out.normals[8 * (s0 + g) + h] = Math.round(rx(x, y)), out.normals[8 * (s0 + g) + h + 1] = Math.round(ry(x, y));
+    }
     e0 += m.ids.length, v0 += m.pos.length / 3, i0 += m.idx.length, s0 += m.edges.length / 6, sh0 += shMax;
   });
   return out;

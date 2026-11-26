@@ -4,10 +4,11 @@
 // reference plan (PDF, DXF, with the view it is placed in): show / hide, reload, reload from…,
 // remove; a reference also moves by numbers (mm) and turns (degrees), one undo step each. The calls
 // are shell/links.ts's; errors show under the rows.
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { t } from "../i18n";
 import { state } from "../bimble";
-import { enabled, linkFolder, linkNew, linksBusy, linksError, linksPanel, modelOp, modelReload, modelSet, refOp, refReload, reloadAll, type PanelModel, type PanelReference } from "./links";
+import { send } from "./send";
+import { enabled, linkFolder, linkLog, linkNew, linksBusy, linksError, linksPanel, modelOp, modelReload, modelSet, refOp, refReload, reloadAll, type PanelModel, type PanelReference } from "./links";
 
 const rows = computed(() => { void state.value; return linksPanel(); });
 // The move and rotate fields of each reference, by id (filled from its placement).
@@ -43,6 +44,11 @@ const detail = (m: PanelModel) => m.state === "ready"
   ? t("links.detail", { size: mb(m.bytes), elements: num(m.elements), triangles: num(m.triangles) }) +
     (m.cache ? ` · ${t(m.from_cache ? "links.fromCache" : "links.cacheWritten", { date: new Date((m.cache_mtime_s ?? 0) * 1000).toLocaleString() })}` : "")
   : m.message ?? "";
+// LINKF: the report of one link, shown under its row; "Open as editable…" asks first (it converts)
+const logOf = ref<{ name: string; text: string } | null>(null);
+const showLog = (m: PanelModel) => { logOf.value = logOf.value?.name === m.name ? null : { name: m.name, text: linkLog(m.name) }; };
+const confirmEdit = ref<string | null>(null);
+const openEditable = (m: PanelModel) => { confirmEdit.value = null; send({ do: "import", path: m.path }); };
 const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready" || m.state === "unloaded" || m.state === "failed"));
 </script>
 
@@ -74,6 +80,8 @@ const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready
     </div>
     <div v-if="!m.missing && m.state" class="lp-place" data-bb="link-detail">
       <span class="d" :title="m.log ? t('links.logTip', { path: m.log }) : m.path">{{ detail(m) }}</span>
+      <button v-if="m.log" type="button" data-bb="link-log" :title="t('links.logTip', { path: m.log })" @click="showLog(m)">{{ t('links.log') }}</button>
+      <button v-if="m.kind === 'ifc' && !m.missing" type="button" data-bb="link-open-editable" :title="t('links.openEditableTip')" @click="confirmEdit = confirmEdit === m.name ? null : m.name">{{ t('links.openEditable') }}</button>
       <button v-if="m.state === 'ready'" type="button" data-bb="link-unload" :title="t('links.unloadTip')" @click="modelSet('unload', m.name)">{{ t('links.unload') }}</button>
       <button v-if="m.state === 'unloaded'" type="button" data-bb="link-load" :title="t('links.loadTip')" @click="modelSet('load', m.name)">{{ t('links.load') }}</button>
       <button type="button" data-bb="link-pin" :aria-pressed="m.pinned" :title="t(m.pinned ? 'links.unpinTip' : 'links.pinTip')" @click="modelSet(m.pinned ? 'unpin' : 'pin', m.name)">{{ t(m.pinned ? 'links.pinned' : 'links.unpinned') }}</button>
@@ -88,6 +96,12 @@ const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready
         <option value="survey_point">{{ t('links.origin.survey_point') }}</option>
       </select>
     </div>
+    <div v-if="confirmEdit === m.name" class="lp-place" role="alert" data-bb="link-open-editable-warning">
+      <span class="d" style="white-space:normal">{{ t('links.openEditableWarn') }}</span>
+      <button type="button" data-bb="link-open-editable-go" @click="openEditable(m)">{{ t('links.openEditableGo') }}</button>
+      <button type="button" @click="confirmEdit = null">{{ t('links.cancel') }}</button>
+    </div>
+    <pre v-if="logOf?.name === m.name" class="lp-log" data-bb="link-log-text">{{ logOf.text }}</pre>
     </div>
     <div v-for="r in rows.references" :key="'r' + r.id" class="lp-ref" data-bb="ref-row" :data-id="r.id" :data-name="r.name" :data-visible="r.visible ? '1' : '0'">
       <div class="lp-row">
@@ -129,6 +143,7 @@ const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready
 .lp-none { color: var(--bb-stone); }
 .lp-place .d { color: var(--bb-stone); font-size: 11.5px; flex: 1 1 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lp-place select { font: inherit; font-size: 11.5px; border: 1px solid var(--bb-line); border-radius: 4px; background: var(--bb-sheet); color: var(--bb-ink); max-width: 9em; }
+.lp-log { max-height: 220px; overflow: auto; font-family: 'DM Mono', monospace; font-size: 11px; background: var(--bb-sunk); border-radius: 6px; padding: 4px 6px; margin: 2px 0 2px 22px; white-space: pre-wrap; }
 .sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 .lp-err { font-size: 12px; color: var(--bb-ink); background: var(--bb-ochre, #e8c26a); padding: 2px 6px; border-radius: 4px; white-space: normal; }
 </style>

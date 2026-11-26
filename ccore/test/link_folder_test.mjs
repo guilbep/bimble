@@ -137,6 +137,15 @@ r = await a.call("action", "manage_links", JSON.stringify({ op: "load", name: "d
 rows = await settle(a);
 check("load: from its cache", r.status === 200 && rows.find((m) => m.name === "d_column.ifc").state === "ready" && rows.find((m) => m.name === "d_column.ifc").from_cache, JSON.stringify(rows.find((m) => m.name === "d_column.ifc")));
 
+// the conversion report, by the link's name
+r = await a.call("query", "link_log", JSON.stringify({ name: "a_frame.ifc" }));
+let lg = r.status === 200 ? JSON.parse(r.text) : {};
+check("query link_log: the report the conversion wrote", /schema: IFC4/.test(lg.text ?? "") && /IfcColumn 24/.test(lg.text) && lg.path === join(dir, "a_frame.ifc.log.txt"), r.text.slice(0, 200));
+r = await a.call("query", "link_log", JSON.stringify({ name: "../../etc/passwd" }));
+check("query link_log: only a link's own report", r.status === 400 && /no linked model/.test(r.text), r.text);
+r = await a.call("query", "link_log", JSON.stringify({ path: "/etc/passwd" }));
+check("query link_log: no path from the caller", r.status === 400, r.text);
+
 // outside the roots
 r = await a.call("action", "link_folder", JSON.stringify({ path: "/" }));
 check("a folder outside the roots refused with the human text", r.status === 400 && /outside the folders Bimble lists/.test(r.text), r.text);

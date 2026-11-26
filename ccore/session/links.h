@@ -148,6 +148,10 @@ const cc_scene *cc_link_raw_scene(const cc_link *k);
  * host's georeference (the session calls it before each call and each /mesh). 1 when one changed
  * (links_gen bumped). -1 out of memory (that link drawn unplaced). */
 int cc_links_sync_placement(cc_session *s);
+/* query link_log {name} (LINKF): the link's conversion report, {"name", "path", "text"} (the file
+ * the conversion wrote, never a path from the caller; at most 4 MiB, UTF-8). 0 ok, -1 with the
+ * error in `out`. */
+int cc_link_log_text(cc_session *s, const char *body, size_t n, Buf *out);
 /* The session goes: a running conversion orphaned (link_cache.h), the undo steps freed. */
 void cc_links_session_free(cc_session *s);
 /* The cc_scene over a view file (session.c): rows in its own arena, meshes borrowed from `v`. */

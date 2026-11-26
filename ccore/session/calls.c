@@ -1345,6 +1345,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "view_references")) return cc_refs_view_references(s, body, n, out) ? CC_ERR : CC_OK;
     /* ---- LNK1: the Links panel's rows (links_panel.h) ---- */
     if (!strcmp(name, "links_panel")) return cc_links_panel_json(s, out) ? (out->oom = 1, CC_ERR) : CC_OK;
+    if (!strcmp(name, "link_log")) return cc_link_log_text(s, body, n, out) ? CC_ERR : CC_OK; /* LINKF: a link's report, by its name */
     /* ---- end LNK1 ---- */
     if (!strcmp(name, "scene_tree")) return cc_scene_tree_json(s, out) ? CC_ERR : CC_OK; /* FIXUI, links.h */
     if (!strcmp(name, "scene_elements")) { /* FIXUI: {"storey", "class"?, "limit"?} (links.h) */

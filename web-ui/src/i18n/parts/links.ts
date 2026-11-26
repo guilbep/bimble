@@ -59,6 +59,11 @@ export const fr = {
   "links.origin.origin": "Origine sur origine",
   "links.origin.base_point": "Point de base sur point de base",
   "links.origin.survey_point": "Point topo sur point topo",
+  "links.log": "Rapport",
+  "links.openEditable": "Ouvrir modifiable…",
+  "links.openEditableTip": "Importer cet IFC comme modèle Bimble modifiable (l'Ouvrir de Revit)",
+  "links.openEditableWarn": "L'import convertit l'IFC en objets Bimble modifiables, dans une copie à côté de lui ; le modèle ouvert est fermé et le lien n'est pas touché.",
+  "links.openEditableGo": "Convertir et ouvrir",
 };
 export const en: Record<keyof typeof fr, string> = {
   "links.addModel": "Link IFC…",
@@ -119,4 +124,9 @@ export const en: Record<keyof typeof fr, string> = {
   "links.origin.origin": "Origin to origin",
   "links.origin.base_point": "Base point to base point",
   "links.origin.survey_point": "Survey point to survey point",
+  "links.log": "Report",
+  "links.openEditable": "Open as editable…",
+  "links.openEditableTip": "Import this IFC as an editable Bimble model (Revit's Open)",
+  "links.openEditableWarn": "The import converts the IFC into editable Bimble objects, in a copy beside it; the open model closes and the link is not touched.",
+  "links.openEditableGo": "Convert and open",
 };

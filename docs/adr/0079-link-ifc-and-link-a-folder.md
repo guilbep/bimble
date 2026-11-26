@@ -96,12 +96,21 @@ caches weigh 96 MB on disk for 1.84 GB of IFC (5 %). BLAKE3 (the portable code t
    link is not in the model's history (DEVIATIONS 29): the session keeps link_folder's own undo and
    redo steps beside the history, undone only when it is the last step. Alternative: links as model
    Commands; refused for now: it would change LNK1's file semantics and the command log.
-10. **Positioning and pin (Revit's options)**: each link has an origin rule (`file`, the default;
-    `origin`, `base_point`, `survey_point`), a manual offset and a rotation about Z, and a pin
-    (default pinned: `place` is refused while pinned); and a colour override (palette 0..11).
-    Stored and served (`query links_panel`, `manage_links place|pin|unpin|colour`); **not yet
-    applied to the drawing** nor saved in the `.bimble` (left for the next ticket: the BMSH trailer
-    and the `links` section each need a field).
+10. **Positioning and pin (Revit's options)**: each link has an origin rule and a manual offset and
+    rotation about the host's Z, applied after the rule: `file` (the default: both georeferenced,
+    with a map conversion in the same or an unnamed system, the link goes through the survey
+    coordinates, h = R(-a_h)(R(a_l) w + S_l - S_h); else it stays), `origin` (the identity),
+    `base_point` (the link's base point, the origin of its IfcBuilding's placement, on the host's,
+    its world origin per ADR 0075), `survey_point` (the link's survey point, its world origin for an
+    IFC, on the host's survey point). A pin (default pinned: `place` refused while pinned) and a
+    colour override (palette 0..11). Saved in the `.bimble` `links` section, each left out at its
+    default. The core applies the placement wherever a link's geometry is used (`cc_link_scene`
+    answers the placed scene: measure, Box to selection, the measure boxes, paper); the page gets
+    the read scene and the transform in the LNKS trailer, version 2 (version 1 when nothing is
+    placed or coloured). Alternative: send the placed scene in the trailer; refused: moving a link
+    would rebuild its buffers in the page instead of changing one matrix. The base point is the
+    building's origin, not Revit's project base point (an IFC has none): said in the panel's
+    vocabulary only.
 11. **Unload / Load** keep the link and free its memory; **Reload all** reads each link again (its
     cache unless the IFC changed).
 
@@ -116,6 +125,6 @@ caches weigh 96 MB on disk for 1.84 GB of IFC (5 %). BLAKE3 (the portable code t
   was not allowed here), about 1.1 GB resident and 1.4 s. The 5 GB case is a conversion-time
   problem (one 0.9 GB file needs about 3 GB once), not a viewing one: once converted, the folder
   is light.
-- Not done here: the positioning applied to the 3D view and to paper, the link settings in the
-  `.bimble`, the lab test in a browser (no browser slot during the ticket), Windows' `spawn` and
-  `mem_available` (the Windows host converts in the call, unchecked).
+- Open: Windows' `spawn` and `mem_available` (the Windows host converts in the call and does not
+  check the free memory); the grid axes and levels of a placed link (snapping, `views` JSON) are
+  still the link's own, unplaced.

@@ -199,6 +199,8 @@ export const CONTROLS: readonly Control[] = [
   { id: "file-menu-new", event: { do: "new" }, shown: k("home", "model.view", "model.page", "model.sheet") },
   { id: "file-menu-open", event: { do: "open" }, shown: k("home", "model.view", "model.page", "model.sheet") },
   { id: "file-menu-import_ifc", event: { do: "import" }, shown: k("home", "model.view", "model.page", "model.sheet") },
+  // LINKF: the Links panel's "Open as editable…" of a linked IFC: the import of that file (Revit's Open)
+  { id: "links-open-editable", event: { do: "import", path: "/linked/model.ifc" }, shown: inModel },
   { id: "file-menu-project", event: { do: "showPage", page: "project-info" }, shown: (s, c) => inModel(s) || (kind(s) === "home" && c.file !== null) },
   { id: "file-menu-history", event: { do: "showPage", page: "history" }, shown: (s, c) => inModel(s) || (kind(s) === "home" && c.file !== null) },
   { id: "viewtab", event: { do: "showView" }, shown: inModel },

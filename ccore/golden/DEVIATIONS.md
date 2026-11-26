@@ -1322,6 +1322,10 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
 - **`link_folder {path, recursive?}`** (a C action, the last row of `query actions`) and its one
   undo step (link_folder's own steps beside the history; DEVIATIONS 29's links are otherwise not
   undo steps, as Rust). `manage_links` gains `cancel`, `unload`, `load`, `reload_all`, `pin`,
-  `unpin`, `place` {origin, move_mm, rotation_deg} (refused while pinned) and `colour`; their
-  values are served by `query links_panel` but not yet applied to the drawing nor saved in the
-  `.bimble` (ADR 0079 decision 10).
+  `unpin`, `place` {origin, move_mm, rotation_deg} (refused while pinned) and `colour`, served by
+  `query links_panel`, saved in the `links` section (`origin`, `move_mm`, `rotation_deg`,
+  `pinned`: false, `colour`, each left out at its default) and applied where a link's geometry is
+  used: the placed scene for measure, Box to selection and paper, the LNKS trailer version 2 for
+  the page (ADR 0079 decision 10). Rust placed a link only by its georeference's offset
+  (`lib.rs:1499`, origin minus origin). `query link_log {name}`: the link's conversion report.
+  Test: `test/link_place_test.c` (hand-computed placements), `file2_test.c` (hostile values).
