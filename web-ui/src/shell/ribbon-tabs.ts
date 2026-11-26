@@ -177,6 +177,10 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.view.g4.t2", tag: "button", icon: "<rect x=\"8\" y=\"8\" width=\"8\" height=\"8\"/><path d=\"M3 3h4M17 3h4M3 21h4M17 21h4M3 3v4M21 3v4M3 17v4M21 17v4\"/>", action: "isolate_now" },
       { key: "ribbon.view.g4.t3", tag: "button", icon: "<path d=\"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>", action: "reveal_hidden" },
       { key: "ribbon.view.g4.t4", tag: "button", icon: "<path d=\"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>", action: "unhide" },
+      // ---- ISS72 (GitHub issue #72): Show all (four boxes: every element), Show previous (an arrow back over an eye) ----
+      { key: "ribbon.view.g4.t5", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"7\" height=\"7\"/><rect x=\"13\" y=\"4\" width=\"7\" height=\"7\"/><rect x=\"4\" y=\"13\" width=\"7\" height=\"7\"/><rect x=\"13\" y=\"13\" width=\"7\" height=\"7\"/>", action: "show_all" },
+      { key: "ribbon.view.g4.t6", tag: "button", icon: "<path d=\"M3 15s3.5-5 9-5 9 5 9 5-3.5 5-9 5-9-5-9-5z\"/><circle cx=\"12\" cy=\"15\" r=\"2\"/><path d=\"M9 3 6 6l3 3\"/><path d=\"M6 6h9a3 3 0 0 1 3 3\"/>", action: "show_previous" },
+      // ---- end ISS72 ----
     ] },
     { key: "ribbon.view.g5", tools: [
       { key: "ribbon.view.g5.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><path d=\"M4 12h9v8M13 4v4\"/>", action: null },

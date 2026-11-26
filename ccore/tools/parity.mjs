@@ -636,7 +636,10 @@ function compare(R, C, rib, vue, known) {
   const queries = [];
   for (const n of qNames) {
     const row = { name: n, diffs: [] };
-    const rl = SCN.map((sc) => R.scenarios[sc]?.queries[n]), cl = SCN.map((sc) => C.scenarios[sc]?.queries[n]);
+    const rl = SCN.map((sc) => R.scenarios[sc]?.queries[n]);
+    // ISS72: `actions` compared on Rust's rows; the C-only rows are the actions table's "C-only".
+    const cl = SCN.map((sc) => n === "actions" && C.scenarios[sc]?.queries[n]?.startsWith("200 ")
+      ? answerLine({ status: 200, body: JSON.stringify(C.scenarios[sc].actions.filter((a) => rNames.includes(a.name))) }) : C.scenarios[sc]?.queries[n]);
     row.rust = known.rust.includes(n);
     row.c = known.c.includes(n);
     row.keyOrder = [];
