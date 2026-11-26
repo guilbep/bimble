@@ -1021,3 +1021,12 @@ direction is refused with `grid_axis_remove: <tag> is the last axis of its direc
 needs axes in two (UAxes and VAxes)`. Removing the first axis is allowed (U is then the axes
 parallel to the new first one). Tested by `test/grid_axis_test.c` (the IFC4 and IFC2x3 exports
 carry the new axis), not in `golden/grids/verbs.txt` (that transcript keeps its bytes).
+
+**Snapping to the grid (Rust's rule, plus the links).** The place tool's axes are the model's
+grid axes longer than 1 mm, their crossings (the strongest target) and lines, as snap.rs
+`targets` takes `scene.grids`; the axes through the columns only when there is no grid; the
+tolerance stays 12 screen pixels. A C addition: the axes of the visible links (model, IFC and
+viewer-file links, as `query grid_axes` lists them) count too; Rust's placing snaps to its own
+scene only. The measure tool does not share this code (measure.rs snaps to what is under the
+cursor) and is unchanged. Tested by `test/snap_grid_test.c` (snap.rs's own grid test, and a column
+clicked 52 mm from a crossing placed on it exactly).

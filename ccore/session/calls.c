@@ -2401,6 +2401,46 @@ static double storey_level(const cc_session *s) { /* edit.rs storey_elevation */
     return st ? st->elevation : 0.0;
 }
 
+/* ---- SLAB1: the grid axes the place tool snaps to (snap.rs `scene.grids`): the model's grids,
+ * then those of each visible link (query grid_axes' lists), world plan mm. malloc'd, *n axes;
+ * NULL with *n 0 when there are none (or out of memory: the column axes then, as without grid). */
+static double (*snap_grid_axes(const cc_session *s, size_t *n))[4] {
+    size_t cnt = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        double(*v)[4] = NULL;
+        if (pass) {
+            if (!cnt || !(v = malloc(cnt * sizeof *v))) break;
+            cnt = 0;
+        }
+#define SNAP_AXIS(A, B)                                                                                                       \
+    do {                                                                                                                      \
+        if (v) v[cnt][0] = (A)[0], v[cnt][1] = (A)[1], v[cnt][2] = (B)[0], v[cnt][3] = (B)[1];                                \
+        cnt++;                                                                                                                \
+    } while (0)
+        for (size_t g = 0; g < s->model.ngrids; g++)
+            for (size_t i = 0; i < s->model.grids[g].naxes; i++) SNAP_AXIS(s->model.grids[g].axes[i].start, s->model.grids[g].axes[i].end);
+        for (size_t k = 0; k < s->nlinks; k++) {
+            const cc_link *l = &s->links[k];
+            if (!l->visible) continue;
+            if (l->kind == CC_LINK_MODEL && l->model)
+                for (size_t g = 0; g < l->model->ngrids; g++)
+                    for (size_t i = 0; i < l->model->grids[g].naxes; i++) SNAP_AXIS(l->model->grids[g].axes[i].start, l->model->grids[g].axes[i].end);
+            if (l->kind == CC_LINK_IFC && l->ifc)
+                for (size_t i = 0; i < l->ifc->ngrids; i++) SNAP_AXIS(l->ifc->grids[i].start_mm, l->ifc->grids[i].end_mm);
+            if (l->kind != CC_LINK_MODEL && l->kind != CC_LINK_IFC && l->vf)
+                for (size_t i = 0; i < l->vf->ngrids; i++) SNAP_AXIS(l->vf->grids[i].start, l->vf->grids[i].end);
+        }
+#undef SNAP_AXIS
+        if (pass) {
+            *n = cnt;
+            return v;
+        }
+    }
+    *n = 0;
+    return NULL;
+}
+/* ---- end SLAB1 ---- */
+
 /* lib.rs placing_point: the pointer on the storey plane, snapped (or rounded, `free`), then the
  * ortho of a 2-point kind. No position, or the ray misses the plane: no hover. */
 static void tool_pointer(cc_session *s, const ToolArgs *a) {
@@ -2423,14 +2463,17 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
     double q[2];
     if (a->free_ || !sc) q[0] = cc_round10(p[0]), q[1] = cc_round10(p[1]);
     else {
-        if (!t->has_targets || t->targets_rev != s->rev || t->targets_level != level) {
+        if (!t->has_targets || t->targets_rev != s->rev || t->targets_level != level || t->targets_links != s->links_gen) {
             double next = level + 4000.0; /* the storey above, or level + 4 m */
             for (size_t i = 0; i < s->model.nstoreys; i++) {
                 double e = s->model.storeys[i].elevation;
                 if (e > level + 1.0 && e < next) next = e;
             }
-            t->has_targets = !cc_snap_targets_build(&t->targets, sc, level, next);
-            t->targets_rev = s->rev, t->targets_level = level;
+            size_t ng = 0; /* SLAB1: the grid axes */
+            double(*grid)[4] = snap_grid_axes(s, &ng);
+            t->has_targets = !cc_snap_targets_build_grid(&t->targets, sc, level, next, (const double(*)[4])grid, ng);
+            free(grid);
+            t->targets_rev = s->rev, t->targets_level = level, t->targets_links = s->links_gen;
         }
         kind = cc_snap(&t->targets, p, tol, q);
     }
