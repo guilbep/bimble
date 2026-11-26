@@ -1224,6 +1224,16 @@ C core's references are hand-computed in `test/concrete_test.c` (volumes, positi
   `test/concrete_test.c` (3.408 - pi 0.1^2 0.2 = 3.4017168 m3; run without the kernel too),
   `test/quantity_test.c`, `test/draw_plan_test.c`.
 
+- **Openings in merge and diff (ticket WAVE1B B4, ADR 0077 decision 17).** Rust merges and diffs an
+  element's `openings` as a list (merge: picked whole, so two openings added on two branches are a
+  conflict; diff: by index, or the whole list when the lengths differ). The C core matches them by
+  their GlobalIds when every opening has one (`src/merge.c merge_openings`, `src/diff.c
+  diff_openings`): both added openings kept, a conflict per field of the same opening
+  (`openings.<id>.generator.width`), a diff path `openings.<id>…`. No Rust golden holds openings in
+  a merge or a diff (`golden/history`), so every reference keeps its bytes. Tests:
+  `test/repo_merge_test.c` (six checks that fail on the old code; the host-moved case passed
+  before too).
+
 ## 35. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
 
 Rust v0.19.0's default view range (view.rs:299 `ViewRange::default_for`) cuts a floor plan

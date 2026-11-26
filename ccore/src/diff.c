@@ -233,9 +233,46 @@ static const JrVal *get_n(const JrVal *o, const char *key, size_t n) {
 }
 
 /* version.rs diff_value. `path` is a Buf grown and shrunk around each step. */
+/* WAVE1B (B4): an element's openings matched by their GlobalIds ("openings.<id>.<field>"; one added:
+ * "openings.<id>" null -> its value) when every opening of both sides has one; else by index, as
+ * Rust. 1 done, 0 not this case. */
+static const JrVal *d_op(const JrVal *arr, const JrVal *id) {
+    for (size_t i = 0; i < arr->n; i++) {
+        const JrVal *x = jr_get(&arr->items[i], "id");
+        if (x && val_eq(x, id)) return &arr->items[i];
+    }
+    return NULL;
+}
+static void diff_value(D *d, Buf *path, const JrVal *a, const JrVal *b);
+static int diff_openings(D *d, Buf *path, const JrVal *a, const JrVal *b) {
+    const JrVal *s2[2] = {a, b};
+    for (int k = 0; k < 2; k++) {
+        if (s2[k]->type != JR_ARR) return 0;
+        for (size_t i = 0; i < s2[k]->n; i++) {
+            const JrVal *id = s2[k]->items[i].type == JR_OBJ ? jr_get(&s2[k]->items[i], "id") : NULL;
+            if (!id || id->type != JR_STR) return 0;
+        }
+    }
+    size_t at = path->len;
+    for (int side = 0; side < 2; side++)
+        for (size_t i = 0; i < s2[side]->n; i++) {
+            const JrVal *id = jr_get(&s2[side]->items[i], "id");
+            if (side && d_op(a, id)) continue;
+            const JrVal *x = d_op(a, id), *y = d_op(b, id);
+            buf_putc(path, '.');
+            buf_append(path, id->s, id->n);
+            diff_value(d, path, x ? x : &NULLV, y ? y : &NULLV);
+            path->len = at;
+        }
+    return 1;
+}
+
 static void diff_value(D *d, Buf *path, const JrVal *a, const JrVal *b) {
     if (val_eq(a, b)) return;
     size_t at = path->len;
+    if (at == 8 && !memcmp(path->p, "openings", 8) && diff_openings(d, path, a->type == JR_NULL ? &EMPTY_ARR : a,
+                                                                       b->type == JR_NULL ? &EMPTY_ARR : b))
+        return; /* WAVE1B (B4) */
     if (a->type == JR_OBJ && b->type == JR_OBJ) {
         const JrVal *ka = jr_get(a, "kind"), *kb = jr_get(b, "kind");
         if ((!ka && !kb) || (ka && kb && val_eq(ka, kb))) {

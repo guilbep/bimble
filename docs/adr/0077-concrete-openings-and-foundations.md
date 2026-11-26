@@ -98,6 +98,14 @@ Each choice, then the alternative rejected.
     seen as a slab of its face (x, z) extruded through its thickness, and its openings across it
     (boxes and 32-gons) are the "holes" case of `prism_cut.h`, mapped back.
 
+17. **History: openings merge and diff by their GlobalIds** (WAVE1B B4): a three-way merge takes
+    an element's `openings` opening by opening (an opening added on one branch and another on the
+    other branch are both kept; one added and the host moved merged as before), the same opening
+    changed differently on both is a conflict named `openings.<id>.<field>`; the diff names an
+    opening by its GlobalId (`openings.<id>.generator.width`). A list with an opening without a
+    GlobalId is taken whole, as Rust does. Rejected: openings as objects of their own in the
+    commit tree (a file and repo format change for the same result).
+
 ## Response times (ADR 0074)
 
 Measured by `ccore/test/lab_concrete.mjs` on the native host (tcc build), headless Chromium with
