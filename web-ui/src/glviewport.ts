@@ -89,6 +89,7 @@ import { BATCH_TRIS, boxInFrustum, budgetCut, cutEnd, frustumPlanes, makeBatches
 import { batchShown, IDENTITY_XF, packState, sameXf, STATE_NONE, STATE_TEX_W, xfBox, xfPoint, xfRayToLocal, xfRows, type ModelXf } from "./gl/cull"; // LNK3D
 import { cutProxies, fitProxies, parseBprx, standIns, usableCells, type Proxies } from "./gl/proxies"; // 3D2
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
+import { autoGpuBudget, linkDetail } from "./gl/linkmem"; // LNK3D (D)
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
 import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
@@ -185,6 +186,9 @@ interface Bmsh {
    *  per element its placement (12 floats: columns x, y, z, t). Absent: version 1, every mesh placed. */
   shape?: Uint32Array;
   place?: Float32Array;
+  /** LNK3D (D): per model (the open one, then each link) its elements, vertices and segments [first, end):
+   *  each model's own GPU buffers hold these. Absent: one model, everything. */
+  ranges?: { e0: number; e1: number; v0: number; v1: number; s0: number; s1: number }[];
 }
 
 /** 3D1: a shape with fewer copies, or fewer triangles, is baked into the merged buffers (placed like an
@@ -346,6 +350,7 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
   const all = [main, ...parts.map((p) => p.m)];
   const sum = (f: (m: Bmsh) => number) => all.reduce((a, m) => a + f(m), 0);
   const placed = all.some((m) => m.shape); // 3D1: version 3: shapes move by their placement, not their vertices
+  const ranges: NonNullable<Bmsh["ranges"]> = []; // LNK3D (D)
   const nE = sum((m) => m.ids.length), nV = sum((m) => m.pos.length / 3), nI = sum((m) => m.idx.length), nS = sum((m) => m.edges.length / 6);
   const out: Bmsh = {
     rev: main.rev, origin: main.origin, ids: [], cats: new Uint8Array(nE), v0: new Uint32Array(nE), nv: new Uint32Array(nE),
@@ -405,8 +410,10 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
       const x = m.normals[8 * g + h] ?? 0, y = m.normals[8 * g + h + 1] ?? 0;
       out.normals[8 * (s0 + g) + h] = Math.round(rx(x, y)), out.normals[8 * (s0 + g) + h + 1] = Math.round(ry(x, y));
     }
+    ranges.push({ e0, e1: e0 + m.ids.length, v0, v1: v0 + m.pos.length / 3, s0, s1: s0 + m.edges.length / 6 });
     e0 += m.ids.length, v0 += m.pos.length / 3, i0 += m.idx.length, s0 += m.edges.length / 6, sh0 += shMax;
   });
+  out.ranges = ranges;
   return out;
 }
 
@@ -677,6 +684,11 @@ interface GlStats {
   /** LNK3D (E): the notes on linked elements as last drawn (client px of the anchor) and the selected one. */
   notes?: { link: string; element: string; text: string; drawn: boolean; x: number; y: number }[];
   noteSelected?: number | null;
+  /** LNK3D (D): the GPU budget across links (bytes; a test hook: unset, automatic from memory_share), each link's
+   *  detail on the GPU or not (its bytes, its uploads), the last upload of a link's detail (ms). */
+  gpuBudget?: number;
+  linkDetail?: { name: string; detail: boolean; bytes: number; loads: number }[];
+  linkReloadMs?: number;
   /** 3D2 (step 4): ms of the last pick's ray scan in the page (pickHit). */
   pickMs?: number;
   /** 3D2: true while the proxies are being asked for (frames.mjs waits for them). */
@@ -855,60 +867,78 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.activeTexture(gl.TEXTURE0);
   };
   uploadModels();
-  const elBuf = gl.createBuffer(), edgeElBuf = gl.createBuffer(), instElBuf = gl.createBuffer(); // the element ids
   // ---- end LNK3D ----
 
-  // One VAO: positions (location 0), per-vertex sRGB colour (location 1, u8 normalized), indices.
-  // Edges reuse it: location 0 points at the edge buffer, location 1 is a constant.
-  const vao = gl.createVertexArray();
-  const posBuf = gl.createBuffer(), colBuf = gl.createBuffer(), idxBuf = gl.createBuffer(), edgeBuf = gl.createBuffer();
-  gl.bindVertexArray(vao);
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
-  gl.bindBuffer(gl.ARRAY_BUFFER, elBuf); // LNK3D: each vertex's element
-  gl.enableVertexAttribArray(8);
-  gl.vertexAttribIPointer(8, 1, gl.UNSIGNED_INT, 4, 0);
-  gl.bindVertexArray(null);
-  // Edges: their own VAO (positions, the two face normals per vertex, the visible segments' indices).
-  const edgeVao = gl.createVertexArray();
-  const edgeNrm = gl.createBuffer(), edgeIdx = gl.createBuffer();
-  gl.bindVertexArray(edgeVao);
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIdx);
-  gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
-  gl.enableVertexAttribArray(2);
-  gl.vertexAttribPointer(2, 4, gl.BYTE, true, 8, 0);
-  gl.enableVertexAttribArray(3);
-  gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
-  gl.bindBuffer(gl.ARRAY_BUFFER, edgeElBuf); // LNK3D: each segment vertex's element
-  gl.enableVertexAttribArray(8);
-  gl.vertexAttribIPointer(8, 1, gl.UNSIGNED_INT, 4, 0);
-  gl.bindVertexArray(null);
+  // ---- LNK3D (D, ADR 0078 amendment 3): each model (the open one, each link) has its own buffers and VAOs
+  // (makeModelGl), so a link's detail can leave the GPU and come back; the names below (vao, posBuf, …) are
+  // the model being drawn (useModel), as one model's were before. ----
+  interface ModelGl { vao: WebGLVertexArrayObject; edgeVao: WebGLVertexArrayObject; instVao: WebGLVertexArrayObject; instEdgeVao: WebGLVertexArrayObject;
+    pos: WebGLBuffer; el: WebGLBuffer; idx: WebGLBuffer; edge: WebGLBuffer; edgeNrm: WebGLBuffer; edgeEl: WebGLBuffer; edgeIdx: WebGLBuffer;
+    shapeIdx: WebGLBuffer; instMat: WebGLBuffer; instEl: WebGLBuffer; bytes: number }
+  const makeModelGl = (): ModelGl => {
+    // One VAO: positions (location 0), the element of each vertex (location 8: its colour and state), indices.
+    const vao = gl.createVertexArray(), pos = gl.createBuffer(), el = gl.createBuffer(), idx = gl.createBuffer();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
+    gl.bindBuffer(gl.ARRAY_BUFFER, pos);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, el); // LNK3D: each vertex's element
+    gl.enableVertexAttribArray(8);
+    gl.vertexAttribIPointer(8, 1, gl.UNSIGNED_INT, 4, 0);
+    // Edges: their own VAO (positions, the two face normals per vertex, the visible segments' indices).
+    const edgeVao = gl.createVertexArray(), edge = gl.createBuffer(), edgeNrm = gl.createBuffer(), edgeEl = gl.createBuffer(), edgeIdx = gl.createBuffer();
+    gl.bindVertexArray(edgeVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIdx);
+    gl.bindBuffer(gl.ARRAY_BUFFER, edge);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 4, gl.BYTE, true, 8, 0);
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
+    gl.bindBuffer(gl.ARRAY_BUFFER, edgeEl); // LNK3D: each segment vertex's element
+    gl.enableVertexAttribArray(8);
+    gl.vertexAttribIPointer(8, 1, gl.UNSIGNED_INT, 4, 0);
+    // ---- 3D1 (ADR 0078): copies drawn instanced. The shapes' indices packed (shapeIdx), per instance its
+    // placement (instMat, 48 bytes) and element (instEl: its colour and state), grouped by (model, shape,
+    // mirrored); a group is one drawElementsInstanced (faces) and one drawArraysInstanced (edges). ----
+    const shapeIdx = gl.createBuffer(), instMat = gl.createBuffer(), instEl = gl.createBuffer();
+    const instVao = gl.createVertexArray(), instEdgeVao = gl.createVertexArray();
+    gl.bindVertexArray(instVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shapeIdx);
+    gl.bindBuffer(gl.ARRAY_BUFFER, pos);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    for (const l of [4, 5, 6, 7, 8]) gl.enableVertexAttribArray(l), gl.vertexAttribDivisor(l, 1);
+    gl.bindVertexArray(instEdgeVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, edge);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 4, gl.BYTE, true, 8, 0);
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
+    for (const l of [4, 5, 6, 7, 8]) gl.enableVertexAttribArray(l), gl.vertexAttribDivisor(l, 1);
+    gl.bindVertexArray(null);
+    return { vao, edgeVao, instVao, instEdgeVao, pos, el, idx, edge, edgeNrm, edgeEl, edgeIdx, shapeIdx, instMat, instEl, bytes: 0 };
+  };
+  const freeModelGl = (g: ModelGl) => {
+    for (const v of [g.vao, g.edgeVao, g.instVao, g.instEdgeVao]) gl.deleteVertexArray(v);
+    for (const b of [g.pos, g.el, g.idx, g.edge, g.edgeNrm, g.edgeEl, g.edgeIdx, g.shapeIdx, g.instMat, g.instEl]) gl.deleteBuffer(b);
+  };
+  const g0 = makeModelGl();
+  let vao = g0.vao, edgeVao = g0.edgeVao, instVao = g0.instVao, instEdgeVao = g0.instEdgeVao;
+  let posBuf = g0.pos, elBuf = g0.el, idxBuf = g0.idx, edgeBuf = g0.edge, edgeNrm = g0.edgeNrm, edgeElBuf = g0.edgeEl, edgeIdx = g0.edgeIdx;
+  let shapeIdxBuf = g0.shapeIdx, instMat = g0.instMat, instElBuf = g0.instEl;
+  /** Draws (and uploads) model g from now on. */
+  const useModel = (g: ModelGl) => {
+    ({ vao, edgeVao, instVao, instEdgeVao, pos: posBuf, el: elBuf, idx: idxBuf, edge: edgeBuf, edgeNrm, edgeEl: edgeElBuf, edgeIdx, shapeIdx: shapeIdxBuf, instMat, instEl: instElBuf } = g);
+  };
   let faceN = 0, faceMainN = 0, edgeN = 0, edgeMainN = 0;
-  // ---- 3D1 (ADR 0078): copies drawn instanced. The shapes' indices packed (shapeIdxBuf), per visible
-  // instance its placement (instMat, 48 bytes) and colour (instCol, 4 bytes), grouped by (link or not,
-  // shape, mirrored); a group is one drawElementsInstanced (faces) and one drawArraysInstanced (edges). ----
-  const shapeIdxBuf = gl.createBuffer(), instMat = gl.createBuffer(), instCol = gl.createBuffer();
-  const instVao = gl.createVertexArray(), instEdgeVao = gl.createVertexArray();
-  gl.bindVertexArray(instVao);
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shapeIdxBuf);
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-  // LNK3D: an instance's colour is its element's (the state texture): its element id per instance
-  for (const l of [4, 5, 6, 7, 8]) gl.enableVertexAttribArray(l), gl.vertexAttribDivisor(l, 1);
-  gl.bindVertexArray(instEdgeVao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
-  gl.enableVertexAttribArray(2);
-  gl.vertexAttribPointer(2, 4, gl.BYTE, true, 8, 0);
-  gl.enableVertexAttribArray(3);
-  gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
-  for (const l of [4, 5, 6, 7, 8]) gl.enableVertexAttribArray(l), gl.vertexAttribDivisor(l, 1);
-  gl.bindVertexArray(null);
+  // ---- end LNK3D (D) ----
   // 3D1: the outlines of unfinished batches: the 12 edges of the unit cube, placed per box (instanced)
   const cubeBuf = gl.createBuffer(), outlineMat = gl.createBuffer(), outlineVao = gl.createVertexArray();
   {
@@ -1364,7 +1394,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   let elColour = new Uint32Array(0), recoloured: number[] | null = null;
   /** Per element: its first index in the merged face list and edge list (-1: instanced or not drawn), its
    *  instance and group (-1: merged). */
-  let elFace = new Int32Array(0), elEdge = new Int32Array(0), elInst = new Int32Array(0), elGroup = new Int32Array(0);
+  let elFace = new Int32Array(0), elEdge = new Int32Array(0), elInst = new Int32Array(0), elGroup = new Int32Array(0), elDb = new Int32Array(0); // (LNK3D: its batch)
   /** The last frame was a complete picture of the open model (whole, or the end of a fill) and which
    *  leaves its proxies stood for. */
   let lastComplete = false, lastReplaced: Uint8Array | null = null, lastLinkRep: (Uint8Array | null)[] = [];
@@ -1378,6 +1408,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (lf >= 0 && lastReplaced?.[lf]) return false; // under a proxy: the picture changes more
       const mdl = m.model?.[el] ?? 0, lx = mdl > 0 ? modelPrx[mdl] : null, ll = mdl > 0 ? m.links?.[mdl - 1] : undefined; // LNK3D (C): a link's
       if (lx && ll && lastLinkRep[mdl]?.[lx.p.leafOf[el - ll.e0] ?? -1]) return false;
+      if (!slots[mdl]?.gl) return false; // LNK3D (D): its link's detail released
     }
     const tOver = performance.now(); // GPU1
     const { e, mvp } = matrices();
@@ -1393,14 +1424,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.uniform1f(uAmbient, AMBIENT);
+    const host = slots[0]?.gl ?? g0, gOf = (el: number) => slots[m.model?.[el] ?? 0]?.gl ?? host; // LNK3D (D): each element in its model's buffers
+    useModel(host);
     gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.disableVertexAttribArray(1); // LNK3D: the colour is the element's state
     gl.uniform1i(uElCol, 1), gl.uniform1i(uModel, 0);
     const shownEls = els.filter((el) => shown[el]);
     for (const el of shownEls) {
       const link = (m.model?.[el] ?? 0) > 0;
+      useModel(gOf(el)), gl.bindVertexArray(vao);
       gl.polygonOffset(link ? 2.5 : 1.5, link ? 16 : 2);
       if (elFace[el]! >= 0) { gl.drawElements(gl.TRIANGLES, m.ni[el] ?? 0, gl.UNSIGNED_INT, 4 * elFace[el]!); continue; }
       const g = groups[elGroup[el]!];
@@ -1419,6 +1451,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.depthMask(false);
       for (const el of shownEls) {
         const link = (m.model?.[el] ?? 0) > 0, c = link ? REFERENCE_EDGE_SRGB : EDGE_SRGB;
+        if (dbs[elDb[el] ?? -1]?.noEdge) continue; // LNK3D (F): as the frame drew it, without edges
+        useModel(gOf(el));
         if (elEdge[el]! >= 0) {
           gl.bindVertexArray(edgeVao);
           gl.vertexAttrib3f(1, c[0]! / 255, c[1]! / 255, c[2]! / 255);
@@ -1435,6 +1469,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.depthMask(true);
     }
     gl.uniform1i(uElCol, 1);
+    useModel(host);
     gl.bindVertexArray(null);
     drawOverlay();
     stats.frames++;
@@ -1450,6 +1485,90 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** LNK3D: link elements [a, b) placed by x: their scene boxes from their own. */
   const placeLinkBoxes = (a: number, b: number, x: ModelXf) => { for (let e = a; e < b; e++) xfBox(x, lboxes, 6 * e, boxes, 6 * e); };
   let meshBytes = 0, listBytes = 0; // 3D1: the model's GPU bytes (stats.gpuBytes)
+  // ---- LNK3D (D): a model's slot: its ranges in the mesh, its GPU buffers (null: released), its draw lists
+  // (kept in the page: a release frees the GPU's copy only), when it was last needed and its GPU bytes ----
+  interface Slot { k: number; e0: number; e1: number; v0: number; v1: number; s0: number; s1: number; gl: ModelGl | null;
+    lists: { fi: Uint32Array; ei: Uint32Array; mats: Float32Array; inst: Uint32Array } | null; bytes: number; needAt: number; loads: number;
+    /** The last frame drew some of it in detail. */
+    drawn?: boolean }
+  let slots: Slot[] = [];
+  /** Uploads slot x's mesh (and its lists, when made) into new buffers. */
+  const loadSlot = (x: Slot) => {
+    const m = mesh;
+    if (!m) return;
+    if (!x.gl) x.gl = makeModelGl();
+    const g = x.gl, nV = x.v1 - x.v0, nS = x.s1 - x.s0;
+    const ev = new Uint32Array(nV), es = new Uint32Array(2 * nS);
+    for (let e = x.e0; e < x.e1; e++) {
+      ev.fill(e, m.v0[e]! - x.v0, m.v0[e]! - x.v0 + m.nv[e]!);
+      if (!m.shape?.[e]) es.fill(e, 2 * (m.s0[e]! - x.s0), 2 * (m.s0[e]! - x.s0 + m.ns[e]!));
+    }
+    const pos = m.pos.subarray(3 * x.v0, 3 * x.v1), edges = m.edges.subarray(6 * x.s0, 6 * x.s1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.pos);
+    gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.el);
+    gl.bufferData(gl.ARRAY_BUFFER, ev, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.edge);
+    gl.bufferData(gl.ARRAY_BUFFER, edges, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.edgeEl);
+    gl.bufferData(gl.ARRAY_BUFFER, es, gl.STATIC_DRAW);
+    // The two face normals of each segment, for both of its vertices (3D2, step 5: 4-byte words, not a
+    // subarray a segment; the blocks start on 4-byte boundaries, mesh.c).
+    const nrm = new Int8Array(16 * nS);
+    {
+      const d = new Uint32Array(nrm.buffer), o = m.normals.byteOffset + 8 * x.s0;
+      const sw = o % 4 === 0 ? new Uint32Array(m.normals.buffer, o, 2 * nS) : new Uint32Array(m.normals.slice(8 * x.s0, 8 * x.s1).buffer, 0, 2 * nS);
+      for (let k = 0; k < nS; k++) { const a = sw[2 * k]!, b = sw[2 * k + 1]!; d[4 * k] = a, d[4 * k + 1] = b, d[4 * k + 2] = a, d[4 * k + 3] = b; }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.edgeNrm);
+    gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
+    // its shapes' indices, packed, numbered from its first vertex
+    const seen = new Set<number>();
+    let si = 0;
+    for (let e = x.e0; e < x.e1; e++) { const k = m.shape?.[e] ?? 0; if (k && !seen.has(k)) seen.add(k), shapeI0[k - 1] = si, si += m.ni[e] ?? 0; }
+    const sidx = new Uint32Array(si);
+    seen.clear();
+    for (let e = x.e0; e < x.e1; e++) {
+      const k = m.shape?.[e] ?? 0;
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      const a = m.i0[e] ?? 0, n = m.ni[e] ?? 0, o = shapeI0[k - 1]!;
+      for (let i = 0; i < n; i++) sidx[o + i] = m.idx[a + i]! - x.v0;
+    }
+    gl.bindVertexArray(g.instVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.shapeIdx);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sidx, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    x.bytes = pos.byteLength + ev.byteLength + edges.byteLength + es.byteLength + nrm.byteLength + sidx.byteLength;
+    if (x.lists) uploadLists(x);
+    x.loads++;
+  };
+  /** Uploads slot x's draw lists (faces, edges, instances) into its buffers. */
+  const uploadLists = (x: Slot) => {
+    const g = x.gl, l = x.lists;
+    if (!g || !l) return;
+    gl.bindVertexArray(g.vao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.idx);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, l.fi, gl.STATIC_DRAW);
+    gl.bindVertexArray(g.edgeVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.edgeIdx);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, l.ei, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.instMat);
+    gl.bufferData(gl.ARRAY_BUFFER, l.mats, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.instEl);
+    gl.bufferData(gl.ARRAY_BUFFER, l.inst, gl.STATIC_DRAW);
+    x.bytes += l.fi.byteLength + l.ei.byteLength + l.mats.byteLength + l.inst.byteLength;
+  };
+  /** What the GPU holds: each model's buffers (lists included), the state texture, the proxies (3D2's, the links'). */
+  const gpuNow = () => slots.reduce((n, x) => n + x.bytes, 0) + 4 * STATE_TEX_W * stateRows + prxBytes + [...linkPrx.values()].reduce((n, x) => n + x.bytes, 0);
+  /** Frees slot x's GPU buffers (its proxies, when it has some, stand for it). */
+  const releaseSlot = (x: Slot) => {
+    if (!x.gl) return;
+    freeModelGl(x.gl);
+    x.gl = null, x.bytes = 0;
+  };
+  // ---- end LNK3D (D) ----
   const upload = (m: Bmsh) => {
     mesh = m;
     boxes = new Float32Array(6 * m.ids.length);
@@ -1479,18 +1598,6 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     modelXf = [IDENTITY_XF, ...(m.links ?? []).map((l) => l.xf)];
     for (const l of m.links ?? []) placeLinkBoxes(l.e0, l.e0 + l.elements, l.xf);
     uploadModels();
-    {
-      const nV = m.pos.length / 3, nS = m.edges.length / 6, ev = new Uint32Array(nV), es = new Uint32Array(2 * nS);
-      for (let e = 0; e < m.ids.length; e++) {
-        ev.fill(e, m.v0[e]!, m.v0[e]! + m.nv[e]!);
-        if (!m.shape?.[e]) es.fill(e, 2 * m.s0[e]!, 2 * (m.s0[e]! + m.ns[e]!));
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, elBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, ev, gl.STATIC_DRAW);
-      gl.bindBuffer(gl.ARRAY_BUFFER, edgeElBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, es, gl.STATIC_DRAW);
-      elBytes = ev.byteLength + es.byteLength;
-    }
     stateTexels = new Uint8Array(4 * m.ids.length), stateRows = 0;
     const min: V3 = [Infinity, Infinity, Infinity], max: V3 = [-Infinity, -Infinity, -Infinity];
     for (let e = 0; e < m.ids.length; e++) { // 3D1: the elements' boxes (placed shapes placed): the vertices' bounds
@@ -1501,40 +1608,18 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
     }
     bounds = m.pos.length ? { center: scale(add(min, max), 0.5), radius: Math.max(1, Math.hypot(...sub(max, min)) / 2) } : null;
-    gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, m.pos, gl.STATIC_DRAW);
-    gl.bindVertexArray(null);
-    gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, m.edges, gl.STATIC_DRAW);
-    // The two face normals of each segment, for both of its vertices (3D2, step 5: 4-byte words, not a
-    // subarray a segment; the blocks start on 4-byte boundaries, mesh.c).
-    const nrm = new Int8Array(16 * (m.edges.length / 6));
-    {
-      const ns = m.edges.length / 6, d = new Uint32Array(nrm.buffer);
-      const sw = m.normals.byteOffset % 4 === 0 ? new Uint32Array(m.normals.buffer, m.normals.byteOffset, 2 * ns) : new Uint32Array(m.normals.slice().buffer, 0, 2 * ns);
-      for (let k = 0; k < ns; k++) { const a = sw[2 * k]!, b = sw[2 * k + 1]!; d[4 * k] = a, d[4 * k + 1] = b, d[4 * k + 2] = a, d[4 * k + 3] = b; }
-    }
-    gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
-    gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
-    // 3D1: each placed shape's indices once, packed (the merged lists hold the own meshes')
+    // 3D1: each placed shape's indices once, packed per model (the merged lists hold the own meshes'); shapeI0:
+    // a shape's first index in its model's packed list
     let nsh = 0;
     for (let e = 0; e < m.ids.length; e++) nsh = Math.max(nsh, m.shape?.[e] ?? 0);
     shapeI0 = new Uint32Array(nsh);
-    const seen = new Uint8Array(nsh);
-    let si = 0;
-    for (let e = 0; e < m.ids.length; e++) { const k = m.shape?.[e] ?? 0; if (k && !seen[k - 1]) seen[k - 1] = 1, shapeI0[k - 1] = si, si += m.ni[e] ?? 0; }
-    const sidx = new Uint32Array(si);
-    for (let e = 0; e < m.ids.length; e++) {
-      const k = m.shape?.[e] ?? 0;
-      if (k && seen[k - 1] === 1) seen[k - 1] = 2, sidx.set(m.idx.subarray(m.i0[e] ?? 0, (m.i0[e] ?? 0) + (m.ni[e] ?? 0)), shapeI0[k - 1]);
-    }
-    gl.bindVertexArray(instVao);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shapeIdxBuf);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sidx, gl.STATIC_DRAW);
-    gl.bindVertexArray(null);
-    meshBytes = m.pos.byteLength + m.edges.byteLength + nrm.byteLength + elBytes + sidx.byteLength + 4 * m.ids.length; // 3D1: shape indices (LNK3D: element ids, not colours; the state texture)
-    stats.gpuBytes = meshBytes + listBytes + prxBytes; // (3D2: + the proxies)
+    // LNK3D (D): a slot per model, its own buffers uploaded (all of them now; the budget may release some)
+    for (const x of slots) if (x.gl) freeModelGl(x.gl);
+    slots = (m.ranges ?? [{ e0: 0, e1: m.ids.length, v0: 0, v1: m.pos.length / 3, s0: 0, s1: m.edges.length / 6 }])
+      .map((r, k) => ({ k, ...r, gl: null, lists: null, bytes: 0, needAt: performance.now(), loads: 0 }));
+    for (const x of slots) loadSlot(x);
+    meshBytes = slots.reduce((n, x) => n + x.bytes, 0) + 4 * m.ids.length; // (LNK3D: + the state texture)
+    stats.gpuBytes = gpuNow();
     // 3D2 (step 5): a mesh of at least FIRST_BUDGET_TRIS triangles: its boxes first, then a budgeted first frame and
     // slices (a smaller one is drawn whole at once, as before: its whole frame is short and its lists fast)
     let tris = 0;
@@ -1576,7 +1661,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindBuffer(gl.ARRAY_BUFFER, prxNrm);
     gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
     prxBytes = p.pos.byteLength + col.byteLength + p.idx.byteLength + p.edges.byteLength + nrm.byteLength;
-    stats.gpuBytes = meshBytes + listBytes + prxBytes;
+    stats.gpuBytes = gpuNow();
   };
   const loadProxies = async (m: Bmsh): Promise<void> => {
     prx = null, prxBytes = 0, prxFor = m;
@@ -1844,7 +1929,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (shown.length !== m.ids.length) shown = new Uint8Array(m.ids.length).fill(1);
     let nf = 0, ne = 0;
     for (let e = 0; e < m.ids.length; e++) if (!m.shape?.[e]) nf += m.ni[e] ?? 0, ne += m.ns[e] ?? 0;
-    const fi = new Uint32Array(nf), ei = new Uint32Array(2 * ne);
+    // LNK3D (D): each model's lists in its own arrays (offsets from 0 in each; vertices from its first)
+    const nfOf = slots.map(() => 0), neOf = slots.map(() => 0);
+    for (let e = 0; e < m.ids.length; e++) if (!m.shape?.[e]) { const md = m.model?.[e] ?? 0; nfOf[md] = nfOf[md]! + (m.ni[e] ?? 0), neOf[md] = neOf[md]! + (m.ns[e] ?? 0); }
+    let fi = new Uint32Array(0), ei = new Uint32Array(0);
     let f = 0, k = 0;
     dbs = [];
     const linkDbs: DrawBatch[] = [];
@@ -1865,8 +1953,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const nModels = 1 + (m.links?.length ?? 0);
     const byModel: number[][] = Array.from({ length: nModels }, () => []);
     for (let e = 0; e < m.ids.length; e++) if (!m.shape?.[e]) byModel[m.model?.[e] ?? 0]!.push(e);
+    const fiOf: Uint32Array[] = [], eiOf: Uint32Array[] = [];
     for (let mdl = 0; mdl < nModels; mdl++) { // LNK3D: a model's batches never mix with another's (its matrix, its memory)
-      const links = mdl > 0;
+      const links = mdl > 0, sl = slots[mdl]!, vb = sl.v0, sb = sl.s0;
+      fi = new Uint32Array(nfOf[mdl] ?? 0), ei = new Uint32Array(2 * (neOf[mdl] ?? 0)), f = 0, k = 0;
       const { order: ord, batches: bs } = makeBatches(byModel[mdl]!, boxes, (e) => (m.ni[e] ?? 0) / 3, (e) => m.ns[e] ?? 0, BATCH_TRIS, grp);
       for (const b of bs) {
         (links ? linkDbs : dbs).push({ b, f0: f, e0: k, link: links, model: mdl, items: Uint32Array.from(ord.slice(b.first, b.first + b.n)), g: null, k0: 0, k1: b.n });
@@ -1874,21 +1964,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
           const e = ord[j]!;
           const i0 = m.i0[e] ?? 0, n = m.ni[e] ?? 0;
           elFace[e] = f, elEdge[e] = k; // 3D2 (step 4)
-          fi.set(m.idx.subarray(i0, i0 + n), f);
+          for (let i = 0; i < n; i++) fi[f + i] = m.idx[i0 + i]! - vb;
           f += n;
           const s0 = m.s0[e] ?? 0, ns = m.ns[e] ?? 0;
-          for (let q = s0; q < s0 + ns; q++) ei[k++] = 2 * q, ei[k++] = 2 * q + 1;
+          for (let q = s0 - sb; q < s0 - sb + ns; q++) ei[k++] = 2 * q, ei[k++] = 2 * q + 1;
         }
       }
       if (!links) edgeMainN = k, faceMainN = f;
+      fiOf.push(fi), eiOf.push(ei);
     }
-    gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, fi, gl.STATIC_DRAW);
-    gl.bindVertexArray(edgeVao);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIdx);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ei, gl.STATIC_DRAW);
-    gl.bindVertexArray(null);
     faceN = nf;
     edgeN = 2 * ne;
     // ---- 3D1: the instances, grouped by (model, shape, mirrored) ----
@@ -1909,13 +1993,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const g = groups[groups.length - 1], kk = keys.get(e)!;
       if (g && keys.get(byGroup[byGroup.length - 1]![0]!) === kk) { g.count++; byGroup[byGroup.length - 1]!.push(e); return; }
       byGroup.push([e]);
-      groups.push({ i0: shapeI0[(m.shape![e] ?? 1) - 1] ?? 0, ni: m.ni[e] ?? 0, s0: m.s0[e] ?? 0, ns: m.ns[e] ?? 0, first: 0, count: 1,
-        mirrored: mirroredOf(e), link: (m.model?.[e] ?? 0) > 0, model: m.model?.[e] ?? 0, dbs: [] });
+      const md = m.model?.[e] ?? 0; // LNK3D (D): its segments from its model's first
+      groups.push({ i0: shapeI0[(m.shape![e] ?? 1) - 1] ?? 0, ni: m.ni[e] ?? 0, s0: (m.s0[e] ?? 0) - (slots[md]?.s0 ?? 0), ns: m.ns[e] ?? 0, first: 0, count: 1,
+        mirrored: mirroredOf(e), link: md > 0, model: md, dbs: [] });
     });
-    // 3D1 (step 2): each group's instances in spatial batches, largest first inside each
-    const inst: number[] = [];
+    // 3D1 (step 2): each group's instances in spatial batches, largest first inside each (LNK3D (D): numbered
+    // in its model's instance list)
+    const inst: number[] = [], instOf: number[][] = slots.map(() => []);
     groups.forEach((g, gi) => {
-      g.first = inst.length;
+      g.first = instOf[g.model]!.length;
       const { order: ord, batches: bs } = makeBatches(byGroup[gi]!, boxes, () => g.ni / 3, () => g.ns, BATCH_TRIS, grp);
       for (const b of bs) {
         const d: DrawBatch = { b, f0: 0, e0: 0, link: g.link, model: g.model, items: Uint32Array.from(ord.slice(b.first, b.first + b.n)), g, k0: 0, k1: b.n };
@@ -1923,23 +2009,29 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         (g.link ? linkDbs : dbs).push(d);
       }
       inst.push(...ord);
+      instOf[g.model]!.push(...ord);
     });
     // LNK3D: the links' batches by model (merged then instanced each), after the open model's
     linkDbs.sort((x, y) => x.model - y.model);
     dbs.push(...linkDbs);
     instEls = Uint32Array.from(inst);
-    inst.forEach((e, i) => { elInst[e] = i; }); // 3D2 (step 4)
-    groups.forEach((g, gi) => { for (let i = g.first; i < g.first + g.count; i++) elGroup[inst[i]!] = gi; });
-    const mats = new Float32Array(12 * inst.length);
-    inst.forEach((e, i) => mats.set(P.subarray(12 * e, 12 * e + 12), 12 * i));
-    gl.bindBuffer(gl.ARRAY_BUFFER, instMat);
-    gl.bufferData(gl.ARRAY_BUFFER, mats, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, instElBuf); // LNK3D: each instance's element (its state)
-    gl.bufferData(gl.ARRAY_BUFFER, instEls, gl.STATIC_DRAW);
+    for (const l of instOf) l.forEach((e, i) => { elInst[e] = i; }); // 3D2 (step 4) (LNK3D: in its model's list)
+    groups.forEach((g, gi) => { const l = instOf[g.model]!; for (let i = g.first; i < g.first + g.count; i++) elGroup[l[i]!] = gi; });
+    // LNK3D (D): each model's lists kept with its slot and uploaded into its buffers (a released one: when it comes back)
+    listBytes = 0;
+    slots.forEach((x, mdl) => {
+      const li = instOf[mdl] ?? [], mats = new Float32Array(12 * li.length);
+      li.forEach((e, i) => mats.set(P.subarray(12 * e, 12 * e + 12), 12 * i));
+      if (x.gl && x.lists) x.bytes -= x.lists.fi.byteLength + x.lists.ei.byteLength + x.lists.mats.byteLength + x.lists.inst.byteLength;
+      x.lists = { fi: fiOf[mdl] ?? new Uint32Array(0), ei: eiOf[mdl] ?? new Uint32Array(0), mats, inst: Uint32Array.from(li) };
+      uploadLists(x);
+      listBytes += x.lists.fi.byteLength + x.lists.ei.byteLength + mats.byteLength + 4 * li.length;
+    });
     // ---- end 3D1 ----
-    listBytes = fi.byteLength + ei.byteLength + mats.byteLength + instEls.byteLength; // 3D1
-    stats.gpuBytes = meshBytes + listBytes + prxBytes + 4 * STATE_TEX_W * stateRows + [...linkPrx.values()].reduce((n, x) => n + x.bytes, 0); // (3D2: + the proxies; LNK3D: + the state texture, the links' proxies)
+    stats.gpuBytes = gpuNow();
     stats.listsBuilt = (stats.listsBuilt ?? 0) + 1;
+    elDb = new Int32Array(m.ids.length).fill(-1);
+    dbs.forEach((d, i) => { for (const e of d.items) elDb[e] = i; });
     applyVisibility();
   };
   /** The box that cuts now: the drag's preview, else the session's box when it is on. */
@@ -2098,7 +2190,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // ---- LNK3D (C): each shown link's proxies, cut with the eye in its frame (same rules: not in a plan, not
     // with a section box, not over a hidden or selected element: usableCells) ----
     const linkCut: { x: LinkPrx; cells: number[]; mdl: number; colour: number }[] = [];
-    const linkRep: (Uint8Array | null)[] = [];
+    const linkRep: (Uint8Array | null)[] = [], linkNeed: (Uint8Array | null)[] = []; // (D: the leaves the normal cut replaces)
     if (!stats.noProxies && !box && !plan && proxiesOn() && m.links) {
       const linked = state.value.linked ?? null;
       m.links.forEach((l, k) => {
@@ -2109,15 +2201,28 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
           x.usableKey = uk;
           x.usable = usableCells(x.p, (el) => shown[l.e0 + el] === 1 && !(linked && linked.link === l.name && linked.id === m.ids[l.e0 + el]));
         }
-        const { cells, replaced: r } = cutLinkPrx(x, l.xf, x.usable, planes, e, movingNow ? MOVING_PROXY_PX : STILL_PROXY_PX);
-        linkRep[k + 1] = r;
+        const normal = cutLinkPrx(x, l.xf, x.usable, planes, e, movingNow ? MOVING_PROXY_PX : STILL_PROXY_PX);
+        // LNK3D (D): its detail released: its coarsest usable proxies stand for it until it is back
+        const { cells, replaced: r } = slots[k + 1]?.gl ? normal : cutLinkPrx(x, l.xf, x.usable, planes, e, Infinity);
+        linkRep[k + 1] = r, linkNeed[k + 1] = normal.replaced;
         if (cells.length) linkCut.push({ x, cells, mdl: k + 1, colour: l.colour ?? -1 });
       });
     }
     for (const x of linkPrx.values()) x.drawnCells = x.drawnTris = 0;
     // ---- end LNK3D (C) ----
+    const missing: Float32Array[] = []; // LNK3D (D): batches needed while their link's detail is away: their boxes
     for (const d of dbs) {
       if (d.b.shown === 0) { d.k0 = d.k1 = 0; continue; } // LNK3D: every element of it hidden (a link hidden too)
+      const sl = slots[d.model];
+      if (sl && !sl.gl) { // LNK3D (D): its link's detail released: asked again when this frame would draw it
+        if (!planes || boxInFrustum(planes, d.b.box, 0)) {
+          const nr = linkNeed[d.model], r2 = linkRep[d.model];
+          if (!(nr && d.b.group >= 0 && nr[d.b.group])) wanted.add(d.model);
+          if (!(r2 && d.b.group >= 0 && r2[d.b.group])) missing.push(d.b.box);
+        }
+        d.k0 = d.k1 = 0;
+        continue;
+      }
       const rp = d.model === 0 ? replaced : linkRep[d.model] ?? null; // LNK3D (C): a link's own leaves
       if (rp && d.b.group >= 0 && rp[d.b.group]) { d.k0 = d.k1 = 0; continue; } // 3D2: a proxy stands for it
       if (planes && !boxInFrustum(planes, d.b.box, 0)) { d.k0 = d.k1 = 0; culled++; continue; }
@@ -2156,7 +2261,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         unDs = unDs.filter(({ d }) => !(d.b.group >= 0 && r[d.b.group]));
       }
     }
-    const unfinished = unDs.map(({ d }) => d.b.box);
+    const unfinished = [...unDs.map(({ d }) => d.b.box), ...missing];
+    for (const x of slots) x.drawn = false; // LNK3D (D): a link drawn in detail by the last frame is needed (on screen)
+    for (const d of dbs) if (d.k1 > d.k0 && d.model > 0) { const x = slots[d.model]; if (x) x.drawn = true, x.needAt = performance.now(); }
     stats.moving = { moving: movingNow, slice, budget, t: cutT, batches: dbs.length, culled, outlines: unfinished.length, tris: 0, proxied: prxCells.length };
     // 3D2: the proxies' runs (cells in order: their parts lie side by side), faces in a frame that starts
     // over, edges then and in the last pass of a fill
@@ -2245,10 +2352,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.bindVertexArray(vao);
     };
     // ---- end 3D2 (step 3) ----
-    const instFaces = (link: boolean) => {
+    const instFaces = (mdl: number) => { // (LNK3D (D): one model's, in its buffers)
       let any = false;
       for (const g of groups) {
-        if (g.link !== link || !g.ni) continue;
+        if (g.model !== mdl || !g.ni) continue;
         let a = -1, z = -1; // a run of instances [a, z)
         const flush = () => {
           if (z <= a) return;
@@ -2269,27 +2376,28 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
       if (any) gl.bindVertexArray(vao);
     };
-    const merged = (link: boolean) => { // runs of the merged index list, neighbouring batches joined
+    const merged = (mdl: number) => { // runs of the merged index list, neighbouring batches joined (LNK3D (D): one model's)
       let a = -1, z = -1;
       const flush = () => { if (z > a) gl.drawElements(gl.TRIANGLES, z - a, gl.UNSIGNED_INT, 4 * a), fDraws++, fTris += (z - a) / 3; };
       for (const d of dbs) {
-        if (d.g || d.link !== link || d.k1 <= d.k0) continue;
+        if (d.g || d.model !== mdl || d.k1 <= d.k0) continue;
         const s = d.f0 + 3 * d.b.cum[d.k0]!, t = d.f0 + 3 * d.b.cum[d.k1]!;
         if (s === z) z = t;
         else flush(), a = s, z = t;
       }
       flush();
     };
+    const hostGl = slots[0]?.gl ?? g0;
     const faces = (push: number) => {
       gl.polygonOffset(1.5 + push, 2 + 2.4 * push); // (1.5, 2), and (4, 8) for the inward pass, as before
+      useModel(hostGl), gl.bindVertexArray(vao); // LNK3D (D): the open model's buffers
       if (occActive) occFaces(); // 3D2 (step 3)
-      else merged(false), instFaces(false);
+      else merged(0), instFaces(0);
       prxFaces(); // 3D2 (none with a section box)
       gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
-      merged(true);
-      instFaces(true);
+      for (const x of slots) if (x.k > 0 && x.gl) { useModel(x.gl), gl.bindVertexArray(vao); merged(x.k); instFaces(x.k); } // LNK3D (D): each link's loaded detail
       if (!slice || fill?.t === Infinity) for (const c of linkCut) { const n = drawLinkCells(c.x, c.cells, c.mdl, c.colour); fTris += n, fDraws++, linkPrxTris += n; } // LNK3D (C)
-      gl.bindVertexArray(vao);
+      useModel(hostGl), gl.bindVertexArray(vao);
     };
     if (!box) faces(0);
     else {
@@ -2321,10 +2429,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     let instSegs = 0, segs = 0;
     stats.linkProxies = [...linkPrx.values()].map((x) => ({ name: x.name, cells: x.p.cells.length, tris: x.p.tris.reduce((a, b) => a + b, 0), bytes: x.bytes,
       drawnCells: x.drawnCells, drawnTris: x.drawnTris })); // LNK3D (C)
-    const instEdges = (link: boolean) => { // 3D1: the instanced groups' segments, the batches drawn
+    const instEdges = (mdl: number) => { // 3D1: the instanced groups' segments, the batches drawn (LNK3D (D): one model's)
       let any = false;
       for (const g of groups) {
-        if (g.link !== link || !g.ns) continue;
+        if (g.model !== mdl || !g.ns) continue;
         let a = -1, z = -1;
         const flush = () => {
           if (z <= a) return;
@@ -2343,11 +2451,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
       if (any) gl.bindVertexArray(edgeVao);
     };
-    const mergedEdges = (link: boolean) => {
+    const mergedEdges = (mdl: number) => {
       let a = -1, z = -1;
       const flush = () => { if (z > a) gl.drawElements(gl.LINES, z - a, gl.UNSIGNED_INT, 4 * a), fDraws++, segs += (z - a) / 2; };
       for (const d of dbs) {
-        if (d.g || d.link !== link || d.k1 <= d.k0 || d.noEdge) continue; // LNK3D (F)
+        if (d.g || d.model !== mdl || d.k1 <= d.k0 || d.noEdge) continue; // LNK3D (F)
         const s = d.e0 + 2 * d.b.ecum[d.k0]!, t = d.e0 + 2 * d.b.ecum[d.k1]!;
         if (s === z) z = t;
         else flush(), a = s, z = t;
@@ -2362,13 +2470,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.bindVertexArray(edgeVao);
     };
     if (edgesOn) {
-      mergedEdges(false);
-      instEdges(false);
+      mergedEdges(0);
+      instEdges(0);
       if (stats.proxyEdges) prxEdges(); // LNK3D (F): never for proxies (a bench hook keeps 3D2's)
       // linked models: their edges in the reference edge colour
       gl.vertexAttrib3f(1, REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255);
-      mergedEdges(true);
-      instEdges(true);
+      for (const x of slots) if (x.k > 0 && x.gl) { useModel(x.gl), gl.bindVertexArray(edgeVao); mergedEdges(x.k); instEdges(x.k); } // LNK3D (D)
+      useModel(hostGl), gl.bindVertexArray(edgeVao);
     }
     stats.q2 = { edges: edgesOn, ortho: ortho3d(), edgeSegs: edgesOn ? segs + instSegs : 0 };
     if (unfinished.length) drawOutlines(unfinished), fDraws++;
@@ -3424,6 +3532,52 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   // ---- end 3D1 ----
 
+  // ---- LNK3D (D, ADR 0078 amendment 3): the GPU memory budget across links. Each frame after drawing: a link
+  // whose detail was released and that the frame needed is uploaded again (one a frame, from the page's
+  // copy: its slices; a link no longer needed by then is not: cancelled); over the budget, the loaded links
+  // least recently needed (hidden ones, those drawn as proxies, those out of view) give their buffers back,
+  // never the selected element's link nor one needed in the last NEED_MS. ----
+  const wanted = new Set<number>();
+  const NEED_MS = 2000;
+  const budgetStep = () => {
+    const m = mesh;
+    if (!m || slots.length < 2) return;
+    const now = performance.now(), sel = state.value.linked?.link ?? null;
+    const selK = sel === null ? -1 : 1 + (m.links ?? []).findIndex((l) => l.name === sel);
+    if (selK > 0 && slots[selK]) slots[selK]!.needAt = now;
+    for (const x of slots) if (x.drawn) x.needAt = now; // on screen in detail: needed while it stays
+    let changed = false;
+    const w = [...wanted].filter((k) => slots[k] && !slots[k]!.gl && m.links?.[k - 1]?.visible);
+    wanted.clear();
+    if (w.length) {
+      const x = slots[w.sort((a, b) => slots[b]!.needAt - slots[a]!.needAt)[0]!]!;
+      const t0 = performance.now();
+      loadSlot(x);
+      x.needAt = now, changed = true, dirty = true;
+      stats.linkReloadMs = performance.now() - t0;
+    }
+    const budget = stats.gpuBudget ?? autoGpuBudget(userSettings.value?.values.memory_share);
+    let total = gpuNow();
+    if (total > budget) {
+      const shownK = (x: Slot) => (m.links?.[x.k - 1]?.visible ? 1 : 0);
+      const cand = slots.filter((x) => x.k > 0 && x.gl && x.k !== selK && (!shownK(x) || now - x.needAt > NEED_MS))
+        .sort((a, b) => shownK(a) - shownK(b) || a.needAt - b.needAt); // the hidden ones first, then the least recently needed
+      for (const x of cand) {
+        if (total <= budget) break;
+        total -= x.bytes;
+        releaseSlot(x);
+        changed = true, dirty = true;
+      }
+    }
+    stats.gpuBytes = gpuNow();
+    if (changed || Object.keys(linkDetail.value).length !== (m.links?.length ?? 0)) {
+      const d: Record<string, boolean> = {};
+      (m.links ?? []).forEach((l, k) => { d[l.name] = !!slots[k + 1]?.gl; });
+      linkDetail.value = d;
+      stats.linkDetail = (m.links ?? []).map((l, k) => ({ name: l.name, detail: !!slots[k + 1]?.gl, bytes: slots[k + 1]?.bytes ?? 0, loads: slots[k + 1]?.loads ?? 0 }));
+    }
+  };
+  // ---- end LNK3D (D) ----
   let seenAnnot: AnnotateState | null = null;
   const loop = () => {
     if (openViews.value !== seenViews) { // a tab, a view or the model changed: the view shown
@@ -3553,6 +3707,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       drawOverlay();
       stats.overlayFrames++;
     }
+    budgetStep(); // LNK3D (D)
     stats.loops = (stats.loops ?? 0) + 1; // BUG1
     requestAnimationFrame(loop);
   };

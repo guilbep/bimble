@@ -1,7 +1,7 @@
 // The 3D of a folder of links (ticket LNK3D, ADR 0078 amendment 3): CCORE_PORT_BASE=auto node ccore/test/lab_links_3d.mjs
 // A native host (HOME, BIMBLE_CONFIG_DIR in a temp folder, BIMBLE_LINK_CACHE_MIN=0), six synthetic IFC made
 // through it (bench/links_synth.mjs: bench/mesh_heavy_model.py's model, 160 closed meshes of about 600
-// triangles each, GlobalIds per link, exported as IFC4), a new project, Link this folder: each cache holds
+// triangles each, no two alike: no instancing, GlobalIds per link, exported as IFC4), a new project, Link this folder: each cache holds
 // its baked proxies (section HLOD; the report says its size and time). Five links in a row 25 m apart,
 // the sixth 1.5 km behind them as the home camera looks; link_0 red, link_1 purple (colour overrides). Vite and ONE headless Chromium at
 // 1280x800 over raw CDP on /?native=1&gl=1. Checks:
@@ -119,7 +119,7 @@ async function main() {
 
   // ---- the links: made, linked, converted (each cache with its proxies) ----
   const t0 = Date.now();
-  const files = await makeLinkFolder({ hcall, dir, work: tmp, n: N, proxies: PROXIES, tris: TRIS });
+  const files = await makeLinkFolder({ hcall, dir, work: tmp, n: N, proxies: PROXIES, tris: TRIS, unique: true });
   console.log(`made ${files.length} IFC in ${Date.now() - t0} ms, ${(statSync(files[0]).size / 1e6).toFixed(1)} MB each`);
   check("a new project", (await hcall("action", "new")).status === 200);
   check("link the folder", (await hcall("action", "link_folder", { path: dir })).status === 200);
@@ -298,6 +298,43 @@ async function main() {
   const linked = await waitFor("its element selected", 5000, () => evalJs("(async () => (await import('/src/bimble.ts')).state.value.linked)()")).catch(() => null);
   check("a click on the note's label selects it (and its element)", sel !== null && linked?.id === el && linked?.link === "link_0.ifc",
     `note ${sel?.noteSelected}, linked ${JSON.stringify(linked)}, clicked at (${lab[0].toFixed(0)}, ${lab[1].toFixed(0)})`);
+
+  // ---- the GPU memory budget across links (D) ----
+  await calm();
+  const gpu0 = (await gl()).gpuBytes, before3 = await evalJs("Array.from(window.__bbGl.bench.read().rgba)");
+  await hcall("action", "manage_links", { op: "hide", name: "link_3.ifc" });
+  await waitFor("link_3 hidden in the page", 5000, async () => (await gl()).linkDraw?.[3]?.visible === false);
+  await evalJs(`window.__bbGl.gpuBudget = ${gpu0 - 1000}`);
+  const rel = await waitFor("a link's detail released", 5000, async () => { const s = await gl(); return s.linkDetail?.find((x) => x.name === "link_3.ifc")?.detail === false ? s : null; }).catch(() => null);
+  const panel = await waitFor("the Links panel says it", 5000, () => evalJs(`document.querySelector('[data-bb=link-row][data-name="link_3.ifc"] [data-bb=link-detail]')?.dataset.detail === '0' ? document.querySelector('[data-bb=link-row][data-name="link_3.ifc"] [data-bb=link-detail]').textContent : null`)).catch(() => null);
+  check("the budget set low: the hidden link's detail leaves the GPU; the Links panel says \"proxies only\"", rel !== null && rel.gpuBytes < gpu0 && panel === "proxies only",
+    `GPU ${(gpu0 / 1e6).toFixed(2)} -> ${((rel?.gpuBytes ?? 0) / 1e6).toFixed(2)} MB, panel ${JSON.stringify(panel)}, ${JSON.stringify(rel?.linkDetail?.map((x) => [x.name, x.detail]))}`);
+  const showBack = `() => import('/src/shell/links.ts').then((l) => l.modelOp("show", "link_3.ifc"))`;
+  const backMs = await timed("show a link whose detail was released", showBack, `window.__bbGl.linkDetail?.find((x) => x.name === "link_3.ifc")?.detail === true && window.__bbGl.linkDraw[3].visible`);
+  await calm();
+  const after3 = await evalJs("Array.from(window.__bbGl.bench.read().rgba)"), st3 = await gl();
+  let d3 = 0;
+  for (let i = 0; i < before3.length; i += 4) if (Math.max(Math.abs(before3[i] - after3[i]), Math.abs(before3[i + 1] - after3[i + 1]), Math.abs(before3[i + 2] - after3[i + 2])) > 40) d3++;
+  check("shown again: its detail back on the GPU (from the page's copy), the same picture as before the hide", backMs >= 0 && d3 === 0,
+    `${backMs.toFixed(1)} ms (its upload ${st3.linkReloadMs?.toFixed(1)} ms), ${d3} pixels differ; ${JSON.stringify(st3.linkDetail?.map((x) => [x.name, x.detail, x.loads]))}`);
+  await noRefetch("the budget's releases and uploads");
+  const sel4 = await evalJs(`(() => { const r = document.getElementById("bimble").getBoundingClientRect(), g = window.__bbGl;
+    for (let y = r.top + 40; y < r.bottom - 40; y += 9) for (let x = r.left + 40; x < r.right - 40; x += 9) { const h = g.pickInfoAt(x, y); if (h && h.link === "link_4.ifc") return h; } return null; })()`);
+  if (sel4) await evalJs(`import('/src/bimble.ts').then((b) => b.selectLinked("link_4.ifc", ${JSON.stringify(sel4.id)}))`);
+  await waitFor("link_4's element selected", 5000, () => evalJs("(async () => (await import('/src/bimble.ts')).state.value.linked?.link === 'link_4.ifc')()"));
+  // the camera close on link_0: link_4 (100 m away) out of view, then not needed after 2 s, but selected
+  await evalJs(`window.__bbGl.bench.look(${JSON.stringify(draw0[0].origin)}, 20000)`);
+  await calm();
+  await sleep(2600);
+  await evalJs("window.__bbGl.gpuBudget = 0");
+  await sleep(600);
+  await calm();
+  const st4 = await gl();
+  const det = Object.fromEntries((st4.linkDetail ?? []).map((x) => [x.name, x.detail]));
+  check("a budget of 0, link_4 out of view for 2 s: its detail kept (its element selected); links out of view released, the one on screen kept",
+    det["link_4.ifc"] === true && det["link_0.ifc"] === true && det["link_3.ifc"] === false && det["link_2.ifc"] === false, JSON.stringify(det));
+  await evalJs(`window.__bbGl.bench.look(${JSON.stringify(near)}, 140000)`);
+  await evalJs("delete window.__bbGl.gpuBudget");
 
   // ---- the numbers ----
   const st2 = await gl();
