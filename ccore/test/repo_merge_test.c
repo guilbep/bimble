@@ -821,6 +821,12 @@ static void openings_merge(void) {
 int main(void) {
     native = cc_platform_native();
     const char *t = getenv("TMPDIR");
+#ifdef _WIN32
+    /* A native Windows program: /tmp is MSYS2's path, not the system's (the suite printed "mkdtemp
+     * failed" and exited 2 on every Windows run). %TEMP%, else the suite's folder, as repo_write_test. */
+    if (!t || !*t) t = getenv("TEMP");
+    if (!t || !*t) t = ".";
+#endif
     snprintf(tmp, sizeof tmp, "%s/h2b-merge-XXXXXX", t && *t ? t : "/tmp");
     if (!mkdtemp(tmp)) printf("mkdtemp failed\n"), exit(2);
     golden_merge();
