@@ -148,6 +148,14 @@ int cc_verb_run_ex(const cc_model *m, const char *name, const char *args, size_t
     return -1;
 }
 
+/* SLAB1: the place tool's polygon slab (calls.c), refused as every verb. */
+int cc_verb_new_slab(const cc_model *m, const cc_gid *storey, const double (*pts)[2], size_t n, const double sizes[5],
+                     const char *material_name, cc_cmds *out, Buf *err) {
+    (void)m, (void)storey, (void)pts, (void)n, (void)sizes, (void)material_name, (void)out;
+    buf_puts(err, CC_VIEW_ONLY_TEXT);
+    return -1;
+}
+
 int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, cc_error *err) {
     (void)text, (void)n;
     cc_model_init(m);
