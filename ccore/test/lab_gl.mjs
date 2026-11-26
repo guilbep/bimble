@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port, vitePort } from "./ports.mjs";
+import { loops, settled } from "./lib/frames.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -148,7 +149,7 @@ async function main() {
   console.log(`viewport stats: ${gl}`);
   const st = JSON.parse(gl);
   check("mesh loaded from the host", st.meshBytes > 0 && st.error === null && st.meshRev === 1, gl); // session rev after load (lib.rs:1679)
-  await sleep(500);
+  await settled(evalJs, "the first picture", await loops(evalJs)); // TEST1: was sleep(500)
 
   // Pixels: read the WebGL2 drawing buffer (preserveDrawingBuffer) of #bimble.
   const px = JSON.parse(await evalJs(`(() => {
@@ -241,10 +242,11 @@ async function main() {
   await S("Input.dispatchMouseEvent", { type: "mousePressed", x: mx, y: my, button: "left", buttons: 1, clickCount: 1 });
   for (let k = 1; k <= 5; k++) await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: mx + 12 * k, y: my + 4 * k, button: "left", buttons: 1 });
   await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: mx + 60, y: my + 20, button: "left", buttons: 0, clickCount: 1 });
-  await sleep(300);
-  const s1 = await sum();
+  // TEST1: a loop after the action and a draw after f0 (a camera move changes no rev), not sleep(300).
+  await settled(evalJs, "the orbit drawn", await loops(evalJs), { frame: f0 }).catch(() => null); // then one read: the check says
+  const s1 = await sum(), f1 = await evalJs("window.__bbGl.frames");
   await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: mx, y: my, deltaX: 0, deltaY: -300 });
-  await sleep(300);
+  await settled(evalJs, "the zoom drawn", await loops(evalJs), { frame: f1 }).catch(() => null);
   const s2 = await sum(), f2 = await evalJs("window.__bbGl.frames");
   check("orbit and zoom redraw a different picture, no select", s1 !== s0 && s2 !== s1 && f2 > f0 && selects.length === nSel,
     `frames ${f0} -> ${f2}, selects ${nSel} -> ${selects.length}`);

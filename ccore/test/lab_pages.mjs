@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port } from "./ports.mjs";
+import { loops, settled } from "./lib/frames.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -206,7 +207,7 @@ async function main() {
   check("the page runs ccore.wasm (its size) on frame.json, the address has no ccore=",
     cc?.wasmBytes === wasmFull && cc?.model === "frame.json" && !(await evalJs("location.search")).includes("ccore"), `${JSON.stringify(cc)} ${await evalJs("location.search")}`);
   const g0 = await gl();
-  await sleep(300);
+  await settled(evalJs, "the first picture", await loops(evalJs), { rev: "mesh" }); // TEST1: was sleep(300)
   const share = await evalJs(concrete);
   check("a frame is drawn: the mesh (rev 1) and concrete grey > 5 % of the canvas", g0?.meshBytes > 0 && g0.meshRev === 1 && share > 0.05,
     `${g0?.meshBytes} bytes, rev ${g0?.meshRev}, ${(100 * share).toFixed(1)} %`);
@@ -218,7 +219,7 @@ async function main() {
   if (tab) await click(tab);
   await sleep(500);
   await mouse("mouseMoved", [5, 5]);
-  await sleep(300);
+  await settled(evalJs, "the picture before the place", await loops(evalJs), { rev: "mesh" }); // TEST1: was sleep(300)
   const h0 = await evalJs(hash);
   const tool = await centre("[data-bb=ribbon] [data-bb=ribbon-tool-1-1]");
   if (tool) await click(tool);
@@ -238,7 +239,7 @@ async function main() {
   await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
   await mouse("mouseMoved", [5, 5]);
   const placingOff = await waitFor("placing off", 5000, () => evalJs("!document.querySelector('[data-bb=status-chip].c-n')")).catch(() => false);
-  await sleep(300);
+  await settled(evalJs, "the picture of the place", await loops(evalJs), { rev: "mesh" }).catch(() => null); // TEST1: was sleep(300); then one read
   const h1 = await evalJs(hash);
   const t1 = await savedText();
   check("place: a click on a free spot -> one IfcColumn in the saved text, the mesh rev 2, the picture changed",
@@ -251,7 +252,7 @@ async function main() {
   if (undoAt) await click(undoAt);
   await mouse("mouseMoved", [5, 5]);
   const g2 = await waitFor("the mesh after undo", 5000, async () => { const g = await gl(); return g.meshRev === 3 ? g : null; }).catch(() => null);
-  await sleep(300);
+  await settled(evalJs, "the picture of the undo", await loops(evalJs), { rev: "mesh" }).catch(() => null); // TEST1: was sleep(300); then one read
   const h2 = await evalJs(hash);
   const t2 = await savedText();
   check("undo (quick bar): the column leaves the saved text, the picture is the one before the place",
@@ -265,7 +266,7 @@ async function main() {
   const vready = await boot("/c/?view=1");
   const vc = JSON.parse(await evalJs("JSON.stringify(window.__bbCcore ?? null)"));
   const vg = await gl();
-  await sleep(300);
+  await settled(evalJs, "the view-only build's first picture", await loops(evalJs), { rev: "mesh" }); // TEST1: was sleep(300)
   const vshare = await evalJs(concrete);
   check("/c/?view=1 boots on ccore-view.wasm (its size) and draws a frame",
     vready === true && vc?.wasmBytes === wasmView && vg?.meshBytes > 0 && vshare > 0.05, `${JSON.stringify(vc)}, ${vg?.meshBytes} bytes, ${(100 * vshare).toFixed(1)} %`);

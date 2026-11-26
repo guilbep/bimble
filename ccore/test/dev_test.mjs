@@ -190,9 +190,15 @@ try {
   check("the host was among them", tree.some((t) => new RegExp(`bimble-ccore (--session )?(--warm )?${PORT}`).test(t.cmd)) && tree.some((t) => /vite/.test(t.cmd)));
   // By listening port, not by command line: a pgrep pattern also matched other shells that
   // merely mention it (false positive), and missed the host once it took --session.
-  let ls = "";
-  try { ls = execFileSync("ss", ["-ltnpH", `( sport = :${PORT} or sport = :${VITE} )`], { encoding: "utf8" }); } catch {}
-  check(`nothing listens on ${PORT} or ${VITE}`, ls.trim() === "", ls.trim());
+  // TEST1: dev.sh has exited, but under load its children may still be closing their sockets (one
+  // FAIL at load 25, 200 ms after the exit): the ports must be free within 5 s, and the time it took
+  // is printed. (A test of another run on these ports is ruled out: ports.mjs locks them.)
+  const listening = () => { try { return execFileSync("ss", ["-ltnpH", `( sport = :${PORT} or sport = :${VITE} )`], { encoding: "utf8" }).trim(); } catch { return ""; } };
+  const tl = Date.now();
+  let ls = listening();
+  while (ls !== "" && Date.now() - tl < 5000) { await sleep(50); ls = listening(); }
+  console.log(`ports ${PORT}, ${VITE} free ${Date.now() - tl} ms after the check began`);
+  check(`nothing listens on ${PORT} or ${VITE} (within 5 s of dev.sh's exit)`, ls === "", ls);
   for (const t of left) try { process.kill(t.pid, "SIGKILL"); } catch {}
   try { process.kill(-dev.pid, "SIGKILL"); } catch {}
   check("session/calls.c restored byte for byte", readFileSync(EDITED).equals(ORIGINAL));

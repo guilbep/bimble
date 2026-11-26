@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, vitePort } from "./ports.mjs";
+import { loops as loopsOf, settled as settledOf } from "./lib/frames.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -190,7 +191,7 @@ async function main() {
     return r.length ? r : null;
   }).catch(() => []);
   check("navigator lists the 3 storeys", JSON.stringify(rows) === names, JSON.stringify(rows));
-  await sleep(300);
+  await settledOf(evalJs, "the first picture", await loopsOf(evalJs)); // TEST1: was sleep(300)
 
   // Pixels (preserveDrawingBuffer): concrete share and a click target, as lab_gl.mjs.
   const px = JSON.parse(await evalJs(`(() => {
@@ -243,11 +244,9 @@ async function main() {
   // action (__bbGl.loops > l0), the state's rev drawn (__bbGl.drawn), at the canvas's layout size. A
   // fixed 300 ms sleep raced it: under load no frame came for > 300 ms after the deselect, and the
   // reference picture was the old one (the slab still selected, the canvas still 356 px high).
-  const loops = () => evalJs("window.__bbGl.loops ?? -1");
-  const settled = (what, l0) => waitFor(what, 10000, () => evalJs(`(async () => { const b = await import('/src/bimble.ts');
-    const c = document.getElementById('bimble'), g = window.__bbGl, d = g.drawn, dpr = window.devicePixelRatio || 1;
-    return g.loops > ${l0} && !!d && d.rev === b.state.value.rev && d.w === c.width && d.h === c.height
-      && c.width === Math.max(1, Math.round(c.clientWidth * dpr)) && c.height === Math.max(1, Math.round(c.clientHeight * dpr)); })()`));
+  // The helper: test/lab_wasm.mjs's own until TEST1, now test/lib/frames.mjs (every lab test that reads pixels after an action).
+  const loops = () => loopsOf(evalJs);
+  const settled = (what, l0) => settledOf(evalJs, what, l0);
 
   // Place through the client: one more element, the mesh of the new rev drawn, the picture changes;
   // undo: the old rev's picture again. Times: the call to the first frame drawn with the new mesh.
@@ -426,7 +425,7 @@ async function main() {
     const el = document.querySelector('[data-bb=ribbon] [data-bb=ribbon-tool-1-1]');
     return el ? String(el.getAttribute('aria-disabled')) : 'none'; })()`;
   const colBefore = await evalJs(ribbonCol);
-  await sleep(300);
+  await settled("the picture before the view file", await loops()); // TEST1: was sleep(300)
   const hv0 = await evalJs(hash), revV0 = await bb("b.state.value.rev");
   const fv = readFileSync(join(CCORE, "golden/view/frame2.bimbleview")).toString("base64");
   const vOpened = await ccx(`(async () => {
@@ -438,7 +437,7 @@ async function main() {
     const g = JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
     return s.file === "frame2.bimbleview" && g.meshRev === s.rev && s.rev > revV0 ? s : null;
   }).catch(() => null);
-  await sleep(300);
+  await settled("the view file's picture", await loops()).catch(() => null); // TEST1: was sleep(300); then one read, no retry
   const hv1 = await evalJs(hash);
   const vState = JSON.parse(await bb("JSON.stringify(b.query('state', {}))"));
   check("ccoreOpenFile(frame2.bimbleview) -> read-only, its mesh drawn (the picture changed)",
