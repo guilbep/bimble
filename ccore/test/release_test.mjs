@@ -19,6 +19,10 @@
 // macOS (ticket MAC1): bimble-ccore-<VERSION>-<arch>-macos.tar.gz (RELEASE_ARCH=x86_64: the Intel
 // one on an arm64 Mac, run by Rosetta 2), otool -L for ldd (libc++ is the system's), the stand-in
 // is named `open`, and it lists its files with lsof (no /proc).
+// Windows (ticket WIN2): bimble-ccore-<VERSION>-x86_64-windows.zip, listed and unpacked by the
+// system's tar.exe (bsdtar reads zip), bimble-ccore.exe; llvm-objdump -p for ldd (no libc++,
+// libunwind, winpthreads DLL: linked static); the web/ links are a file link and a junction to
+// C:\Windows; no SIGTERM and no stand-in for ShellExecuteW: those two checks print a skip line.
 import { execFileSync, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -29,10 +33,15 @@ import { fileURLToPath } from "node:url";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = readFileSync(join(CCORE, "VERSION"), "utf8").trim();
 const MAC = process.platform === "darwin";
-const ARCH = process.env.RELEASE_ARCH || execFileSync("uname", ["-m"], { encoding: "utf8" }).trim();
-const NAME = `bimble-ccore-${VERSION}-${ARCH}-${MAC ? "macos" : "linux"}`;
+const WIN = process.platform === "win32"; // WIN2
+const ARCH = process.env.RELEASE_ARCH || (WIN ? "x86_64" : execFileSync("uname", ["-m"], { encoding: "utf8" }).trim());
+const NAME = `bimble-ccore-${VERSION}-${ARCH}-${MAC ? "macos" : WIN ? "windows" : "linux"}`;
 const OPENER = MAC ? "open" : "xdg-open";
-const ARCHIVE = process.env.RELEASE_ARCHIVE ?? join(CCORE, "out/release", `${NAME}.tar.gz`);
+const EXT = WIN ? ".zip" : ".tar.gz";
+const ARCHIVE = process.env.RELEASE_ARCHIVE ?? join(CCORE, "out/release", `${NAME}${EXT}`);
+const EXE = WIN ? "bimble-ccore.exe" : "bimble-ccore";
+// WIN2: the system's bsdtar (MSYS2's GNU tar first on PATH reads no zip)
+const TAR = WIN ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar";
 
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
@@ -113,33 +122,47 @@ const CTYPE = { html: "text/html", js: "text/javascript", css: "text/css", woff2
 const tmp = mkdtempSync(join(tmpdir(), "ccore-release-"));
 let host = null;
 try {
-  check(`archive ${NAME}.tar.gz exists`, existsSync(ARCHIVE), ARCHIVE);
+  check(`archive ${NAME}${EXT} exists`, existsSync(ARCHIVE), ARCHIVE);
   console.log(`archive bytes: ${statSync(ARCHIVE).size}`);
-  const list = execFileSync("tar", ["tzf", ARCHIVE], { encoding: "utf8" }).split("\n").filter(Boolean);
+  const list = execFileSync(TAR, WIN ? ["tf", ARCHIVE] : ["tzf", ARCHIVE], { encoding: "utf8" }).split(/\r?\n/).filter(Boolean);
   const top = new Set(list.map((p) => p.split("/")[0]));
   check("one top folder named after the version and arch", top.size === 1 && top.has(NAME), [...top].join(" "));
-  for (const f of ["bimble-ccore", "web/index.html", "LICENSE", "README.txt"])
+  for (const f of [EXE, "web/index.html", "LICENSE", "README.txt"])
     check(`archive holds ${f}`, list.includes(`${NAME}/${f}`));
   const ttf = list.filter((p) => /\.(ttf|otf)$/i.test(p) || /\/fonts\//.test(p));
   check("SIZE1: no font file in the archive", ttf.length === 0, ttf.join(" "));
-  const rest = list.filter((p) => !/^[^/]+\/(bimble-ccore|LICENSE|README\.txt|web\/.*)?$/.test(p));
+  const rest = list.filter((p) => !(WIN ? /^[^/]+\/(bimble-ccore\.exe|LICENSE|README\.txt|web\/.*)?$/ : /^[^/]+\/(bimble-ccore|LICENSE|README\.txt|web\/.*)?$/).test(p));
   check("nothing else in the archive", rest.length === 0, rest.join(" "));
 
-  execFileSync("tar", ["xzf", ARCHIVE, "-C", tmp]);
-  const root = join(tmp, NAME), bin = join(root, "bimble-ccore"), web = join(root, "web");
-  const readme = readFileSync(join(root, "README.txt"), "utf8").trimEnd().split("\n");
+  execFileSync(TAR, [WIN ? "xf" : "xzf", ARCHIVE, "-C", tmp]);
+  const root = join(tmp, NAME), bin = join(root, EXE), web = join(root, "web");
+  const readme = readFileSync(join(root, "README.txt"), "utf8").trimEnd().split(/\r?\n/);
   check("README.txt has at most ten lines", readme.length <= 10, `${readme.length} lines`);
   const ver = execFileSync(bin, ["--version"], { encoding: "utf8" }).trim();
   check("--version prints ccore/VERSION", ver === `bimble-ccore ${VERSION}`, ver);
-  const ldd = execFileSync(MAC ? "otool" : "ldd", MAC ? ["-L", bin] : [bin], { encoding: "utf8" });
-  check("ldd names no libmanifold", !/manifold/i.test(ldd) && (MAC ? /libSystem/ : /libc\.so/).test(ldd), ldd.replace(/\s+/g, " ").trim());
-  check("ldd names no libstdc++ (static)", !/libstdc\+\+/.test(ldd));
+  if (WIN) {
+    // WIN2: the imported DLLs (llvm-objdump -p: "DLL Name: X"): the system's and the UCRT only.
+    const dlls = [...execFileSync("llvm-objdump", ["-p", bin], { encoding: "utf8" }).matchAll(/DLL Name: (\S+)/g)].map((x) => x[1]);
+    check("imports name no manifold DLL, and KERNEL32.dll", !dlls.some((d) => /manifold/i.test(d)) && dlls.some((d) => /^kernel32\.dll$/i.test(d)), dlls.join(" "));
+    check("imports name no libc++, libunwind, winpthreads, libgcc or libstdc++ DLL (static)",
+      !dlls.some((d) => /^(libc\+\+|libunwind|libwinpthread|libgcc|libstdc\+\+)/i.test(d)), dlls.join(" "));
+  } else {
+    const ldd = execFileSync(MAC ? "otool" : "ldd", MAC ? ["-L", bin] : [bin], { encoding: "utf8" });
+    check("ldd names no libmanifold", !/manifold/i.test(ldd) && (MAC ? /libSystem/ : /libc\.so/).test(ldd), ldd.replace(/\s+/g, " ").trim());
+    check("ldd names no libstdc++ (static)", !/libstdc\+\+/.test(ldd));
+  }
 
   // Untrusted web/ content added after unpacking: a link out of the tree and a hidden file.
   const webFiles = files(web);
   console.log(`size: archive ${statSync(ARCHIVE).size} bytes; unpacked bimble-ccore ${statSync(bin).size} bytes, web/ ${webFiles.reduce((n, f) => n + statSync(join(web, f)).size, 0)} bytes in ${webFiles.length} files`);
-  symlinkSync("/etc/passwd", join(web, "passwd"));
-  symlinkSync("/etc", join(web, "etc"));
+  if (WIN) { // WIN2: a file link (the runner is an administrator) and a junction, out of the tree
+    const sys = process.env.SystemRoot || "C:\\Windows";
+    symlinkSync(join(sys, "win.ini"), join(web, "passwd"), "file");
+    symlinkSync(sys, join(web, "etc"), "junction");
+  } else {
+    symlinkSync("/etc/passwd", join(web, "passwd"));
+    symlinkSync("/etc", join(web, "etc"));
+  }
   writeFileSync(join(web, ".hidden"), "secret");
 
   // The run of a user: a model next to the archive, no repo, no token in the environment.
@@ -221,7 +244,8 @@ try {
 
   const ex = await stop(host);
   host = null;
-  check("SIGTERM -> exits 0", ex && ex.code === 0, JSON.stringify(ex));
+  if (WIN) console.log("skip SIGTERM -> exits 0 (win32: no SIGTERM; node ends the process with TerminateProcess)");
+  else check("SIGTERM -> exits 0", ex && ex.code === 0, JSON.stringify(ex));
 
   // SIZE1: Roboto from the user's folder (BIMBLE_FONTS), as a user who adds the files would.
   if (plan) {
@@ -252,6 +276,8 @@ try {
   // The browser: xdg-open gets the URL, detached, with none of the host's sockets (a browser it
   // starts would keep the port). A stand-in records its argument and open files.
   const fake = join(tmp, "fakebin"), rec = join(tmp, "xdg-open.txt");
+  if (WIN) console.log("skip xdg-open gets the printed URL, holds no socket (win32: ShellExecuteW, no stand-in on PATH)");
+  else {
   mkdirSync(fake);
   // Its open files, one line each: /proc's link targets ("socket:[n]" for a socket), or lsof's
   // file types on macOS ("tIPv4" for a TCP socket), after the URL.
@@ -265,6 +291,7 @@ try {
   check("xdg-open holds no socket of the host", got.length > 1 && !got.slice(1).some((l) => /^(socket:|tIPv[46]$|tunix$)/.test(l)), got.slice(1).join(" "));
   await stop(host);
   host = null;
+  }
 
   // A web/ that cannot be served refuses to start (exit 1, a message).
   const noIndex = join(tmp, "noindex");

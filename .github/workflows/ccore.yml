@@ -455,13 +455,36 @@ jobs:
           - { os: ubuntu-22.04-arm, name: ubuntu-22.04-arm }
           - { os: macos-15, name: macos-arm64, mac_arch: arm64 }
           - { os: macos-15, name: macos-x86_64, mac_arch: x86_64 }
+          # WIN2: MSYS2 CLANG64 (as ccore-windows), bimble-ccore-<v>-x86_64-windows.zip. Not
+          # required yet: its failure does not stop the prerelease.
+          - { os: windows-latest, name: windows-x86_64, shell: "msys2 {0}", experimental: true }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    continue-on-error: ${{ matrix.experimental == true }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell || 'bash -e {0}' }} # bash -e {0}: the runner's default where none is named
     env:
       CMAKE_OSX_ARCHITECTURES: ${{ matrix.mac_arch }}
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.mac_arch && '11.0' || '' }}
     steps:
+      - name: No line-end conversion at checkout (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit
+          install: >-
+            git
+            zip
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
       - name: The tag names ccore/VERSION
         if: startsWith(github.ref, 'refs/tags/ccore-v')
         run: |
@@ -478,7 +501,7 @@ jobs:
         run: |
           echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
           clang --version | head -n 1
-          if [[ $RUNNER_OS == Linux ]]; then ldd --version | head -n 1; else sw_vers; fi
+          if [[ $RUNNER_OS == Linux ]]; then ldd --version | head -n 1; elif [[ $RUNNER_OS == macOS ]]; then sw_vers; else uname -a; fi
           echo "CMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES:-} MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-}"
       - name: manifold (cache)
         id: manifold
@@ -486,7 +509,14 @@ jobs:
         with:
           path: ccore/out/deps/manifold
           key: manifold-${{ matrix.name }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh', 'ccore/portable.sh') }}
-      - if: steps.manifold.outputs.cache-hit != 'true'
+      - if: steps.manifold.outputs.cache-hit != 'true' && runner.os != 'Windows'
+        run: JOBS=4 ccore/deps.sh
+      - name: ccore/deps.sh (Windows, as the ccore-windows probe)
+        if: steps.manifold.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        env:
+          CC: clang
+          CXX: clang++
+          CMAKE_GENERATOR: Ninja
         run: JOBS=4 ccore/deps.sh
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -494,6 +524,7 @@ jobs:
           cache: npm
           cache-dependency-path: web-ui/package-lock.json
       - working-directory: web-ui
+        shell: bash
         run: npm ci --no-audit --no-fund
       - run: ccore/build.sh release
       # x86_64 on the arm64 runner: the test runs the binary under Rosetta 2 (installed if missing).
@@ -507,7 +538,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ccore-release-${{ matrix.name }}
-          path: ccore/out/release/*.tar.gz
+          path: |
+            ccore/out/release/*.tar.gz
+            ccore/out/release/*.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -530,7 +563,8 @@ jobs:
           merge-multiple: true
       - name: SHA256SUMS and the Homebrew formula
         run: |
-          (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          # WIN2: the Windows .zip when its build passed (formula.sh reads only the .tar.gz lines)
+          (cd dist && sha256sum *.tar.gz $(ls *.zip 2> /dev/null) > SHA256SUMS && cat SHA256SUMS)
           ccore/ci/formula.sh "${GITHUB_REF_NAME#ccore-v}" dist/SHA256SUMS > bimble-ccore.rb
           cat bimble-ccore.rb
       - uses: actions/upload-artifact@v4
@@ -549,4 +583,4 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease --title "bimble-ccore $v (preview)" \
               --notes "The C core of Bimble with its lab, for Linux (x86_64, aarch64) and macOS (arm64, x86_64; 11 or newer, signed ad hoc). Unpack, then run \`./bimble-ccore open model.ifc\`: the lab opens in your browser. See README.txt in the archive."
           fi
-          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz $(ls dist/*.zip 2> /dev/null) dist/SHA256SUMS --clobber

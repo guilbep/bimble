@@ -250,9 +250,10 @@ release() {
         archf=(-arch "$arch")
         export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-11.0}
     fi
+    [[ $CC_OS == Windows ]] && os=windows osname=Windows # WIN2: MSYS2 CLANG64, a .zip
     local name="bimble-ccore-$CC_VER-$arch-$os"
     local stage="$R/stage/$name" obj="$R/obj"
-    rm -rf "$R/stage" "$obj" "$R/$name.tar.gz"
+    rm -rf "$R/stage" "$obj" "$R/$name.tar.gz" "$R/$name.zip"
     mkdir -p "$stage" "$obj"
     local flags=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function -pthread
         "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"} ${archf[@]+"${archf[@]}"}
@@ -285,6 +286,16 @@ release() {
             "$kd/libmanifold.a" "$kd/libClipper2.a" -lc++ -lm -o "$bin"
         step "strip, sign ad hoc" bash -c 'strip "$1" && codesign --force --sign - "$1"' _ "$bin"
         printf '  %-28s %s, macOS %s or newer\n' "arch" "$(lipo -archs "$bin")" "$MACOSX_DEPLOYMENT_TARGET"
+    elif [[ $CC_OS == Windows ]]; then
+        # WIN2: -static: libc++, libunwind and winpthreads inside the program (no DLL of MSYS2's
+        # to ship); the UCRT and the system DLLs stay imported. Winsock: PLATFORM_LIBS.
+        bin="$stage/bimble-ccore.exe"
+        step "link bimble-ccore.exe (kernel static)" clang -pthread -static -s "$obj"/*.o "$kd/libmanifoldc.a" \
+            "$kd/libmanifold.a" "$kd/libClipper2.a" -lc++ -lm ${PLATFORM_LIBS[@]+"${PLATFORM_LIBS[@]}"} \
+            -Wl,--gc-sections -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
+        if command -v llvm-objdump > /dev/null; then
+            printf '  %-28s %s\n' "DLLs" "$(llvm-objdump -p "$bin" | sed -n 's/^ *DLL Name: //p' | tr '\n' ' ')"
+        fi
     else
         # SIZE1: the link map (out/release/bimble-ccore.map) gives tools/weight.mjs the bytes per object.
         step "link bimble-ccore (kernel static)" clang -pthread -s "$obj"/*.o "$kd/libmanifoldc.a" "$kd/libmanifold.a" \
@@ -304,6 +315,23 @@ release() {
     if [[ $CC_OS == Darwin ]]; then
         needs="macOS $MACOSX_DEPLOYMENT_TARGET or newer and a browser with WebGL2. Nothing is installed."
         last="Signed: ad hoc only. Unpacked from a browser download: xattr -dr com.apple.quarantine ."
+    fi
+    if [[ $CC_OS == Windows ]]; then # WIN2: its own README (bimble-ccore.exe; CRLF, for Notepad), a .zip
+        cat > "$stage/README.txt" << EOF
+bimble-ccore $CC_VER ($arch, $osname): the C core of Bimble and its lab, a preview build.
+Bimble is open-source structural BIM (MIT licence, see LICENSE): https://github.com/guilbep/bimble
+
+Run:    bimble-ccore.exe open model.ifc     (also .bimble or .json; no model: an empty lab)
+        It serves the lab on 127.0.0.1 only, prints its address and opens it in your browser.
+        --no-browser: only print the address. --port N: this port, not a free one.
+Stop:   Ctrl-C.
+Files:  bimble-ccore.exe (the program) and web\ (the lab; keep it next to the program).
+Needs:  Windows 10 or newer (x64) and a browser with WebGL2. Nothing is installed. Not signed.
+EOF
+        sed -i 's/$/\r/' "$stage/README.txt"
+        step "archive (zip)" bash -c 'cd "$1" && zip -q -X -r "../$2.zip" "$2"' _ "$R/stage" "$name"
+        printf '  %-28s %s, %d bytes\n' "archive" "$R/$name.zip" "$(wc -c < "$R/$name.zip")"
+        return
     fi
     cat > "$stage/README.txt" << EOF
 bimble-ccore $CC_VER ($arch, $osname): the C core of Bimble and its lab, a preview build.
