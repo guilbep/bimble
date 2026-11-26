@@ -21,8 +21,9 @@ the intermediate model, and a conversion report).
 ## The measurements (native build, one file at a time, ascending size, 26 Nov 2026)
 
 `bimble-ccore link-convert --cache-dir <scratch>` (the link's conversion; nothing written beside
-the files), 8 threads, the dev machine (16 GB aarch64, 3 to 4 GB available while two other tickets
-ran browsers). Peak = the process's maximum resident memory (getrusage).
+the files), 8 threads, the dev machine (16 GB aarch64, 3 to 7 GB available while two other tickets
+ran browsers; each file run only with 3 × its size + 2 GB available, under `ulimit -v`). Peak = the
+process's maximum resident memory (getrusage). The 17 conversions add up to 25.3 s.
 
 | # | size | read | peak | peak / byte | elements | triangles (drawn) | shapes | cache |
 |---|---|---|---|---|---|---|---|---|
@@ -40,9 +41,9 @@ ran browsers). Peak = the process's maximum resident memory (getrusage).
 | 12 | 336 MB | 2.10 s | 1.13 GB | 3.4 | 30,295 | 5,430,874 | 1,980 | 21.1 MB |
 | 13 | 394 MB | 2.13 s | 1.28 GB | 3.2 | 21,192 | 3,738,159 | 354 | 19.1 MB |
 | 14 | 415 MB | 3.10 s | 1.52 GB | 3.7 | 32,766 | 35,798,718 | 1,195 | 19.3 MB |
-| 15 | 709 MB | not run: the measurement's own rule (3 × the file + 2 GB free) asked 4.1 GB, 3 to 4 GB was | | | | | | |
-| 16 | 758 MB | not run (4.3 GB asked) | | | | | | |
-| 17 | 872 MB | not run (4.6 GB asked) | | | | | | |
+| 15 | 709 MB | 4.52 s | 2.57 GB | 3.6 | 26,814 | 20,144,585 | 1,160 | 72.2 MB |
+| 16 | 758 MB | 3.94 s | 2.23 GB | 2.9 | 48,794 | 20,987,851 | 2,860 | 30.3 MB |
+| 17 | 872 MB | 4.74 s | 2.91 GB | 3.3 | 35,243 | 9,094,476 | 1,984 | 29.6 MB |
 
 Files #1 to #14 loaded together from their caches (`link-convert --keep`, every cache matched):
 **0.57 s, 473 MB resident, 141,338 elements, 9,258 shapes, 60.2 million drawn triangles**; the 14
@@ -107,14 +108,14 @@ caches weigh 96 MB on disk for 1.84 GB of IFC (5 %). BLAKE3 (the portable code t
 ## Consequences
 
 - The six files over 256 MiB are no longer refused for their size. By decision 2, #15 to #17 need
-  3.3, 3.5 and 4.0 GB free (measured: 3.2 to 3.7 times the size for #12 to #14, so about 2.3 to
-  3.2 GB): with two browsers running (3 to 4 GB free) the largest is refused with the numbers,
-  which is the intended answer; unmeasured, so the rule's margin for them is not proven.
-- The whole folder (4.18 GB of IFC), estimated with the table's ratios (not measured): the
-  conversions one at a time peak at about 3.2 GB (the largest file); the 17 caches are about
-  0.2 GB on disk and about 1.1 GB resident loaded together (measured for 14 of them: 96 MB, 473 MB).
-  The 5 GB case is a conversion-time problem, not a viewing one: once converted, the folder is
-  light.
+  3.35, 3.55 and 4.0 GB free; they peaked at 2.57, 2.23 and 2.91 GB. With two browsers running
+  (3 to 4 GB free) the largest is refused with the numbers, which is the intended answer.
+- The whole folder (4.18 GB of IFC): converted one file at a time in 25 s, peak 2.9 GB (#17);
+  the 17 caches weigh 232 MB on disk (5.5 % of the IFC). Loaded together: measured for #1 to #14
+  (96 MB of caches): 0.57 s, 473 MB resident; for all 17, by the same ratio (not measured: the run
+  was not allowed here), about 1.1 GB resident and 1.4 s. The 5 GB case is a conversion-time
+  problem (one 0.9 GB file needs about 3 GB once), not a viewing one: once converted, the folder
+  is light.
 - Not done here: the positioning applied to the 3D view and to paper, the link settings in the
   `.bimble`, the lab test in a browser (no browser slot during the ticket), Windows' `spawn` and
   `mem_available` (the Windows host converts in the call, unchecked).
