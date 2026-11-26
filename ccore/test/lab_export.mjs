@@ -163,7 +163,8 @@ async function exportOn(cdp, mode) {
   const mute = await evalJs(`[...document.querySelectorAll('[data-bb=export] button:disabled, [data-bb=export] input:disabled')]
     .filter((e) => e.dataset.bb !== 'export-go' && e.dataset.bb !== 'export-one-pdf' && !(e.title || '').trim()).map((e) => e.textContent.trim() || e.id || e.outerHTML.slice(0, 60))`);
   const ny = await evalJs("document.querySelectorAll('[data-bb=export] [data-not-yet]').length");
-  check(`${mode}: every disabled choice says why (DXF, Printer, Revision B only, file names, folder: not available yet) (DEAD1)`, mute.length === 0 && ny >= 6, JSON.stringify({ mute, ny }));
+  // DXF1: DXF is served now (its own choice below): Printer, Revision B only, file names, folder stay "not yet".
+  check(`${mode}: every disabled choice says why (Printer, Revision B only, file names, folder: not available yet) (DEAD1)`, mute.length === 0 && ny >= 5, JSON.stringify({ mute, ny }));
 
   /** Export with the font chosen now, into a folder of its own: the PDF's bytes. */
   const exportPdf = async (tag) => {
@@ -198,6 +199,75 @@ async function exportOn(cdp, mode) {
     check("native roboto: Roboto embedded (the dev folder reached the core)", rob.includes("/FontFile2") && rob.includes("/BaseFont /Roboto"));
   }
   check(`${mode}: the page fetches no font`, fontGets.length === 0, fontGets.join(" "));
+
+  // ---- DXF1: This view as DXF (view_dxf), the click's feedback within 200 ms, the file read back ----
+  await evalJs("document.querySelector('[data-bb=export-what-view]').click()");
+  await waitFor(`${mode}: This view`, 5000, () => evalJs("!!document.querySelector('[data-bb=export-view-select]')"));
+  const viewId = await evalJs(`(() => { const s = document.querySelector('[data-bb=export-view-select]');
+    const o = [...s.options].find((x) => x.textContent.startsWith('Plan RDC no slabs')); if (!o) return null;
+    s.value = o.value; s.dispatchEvent(new Event('change')); return o.value; })()`);
+  check(`${mode}: the view "Plan RDC no slabs" chosen`, !!viewId, String(viewId));
+  const dxfBtn = await evalJs("(() => { const b = document.querySelector('[data-bb=export-dxf]'); return b ? [b.disabled, b.hasAttribute('data-missing'), b.hasAttribute('data-not-yet')] : null; })()");
+  check(`${mode}: the DXF choice is there, enabled, not marked missing or not yet (was "not available yet")`, dxfBtn && !dxfBtn[0] && !dxfBtn[1] && !dxfBtn[2], JSON.stringify(dxfBtn));
+  if (dxfBtn) {
+    await evalJs("document.querySelector('[data-bb=export-dxf]').click()");
+    await sleep(100);
+    const dl = join(tmp, `dl-${mode}-dxf`);
+    mkdirSync(dl);
+    downloads.clear();
+    await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });
+    // The feedback: from the click to the first frame that shows the progress line (or the result).
+    const idle = await evalJs("new Promise((r) => { const t = performance.now(); requestAnimationFrame(() => requestAnimationFrame(() => r(performance.now() - t))); })");
+    console.log(`${mode} dxf: two idle frames before the click: ${idle.toFixed(0)} ms`);
+    const fb = await evalJs(`new Promise((res) => { const t0 = performance.now(); let dom = null;
+      new MutationObserver((m, o) => { if (document.querySelector('[data-bb=export-progress]')) { dom = performance.now() - t0; o.disconnect(); } }).observe(document.body, { childList: true, subtree: true });
+      document.querySelector('[data-bb=export-go]').click();
+      const f = () => { const p = document.querySelector('[data-bb=export-progress], [data-bb=export-done], [data-bb=export-failed]');
+        if (p) res({ ms: performance.now() - t0, dom, what: p.dataset.bb, busy: document.querySelector('[data-bb=export-go]').disabled }); else requestAnimationFrame(f); };
+      requestAnimationFrame(f); })`);
+    check(`${mode} dxf: the click shows its feedback within 200 ms (ADR 0074)`, fb && fb.ms < 200 && fb.what !== "export-failed", JSON.stringify(fb));
+    const got = await waitFor(`${mode} dxf: the download`, 20000, async () => {
+      const err = await evalJs("document.querySelector('[data-bb=export-failed]')?.textContent ?? ''");
+      if (err) throw new Error(err);
+      return [...downloads.values()].find((d) => d.state === "completed") ?? null;
+    }).catch((e) => ({ error: e.message }));
+    check(`${mode} dxf: a download named after the view, .dxf`, /^Plan RDC no slabs\.dxf$/.test(got.name ?? ""), JSON.stringify(got));
+    const doneText = await waitFor(`${mode} dxf: exported`, 5000, () => evalJs("document.querySelector('[data-bb=export-done]')?.textContent ?? ''")).catch(() => "");
+    check(`${mode} dxf: the "exported" confirmation`, /1/.test(doneText), doneText);
+    const file = join(dl, got.name ?? "none");
+    const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+    check(`${mode} dxf: AC1015 in mm, ends with EOF`, text.startsWith("999\n") && text.includes("$ACADVER\n  1\nAC1015\n") && text.includes("$INSUNITS\n 70\n4\n") && text.endsWith("  0\nEOF\n"), text.slice(0, 120));
+    check(`${mode} dxf: layers per IFC class and role`, /\n  8\nIfc[A-Za-z]+-cut\n/.test(text), "");
+    if (mode === "native" && text) {
+      // The extents of its lines (LINE, LWPOLYLINE, CIRCLE), computed here from the group codes.
+      const lines = text.split("\n");
+      let ent = null, lo = [Infinity, Infinity], hi = [-Infinity, -Infinity], cx = 0, r = 0, x = null;
+      const put = (px, py) => { lo = [Math.min(lo[0], px), Math.min(lo[1], py)]; hi = [Math.max(hi[0], px), Math.max(hi[1], py)]; };
+      let inEnt = false;
+      for (let i = 0; i + 1 < lines.length; i += 2) {
+        const c = lines[i].trim(), v = lines[i + 1];
+        if (c === "0") { inEnt = ["LINE", "LWPOLYLINE", "CIRCLE"].includes(v); ent = v; continue; }
+        if (c === "2" && v === "ENTITIES") continue;
+        if (!inEnt) continue;
+        if (c === "10" || c === "11") x = Number(v);
+        else if ((c === "20" || c === "21") && x !== null) { if (ent === "CIRCLE") cx = [x, Number(v)]; else put(x, Number(v)); x = null; }
+        else if (c === "40" && ent === "CIRCLE") { r = Number(v); put(cx[0] - r, cx[1] - r); put(cx[0] + r, cx[1] + r); }
+      }
+      // Linked back through the page's "Link DXF" path (action link_dxf, the core's reader), as it is (offset 0, 0).
+      const lk = await evalJs(`(async () => { const b = await import('/src/bimble.ts'); const e = b.openView(${JSON.stringify(viewId)});
+        if (e) return { error: e }; const r = b.linkDxf(${JSON.stringify(file)}, { offset_mm: [0, 0], rotation_deg: 0 });
+        if (r && typeof r.then === 'function') { const x = await r; if (x) return { error: x }; } else if (r) return { error: r };
+        const q = b.query('view_references', { view: ${JSON.stringify(viewId)} });
+        let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity], n = 0;
+        for (const ref of q.references) for (const pl of ref.polylines ?? []) for (let i = 0; i + 1 < pl.length; i += 2) {
+          lo = [Math.min(lo[0], pl[i]), Math.min(lo[1], pl[i + 1])]; hi = [Math.max(hi[0], pl[i]), Math.max(hi[1], pl[i + 1])]; n++; }
+        return { lo, hi, n, refs: q.references.length }; })()`);
+      const near = (a, b) => Math.abs(a - b) <= 0.5;
+      check("native dxf: linked back as a DXF reference (link_dxf), the same extents as the file's lines (0.5 mm)",
+        lk && !lk.error && lk.n > 0 && near(lk.lo[0], lo[0]) && near(lk.lo[1], lo[1]) && near(lk.hi[0], hi[0]) && near(lk.hi[1], hi[1]),
+        JSON.stringify({ file: { lo, hi }, linked: lk }));
+    }
+  }
 
   const IGNORED = [
     /Synchronous XMLHttpRequest on the main thread is deprecated/,

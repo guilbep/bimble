@@ -1081,6 +1081,16 @@ export async function viewPdf(id: string, font: PdfFont = "helvetica"): Promise<
 export const sheetPdfName = (s: { number: string; name: string }) => `${s.number} ${s.name}.pdf`;
 export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.pdf`;
 // ---- end D7 ----
+// ---- DXF1: the DXF export (`view_dxf`, `sheet_dxf`; ccore/src/dxf_out.h, ADR 0082) ----
+/** `query view_dxf` / `sheet_dxf`: the DXF's bytes (a view in model space at 1:1, a sheet in paper mm). */
+export async function exportDxf(kind: "view" | "sheet", id: string): Promise<Uint8Array> {
+  const w = wasmOrThrow();
+  if (!w.bytes) throw new Error("DXF export: the C core only");
+  try { return await w.bytes("query", `${kind}_dxf`, JSON.stringify({ [kind]: id })); } catch (e) { throw new Error(message(e)); }
+}
+/** A file name from a view's or sheet's name: the characters file systems refuse become "_". */
+export const dxfName = (name: string) => `${name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "view"}.dxf`;
+// ---- end DXF1 ----
 // ---- PAPER1: a view On paper and Export view as SVG (`view_svg`), several sheets as one PDF (`sheets_pdf`) ----
 /** `query view_svg`: the view's paper as SVG, its paper and scale. `bare`: the On paper picture (paper.rs). */
 export interface ViewSvg { svg: string; paper: string; portrait: boolean; scale: number; width_mm: number; height_mm: number }

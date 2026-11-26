@@ -9,7 +9,8 @@ import { act, can } from "../shell/send";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/filemenu";
 import { currentDialog } from ".";
-import { HIDE_NOT_AVAILABLE, notYetAction } from "../shell/capability"; // FAKE1
+import { HIDE_NOT_AVAILABLE, has, notYetAction } from "../shell/capability"; // FAKE1
+import { exportFormat } from "./Export.vue"; // DXF1
 import { shortcutFor } from "../shell/keys";
 
 type Key = keyof typeof copy.fr;
@@ -21,7 +22,7 @@ const UP = '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v8h14v-8"/
 const INFO = '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>';
 
 // KEY1: the shortcut shown is the key table's (shell/keys.ts, Rust's): none for Open, Print, Settings (Rust has none).
-interface Entry { key: Key; icon: string; action?: string; missing?: string; dialog?: string }
+interface Entry { key: Key; icon: string; action?: string; missing?: string; dialog?: string; format?: "dxf"; cap?: string }
 const sections: { title: Key; entries: Entry[] }[] = [
   { title: "filemenu.files", entries: [
     { key: "filemenu.new", icon: NEW, action: "new" },
@@ -45,6 +46,8 @@ const sections: { title: Key; entries: Entry[] }[] = [
     { key: "filemenu.print", icon: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/>', dialog: "export" },
     // egui "Export view… (PDF, SVG)".
     { key: "filemenu.exportView", icon: UP, action: "on_paper" },
+    // DXF1: the same dialog, on "This view" and DXF (ADR 0082)
+    { key: "filemenu.exportViewDxf", icon: UP, action: "on_paper", format: "dxf", cap: "export_dxf" }, // data-bb file-menu-on_paper, data-format dxf
   ] },
   { title: "filemenu.project", entries: [
     { key: "filemenu.projectInfo", icon: INFO, action: "project" },
@@ -60,7 +63,7 @@ const SCREENS: Record<string, string> = { project: "project-info", history: "his
 const enabledNow = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
 const on = (name?: string) => !!name && (name === "save_as" ? editable() /* FS1 */ : name === "close" ? state.value.file !== null && can({ do: "close" }) /* FIXUI */ : name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) && enabledNow(name) : enabledNow(name));
 // ---- FAKE1: an entry whose action this core does not serve (shell/capability.ts): greyed with a "not yet" tooltip ----
-const notYet = (e: Entry) => !!e.action && notYetAction(e.action);
+const notYet = (e: Entry) => (!!e.action && notYetAction(e.action)) || (!!e.cap && !has(e.cap));
 // ---- end FAKE1 ----
 // PAPER1: a "not yet" entry is greyed even when the core enables its action (the viewer-only wasm keeps Rust's
 // enable rules and refuses the run: on_paper).
@@ -70,8 +73,9 @@ function editable(): boolean {
   void state.value;
   try { return query<{ editable?: boolean }>("state").editable === true; } catch { return false; }
 }
-function run(name?: string) {
+function run(name?: string, format?: "dxf") {
   currentDialog.value = null;
+  exportFormat.value = format ?? null; // DXF1
   if (name) act(name);
 }
 </script>
@@ -81,9 +85,9 @@ function run(name?: string) {
     <template v-for="s in sections" :key="s.title">
       <div class="eyebrow">{{ tx(s.title) }}</div>
       <button v-for="e in s.entries.filter((x) => !(HIDE_NOT_AVAILABLE && notYet(x)))" :key="e.key" class="ti" type="button" role="menuitem"
-        :disabled="!e.dialog && (!on(e.action) || notYet(e))" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`"
+        :disabled="!e.dialog && (!on(e.action) || notYet(e))" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`" :data-format="e.format"
         :data-not-yet="notYet(e) ? '' : undefined" :title="notYet(e) ? t('na.tooltip', { name: tx(e.key) }) : undefined"
-        @click="e.dialog ? (currentDialog = e.dialog) : run(e.action)">
+        @click="e.dialog ? (currentDialog = e.dialog) : run(e.action, e.format)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="e.icon"></svg>
         <span style="flex:1">{{ tx(e.key) }}</span><span class="mono" data-bb="file-menu-kbd">{{ shortcutFor(e.action) }}</span>
       </button>

@@ -16,6 +16,7 @@ export const fr = {
   "filemenu.paper": "Papier",
   "filemenu.print": "Imprimer et exporter…",
   "filemenu.exportView": "Exporter la vue…",
+  "filemenu.exportViewDxf": "Exporter cette vue en DXF…", // DXF1
   "filemenu.project": "Projet",
   "filemenu.projectInfo": "Informations sur le projet",
   "filemenu.history": "Historique…",
@@ -41,6 +42,7 @@ export const en: Record<keyof typeof fr, string> = {
   "filemenu.paper": "Paper",
   "filemenu.print": "Print and export…",
   "filemenu.exportView": "Export view…",
+  "filemenu.exportViewDxf": "Export this view to DXF…", // DXF1
   "filemenu.project": "Project",
   "filemenu.projectInfo": "Project information",
   "filemenu.history": "History…",
