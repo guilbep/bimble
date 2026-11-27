@@ -171,6 +171,7 @@ native_suites() {
     suite build-native-app ./build.sh native-app
     suite native-deps native/deps.sh --check
     suite native_app env CCORE_NATIVE_REQUIRED=1 node test/native_app_test.mjs
+    suite native_geo env CCORE_NATIVE_REQUIRED=1 node test/native_geo_test.mjs
     suite build-native-asan native/build.sh asan
     suite native_app_asan env CCORE_NATIVE_REQUIRED=1 NATIVE_BIN=out/app-asan/bimble ASAN_OPTIONS=detect_leaks=0 node test/native_app_test.mjs
 }
