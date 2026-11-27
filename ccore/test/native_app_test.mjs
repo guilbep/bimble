@@ -17,7 +17,7 @@
 // CCORE_NATIVE_REQUIRED=1 (ci/run.sh native, the CI job ccore-native) that is a failure.
 // NATIVE_WRITE_REF=1 writes the reference picture instead of comparing.
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -352,6 +352,45 @@ quit
   const [lf, lmf, lmi] = truthOf(rtl);
   const rep3 = existsSync(join(rtl.out, "report.txt")) ? readFileSync(join(rtl.out, "report.txt"), "utf8") : "";
   check(`tiles-links: drawn by tiles, the truth test found nothing missing (${lf} frames, ${lmi} missing)`, /detail loaded by tiles/.test(rep3) && lf > 5 && lmf === 0 && lmi === 0);
+
+  // ---- 3f. NUI3: the desktop: the window's title (the file's name), a touchpad's two-finger scroll pans, Ctrl + scroll and
+  // a pinch zoom, the section box by numbers (its top at 4.5 m), the command palette (Ctrl+K), a file dropped on the window
+  // opened (the title follows); the session log has the drop and the box ----
+  const dlogs = join(tmp, "desk-sessions");
+  const rd = run("desktop", `
+wait complete
+frames 3
+expect_title frame.json
+swheel 0.5 0.5 0.4 0.6
+frames 3
+expect_cam panned
+swheel 0.5 0.5 0 0.5 ctrl
+frames 3
+expect_cam zoomed
+pinch 1.3
+frames 3
+expect_cam zoomed
+action section_box
+frames 5
+expect_box on
+box_numbers -1 -1 -1 19 11 4.5
+frames 5
+expect_box_top 4.5
+key k ctrl
+frames 3
+shot palette.png
+key escape
+frames 2
+drop ${join(CCORE, "test/fixtures/tilt.ifc")}
+wait complete
+frames 5
+expect_title tilt.ifc
+quit
+`, fixture, [], { BIMBLE_LOG_DIR: dlogs });
+  check("desktop: exits 0, no signal", rd.code === 0 && !rd.signal, `${rd.code} ${rd.signal ?? ""} ${rd.err.trim().split("\n").slice(-2).join(" | ")}`);
+  expectations("desktop", rd);
+  const dl = existsSync(dlogs) ? readdirSync(dlogs).map((d) => join(dlogs, d, "session.log")).filter(existsSync).map((f) => readFileSync(f, "utf8")).join("\n") : "";
+  check("desktop: the session log has the drop and the box by numbers", /drop: .*tilt\.ifc: opened/.test(dl) && /section box by numbers: .* -> 200/.test(dl), (dl.match(/(drop|section box by numbers).*/g) ?? []).join(" | ").slice(0, 300));
 
   // ---- 4. malformed files: the core's error, never a crash ----
   const bad = join(tmp, "bad");

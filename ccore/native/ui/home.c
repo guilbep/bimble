@@ -375,10 +375,20 @@ void optimisations_apply(App *a) {
     a->topts.error_px = opt_num(a, "error_px", D_ERROR_PX);
     a->topts.lod = opt_num(a, "lod", 1) != 0 && a->topts.error_px > 0;
     a->topts.cull_back = opt_num(a, "cull_back", D_CULL_BACK) != 0;
+    { /* NUI3: SHELL1's shell_mode (the core's key): priority (default) and filter order the walk exterior first (the native
+       * renderer has no filter: occlusion decides what is seen), off the plain order */
+        const JrVal *sm = v ? jr_get(v, "shell_mode") : NULL;
+        a->topts.priority = !(sm && sm->type == JR_STR && !strcmp(sm->s, "off"));
+        if (nset_get("shell_mode")) a->topts.priority = !opt_str_is("shell_mode", "off", 0);
+    }
     a->topts.groups = opt_num(a, "occlusion_groups", 1) != 0;
     nv_tiles_group_size((uint32_t)opt_num(a, "occlusion_group", 2));
     nv_tiles_cluster_tris((uint32_t)opt_num(a, "cluster_tris", 512));
     nv_tiles_tile_gate(opt_num(a, "occlusion_tiles", 1) != 0);
+    nv_tiles_cold((int)opt_num(a, "occlusion_cold", 1));
+    nv_tiles_hiz_pair(opt_num(a, "hiz_pair", 1) != 0);
+    nv_tiles_seen_step((uint32_t)opt_num(a, "seen_step", 1));
+    nv_tiles_page_grow((uint32_t)opt_num(a, "page_grow", 3));
     nv_tiles_test_mode((int)opt_num(a, "occlusion_test", 2), (int)opt_num(a, "occlusion_split", 1), (int)opt_num(a, "occlusion_span", 4), (int)opt_num(a, "occlusion_split_px", 64));
     if (a->r) nv_tiles_hiz_block(a->r, (uint32_t)opt_num(a, "hiz_block", 4));
     a->topts.clip_planes = opt_num(a, "section_clip_planes", 1) != 0;

@@ -4,9 +4,9 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform usampler2D ids;
 layout(std430, set = 1, binding = 0) buffer Seen { uint seen[]; };
-layout(set = 2, binding = 0) uniform U { uvec4 a; }; // W, H, the frame's number, elements
+layout(set = 2, binding = 0) uniform U { uvec4 a; uvec4 b; }; // W, H, the frame's number, elements; b.x: a pixel in b.x a side (NUI3)
 void main() {
-    uvec2 p = gl_GlobalInvocationID.xy;
+    uvec2 p = gl_GlobalInvocationID.xy * b.x; // NUI3 seen_step: an element missed here is tested in pass 2 next frame (exact)
     if (p.x >= a.x || p.y >= a.y) return;
     uint id = texelFetch(ids, ivec2(p), 0).r;
     if (id > 8u && id - 1u < a.w) seen[id - 1u] = a.z;

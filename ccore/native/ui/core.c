@@ -282,6 +282,9 @@ static const char *const NATIVE_STRINGS[][3] = {
     {"native.opt.cullBack", "Faces arrière des solides fermés non dessinées", "Back faces of closed solids not drawn"},
     {"native.opt.errorPx", "Écart des niveaux (0 : détail partout)", "Levels' error (0: detail everywhere)"},
     {"native.opt.stillPx", "Éléments plus petits que (0 : tous)", "Elements smaller than (0: all drawn)"},
+    {"native.dropFolder", "Un dossier déposé est lié au projet ouvert : ouvrez d'abord un projet", "A folder dropped is linked into the open project: open a project first"},
+    {"native.palette", "Commande… (Ctrl+K)", "Command… (Ctrl+K)"},
+    {"native.fit", "Tout afficher", "Fit all"},
     {"native.cube.top", "Dessus", "Top"},
     {"native.cube.bottom", "Dessous", "Bottom"},
     {"native.cube.front", "Avant", "Front"},
@@ -404,6 +407,7 @@ void core_visibility(App *a) {
         const JrVal *o = sb ? jr_get(sb, "origin_mm") : NULL;
         if (o && o->type == JR_ARR && o->n == 3) for (int i = 0; i < 3; i++) org[i] = o->items[i].num;
         for (int i = 0; on && i < 3; i++) lo[i] += org[i] - a->origin0[i], hi[i] += org[i] - a->origin0[i];
+        memcpy(a->box_org, org, sizeof org);
         if (a->view_name[0] && a->view_clip) nv_render_set_clip(a->r, 1, a->view_lo, a->view_hi); /* a plan or section: its own box */
         else nv_render_set_clip(a->r, on, lo, hi);
         a->box_on = on;
@@ -425,7 +429,8 @@ static int key_name_is(const char *name, SDL_Keycode k) {
 int core_key(App *a, SDL_Keycode k, SDL_Keymod mod, int typing) {
     const JrVal *K = a->keys;
     int ctrl = (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0, shift = (mod & SDL_KMOD_SHIFT) != 0;
-    if (ctrl && k == 'o' && !typing) { fs_open(a, NULL, "open"); a->dialog = DLG_OPEN; return 1; } /* the File menu's own keys */
+    if (ctrl && k == 'o' && !typing) { desk_dialog(a, "open"); return 1; } /* the File menu's own keys */
+    if (ctrl && k == 'k' && !typing) { palette_toggle(a); return 1; } /* NUI3: the command palette */
     if (ctrl && k == 's' && !typing && a->screen_kind == SCR_MAIN) { tool_run_action(a, "save"); return 1; }
     for (size_t i = 0; K && K->type == JR_ARR && i < K->n; i++) {
         const JrVal *r = &K->items[i];

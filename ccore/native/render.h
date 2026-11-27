@@ -129,6 +129,7 @@ typedef struct {
     uint64_t budget;     /* the resident tiles' GPU bytes (0: none) */
     uint64_t tri_budget; /* the walker's triangle budget (0: none; the moving budget sets it) */
     int reference;       /* the truth test's reference frame: no occlusion, no state changed */
+    int priority;        /* NUI3: shell_mode priority: the walk's tiles exterior first (CC_TILES_SEL_PRIORITY): fetched first */
 } nv_tiles_opts;
 typedef struct { nv_tileset *ts; uint32_t tile, rank; } nv_tile_want;
 
@@ -141,6 +142,11 @@ void nv_tileset_ref(nv_tileset *ts);   /* a loader job holds one */
 /* the whole section kept with the set (the open model's: its proxies are read from it; a link's are read from its mapped
  * cache): taken (malloc'd, n bytes) */
 void nv_tileset_keep_section(nv_tileset *ts, uint8_t *sec, size_t n);
+/* NUI3: the cross-link shell's marks (session/xshell.h: a byte per entry of the element list, 1 exterior), copied; NULL
+ * detaches. The priority walk orders the tiles holding a marked element first. 0 ok, -1 (n differs, no memory). */
+int nv_tileset_set_xmask(nv_tileset *ts, const uint8_t *marks, uint32_t n);
+/* NUI3: every tile released from the GPU (the measure of the time to the first correct picture after a jump) */
+void nv_render_tiles_drop_all(nv_render *r);
 void nv_tileset_section(const nv_tileset *ts, const uint8_t **sec, size_t *n);
 void nv_tileset_unref(SDL_GPUDevice *dev, nv_tileset *ts);
 const cc_tiles_toc *nv_tileset_toc(const nv_tileset *ts);
@@ -162,7 +168,11 @@ void nv_render_tiles_opts(nv_render *r, const nv_tiles_opts *o);
 void nv_render_tiles_squeeze(nv_render *r);
 void nv_tiles_group_size(uint32_t n);
 void nv_tiles_surplus_top(void); /* NUI3: BIMBLE_TILES_SURPLUS=2, the largest elements drawn but not shown */
-void nv_tiles_tile_gate(int on); /* NUI3: occlusion_tiles, a loaded leaf hidden last frame tested by its box alone */
+void nv_tiles_page_grow(uint32_t g); /* NUI3: page_grow, pages at most 2^g times the first (26 MB) */
+void nv_tiles_tile_gate(int on);
+void nv_tiles_cold(int on); /* NUI3: occlusion_cold, the elements hidden last frame under one gate a leaf (1 still frames, 2 all) */
+void nv_tiles_hiz_pair(int on); /* NUI3: hiz_pair, two levels of the depth pyramid a dispatch */
+void nv_tiles_seen_step(uint32_t s); /* NUI3: seen_step, the elements seen from one pixel in s a side */ /* NUI3: occlusion_tiles, a loaded leaf hidden last frame tested by its box alone */
 void nv_tiles_cluster_tris(uint32_t n); /* NUI3: cluster_tris, a large element's triangles a cluster (0 off); read when a tile loads */
 void nv_tiles_test_mode(int mode, int split, int span, int split_px); /* NUI3: occlusion_test (0 group box, 1 element boxes, 2 + own placed box), occlusion_split, occlusion_span, occlusion_split_px */
 void nv_tiles_hiz_block(nv_render *r, uint32_t b); /* hiz_block: the depth pyramid's level 0, pixels a texel side (1, 2, 4) */
