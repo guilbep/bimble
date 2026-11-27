@@ -871,13 +871,16 @@ static uint32_t group_test(float lo[3], float hi[3]) {
 static void grow_sphere(float lo[3], float hi[3], const float c[3], float r) {
     for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], c[d] - r - 1), hi[d] = fmaxf(hi[d], c[d] + r + 1);
 }
+static uint32_t CLN = 16; /* occlusion_group: elements a group (the A/B: 8, 16, 32) */
+void nv_tiles_group_size(uint32_t n) { CLN = n < 1 ? 1 : n > 256 ? 256 : n; }
 static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *cut) {
     int back = T->o.cull_back, pgi = g->page;
     for (int grp = 0; grp < 2; grp++) {
         uint32_t a = back ? (grp ? g->nclosed : 0) : (grp ? g->nel : 0), b = back ? (grp ? g->nel : g->nclosed) : g->nel;
         int kind = back && grp == 0 ? K_MERGED_BACK : K_MERGED;
-        for (uint32_t c0 = a; c0 < b; c0 += CL) {
-            uint32_t c1 = c0 + CL < b ? c0 + CL : b;
+        uint32_t p0 = 0, pn = 0; /* pass 1's run, carried across groups (one command for consecutive groups seen) */
+        for (uint32_t c0 = a; c0 < b; c0 += CLN) {
+            uint32_t c1 = c0 + CLN < b ? c0 + CLN : b;
             int seen = 0, any = 0;
             float lo[3] = {3e38f, 3e38f, 3e38f}, hi[3] = {-3e38f, -3e38f, -3e38f};
             for (uint32_t i = c0; i < c1; i++) {
@@ -886,26 +889,40 @@ static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut 
                 grow_sphere(lo, hi, g->el[i].c, g->el[i].r);
             }
             if (!any) continue;
-            int pass = seen ? 1 : 2;
-            uint32_t gate = seen ? 0 : group_test(lo, hi);
+            if (seen) { /* pass 1, ungated: runs joined with the previous groups' */
+                for (uint32_t i = c0; i < c1; i++) {
+                    const GElem *e = &g->el[i];
+                    if (small(cut, e->c, e->r)) {
+                        if (pn) add_cmd(1, pgi, kind, pn, 1, g->off[B_I] + p0, (int32_t)g->off[B_V], 0, 0), F.tris1 += pn / 3, pn = 0;
+                        continue;
+                    }
+                    if (pn && p0 + pn == e->first) pn += e->n;
+                    else {
+                        if (pn) add_cmd(1, pgi, kind, pn, 1, g->off[B_I] + p0, (int32_t)g->off[B_V], 0, 0), F.tris1 += pn / 3;
+                        p0 = e->first, pn = e->n;
+                    }
+                }
+                continue;
+            }
+            uint32_t gate = group_test(lo, hi);
             uint64_t tris = 0;
             uint32_t run0 = 0, runn = 0;
             for (uint32_t i = c0; i < c1; i++) {
                 const GElem *e = &g->el[i];
                 if (small(cut, e->c, e->r)) {
-                    if (runn) add_cmd(pass, pgi, kind, runn, 1, g->off[B_I] + run0, (int32_t)g->off[B_V], 0, gate), tris += runn / 3, runn = 0;
+                    if (runn) add_cmd(2, pgi, kind, runn, 1, g->off[B_I] + run0, (int32_t)g->off[B_V], 0, gate), tris += runn / 3, runn = 0;
                     continue;
                 }
                 if (runn && run0 + runn == e->first) runn += e->n;
                 else {
-                    if (runn) add_cmd(pass, pgi, kind, runn, 1, g->off[B_I] + run0, (int32_t)g->off[B_V], 0, gate), tris += runn / 3;
+                    if (runn) add_cmd(2, pgi, kind, runn, 1, g->off[B_I] + run0, (int32_t)g->off[B_V], 0, gate), tris += runn / 3;
                     run0 = e->first, runn = e->n;
                 }
             }
-            if (runn) add_cmd(pass, pgi, kind, runn, 1, g->off[B_I] + run0, (int32_t)g->off[B_V], 0, gate), tris += runn / 3;
-            if (seen) F.tris1 += tris;
-            else F.gate_tris[gate] += tris;
+            if (runn) add_cmd(2, pgi, kind, runn, 1, g->off[B_I] + run0, (int32_t)g->off[B_V], 0, gate), tris += runn / 3;
+            F.gate_tris[gate] += tris;
         }
+        if (pn) add_cmd(1, pgi, kind, pn, 1, g->off[B_I] + p0, (int32_t)g->off[B_V], 0, 0), F.tris1 += pn / 3;
     }
     for (uint32_t s2 = 0; s2 < g->nshape; s2++) {
         const GShape *sh = &g->sh[s2];
@@ -913,8 +930,8 @@ static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut 
         for (int mir = 0; mir < 2; mir++) {
             uint32_t a = sh->copy0 + (mir ? sh->ncopy - sh->nmir : 0), b = mir ? sh->copy0 + sh->ncopy : sh->copy0 + sh->ncopy - sh->nmir;
             uint32_t first = mir && sh->firstf != UINT32_MAX ? sh->firstf : sh->first;
-            for (uint32_t c0 = a; c0 < b; c0 += CL) {
-                uint32_t c1 = c0 + CL < b ? c0 + CL : b;
+            for (uint32_t c0 = a; c0 < b; c0 += CLN) {
+                uint32_t c1 = c0 + CLN < b ? c0 + CLN : b;
                 GROW(F.inst, F.ninst, F.cinst, c1 - c0);
                 if (F.oom) return;
                 uint32_t i0 = F.ninst;
@@ -1402,7 +1419,7 @@ void nv_tiles_debug_elem(R *r, uint32_t e) {
             for (uint32_t i = 0; i < g->nel; i++)
                 if (g->el[i].elem == e) {
                     where = (int)ts->sel[k];
-                    fprintf(stderr, "truth: element %u in tile %u (set %u), group of index %u, seen tag %u, frame %llu, sphere %.0f %.0f %.0f r %.0f\n", e, ts->sel[k], si, i / CL,
+                    fprintf(stderr, "truth: element %u in tile %u (set %u), group of index %u, seen tag %u, frame %llu, sphere %.0f %.0f %.0f r %.0f\n", e, ts->sel[k], si, i / CLN,
                             e < nseen_cpu ? seen_cpu[e] : 0, (unsigned long long)T->frame, g->el[i].c[0], g->el[i].c[1], g->el[i].c[2], g->el[i].r);
                     break;
                 }
