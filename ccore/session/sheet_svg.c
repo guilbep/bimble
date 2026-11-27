@@ -638,6 +638,7 @@ int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body
     jw_init(&w, out, 0);
     jw_obj_begin(&w);
     jw_key(&w, "height_mm"), jw_f64(&w, paper.height_mm);
+    if (s->paper_notice[0]) jw_key(&w, "notice"), jw_str(&w, s->paper_notice); /* SIZE3: links simplified */
     jw_key(&w, "paper"), jw_str(&w, cc_paper_size_name(info.paper));
     jw_key(&w, "portrait"), jw_bool(&w, info.portrait);
     jw_key(&w, "scale"), jw_u64(&w, vw->scale);

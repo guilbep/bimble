@@ -1976,7 +1976,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         // (their rows, boxes and batches stand; their detail is asked again when a frame needs it, budgetStep)
         for (const h of heads) keys.push(h.key);
         const order = heads.map((_, k) => k).filter((k) => heads[k]!.nE).sort((a, b) => heads[a]!.nE - heads[b]!.nE || a - b);
-        let kept = 0, gone = false, full = true;
+        let kept = 0, full = true;
         stats.openPeakDecoded = 0;
         for (const k of order) {
           const h = heads[k]!;
@@ -1996,7 +1996,6 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
           h.m = lm;
         }
         stats.openKeptBytes = kept, stats.linksDetailedAt = null;
-        if (gone) { await new Promise((res) => setTimeout(res, 200)); wantRev = null; return; }
       }
       const m = heads.length ? mergeMesh(main, heads, served) : main;
       stats.meshBytes = served, stats.meshBytesServed = (stats.meshBytesServed ?? 0) + served;

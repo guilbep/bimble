@@ -9,6 +9,7 @@
 // manage_links reload (the Links panel's "Convert now") converts it once the memory is there.
 // On the code before SIZE3 the automatic retry never ran when nothing else was converting (the host
 // looked at its links only while one was queued or converting): the first link stayed refused.
+// SIZE3: then a plan through the two links with 1 kB "free": drawn with both links simplified, said in a notice.
 // Prints "N passed, M failed"; exits non-zero on a failure.
 import { spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -95,5 +96,19 @@ r = await call("action", "manage_links", JSON.stringify({ op: "reload", name: "b
 m = await settle("b.ifc");
 check("Convert now with the memory free: ready", r.status === 200 && m?.state === "ready" && m.elements === 72, `${r.text} ${JSON.stringify(m)}`);
 
+// SIZE3: a plan through links that would not fit half the memory free is drawn with those links simplified (each
+// element its box) and says so; with the memory free, cut exactly, no notice. On the code before SIZE3 the plan
+// expanded every placed copy whatever the memory (12.6 s and 6.5 GB on a folder of 17 links).
+const views = JSON.parse((await call("query", "open_views", "{}")).text).views ?? [];
+const plan = views.find((v) => v.type === "plan");
+const planSvg = async () => { const r = await call("query", "view_svg", JSON.stringify({ view: plan?.id, bare: true })); return { status: r.status, j: r.status === 200 ? JSON.parse(r.text) : null, text: r.text }; };
+const exact = await planSvg();
+writeFileSync(MEM, String(1024));
+const simple = await planSvg();
+writeFileSync(MEM, String(8 * 1024 ** 3));
+const paths = (x) => (x.j?.svg.match(/<path/g) ?? []).length;
+check("a plan through the links, memory free: cut exactly, no notice", exact.status === 200 && !exact.j.notice && paths(exact) > 10, `${exact.status} ${paths(exact)} paths ${exact.j?.notice ?? ""}`);
+check("memory short: the links simplified (their elements' boxes), said", simple.status === 200 && /2 links simplified/.test(simple.j.notice ?? "") && paths(simple) > 10,
+  `${simple.status} ${paths(simple)} paths, notice ${JSON.stringify(simple.j?.notice)}`);
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

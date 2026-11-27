@@ -254,4 +254,10 @@ decodes none (2 ms). The synthetic set (17 links, converted by the same host): 1
 link's decode, per link of the local folder: 0.7-307 MB in 0-333 ms (the largest: 307 MB in 220 ms, 87 MB in 333 ms):
 what a measure pays when its ray meets that link's box; the element query and Box to selection decode one block.
 Found, not caused here: a plan through the 17 links (`view_svg`) took 12.6 s and 6.5 GB (8.5 GB at its peak):
-`paper_scene.c` expands every placed copy of every link (110 M triangles); a plan should cut the links' shapes once.
+`paper_scene.c` expands every placed copy of every link (110 M triangles), each made twice in the merged scene's
+arena. Capped now (24.): each copy made in a scratch, then copied moved (half the memory); and the links whose
+expanded copies (96 bytes a placed triangle, from their counts: nothing decoded) do not fit in half the memory free
+(`pf->mem_available`, as a conversion's check) are drawn simplified, each element its box, the answer saying "too
+large to cut exactly with the memory free: N links simplified" (`view_svg`'s `notice`; `link_retry_test` with
+`BIMBLE_MEM_AVAILABLE`). Follow-up, the proper fix: cut without expanding copies (each shape cut once by the plane
+moved into its own frame, the cut placed per copy), so that a plan costs the shapes' triangles, not the copies'.
