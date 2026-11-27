@@ -40,6 +40,9 @@ typedef struct {
     unsigned moving_fps;  /* 0..=240, 30 */
     int moving_proxies;   /* true */
     int gpu_cull;         /* false */
+    /* VIS1 (ADR 0078 amendment 5): the lab's 3D view leaves out what the last picture hides ("Draw only what can be
+     * seen", true). Not one of Rust's fields: not in to_json, written to the file only once set (as renderer). */
+    int draw_visible;
     char theme[24];       /* ui_theme.rs THEMES ids, "grey" */
     char ui_font[12];     /* "roboto" | "ubuntu" */
     float text_size;      /* f32, 10..=16, 12 */
