@@ -806,7 +806,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         tally_buf(&warnings, &b, 1);
     }
     double scale = length_scale_to_mm(&r);
-    r.arc_tol = 0.5 / scale; /* read.rs ARC_TOLERANCE_MM */
+    r.arc_tol = tess_for(0, scale); /* read.rs ARC_TOLERANCE_MM: the import keeps Rust's detail (TESS1) */
     r.angle_scale = plane_angle_to_radians(&r);
 
     /* Storeys. */

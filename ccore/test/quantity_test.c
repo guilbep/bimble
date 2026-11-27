@@ -167,7 +167,8 @@ static void one_ifc(const char *name) {
     char *text = slurp(golden, path, &n);
     cc_ifc_scene s;
     cc_error err;
-    if (cc_ifc_read(text, n, &s, &err)) {
+    cc_ifc_read_opts exact = {CC_IFC_DETAIL_EXACT, 0, 0}; /* Rust's goldens: Rust's arcs (TESS1) */
+    if (cc_ifc_read_with(text, n, &exact, &s, &err, NULL)) {
         printf("FAIL %s: %s\n", path, err.msg);
         failed++;
     } else {
@@ -177,6 +178,40 @@ static void one_ifc(const char *name) {
         cc_viewfile_meta_free(&mt);
     }
     cc_ifc_scene_free(&s);
+    free(text);
+}
+
+/* TESS1 (ADR 0085): a read-only IFC's volumes come from its mesh (as in Rust): at the standard
+ * detail a round section is a polygon of chords within 2 mm (the exact detail: 0.5 mm), so its
+ * volume moves a little (lower for a round column, higher for an I-shape: its fillets add material).
+ * Printed per element, and bounded: within 1 % of the exact read. */
+static void ifc_detail_volumes(const char *name) {
+    char path[256];
+    size_t n;
+    snprintf(path, sizeof path, "ifc/fixtures/%s.ifc", name);
+    char *text = slurp(golden, path, &n);
+    cc_ifc_scene s[2];
+    cc_error err;
+    cc_ifc_read_opts o[2] = {{CC_IFC_DETAIL_EXACT, 0, 0}, {CC_IFC_DETAIL_STANDARD, 0, 0}};
+    int rc0 = cc_ifc_read_with(text, n, &o[0], &s[0], &err, NULL), rc1 = cc_ifc_read_with(text, n, &o[1], &s[1], &err, NULL);
+    check_true("detail volumes: both read", !rc0 && !rc1 && s[0].scene.nelements == s[1].scene.nelements);
+    for (size_t k = 0; !rc0 && !rc1 && k < s[0].scene.nelements; k++) {
+        cc_viewfile_meta mt[2];
+        cc_measures q[2];
+        Arena a;
+        arena_init(&a, 0);
+        int ok = !cc_ifc_scene_meta(&s[0], &mt[0]) && !cc_ifc_scene_meta(&s[1], &mt[1]) &&
+                 cc_measure(&s[0].scene, &mt[0], k, &a, &q[0]) == 1 && cc_measure(&s[1].scene, &mt[1], k, &a, &q[1]) == 1;
+        double rel = ok && q[0].volume_m3 > 0 ? (q[1].volume_m3 - q[0].volume_m3) / q[0].volume_m3 : 0;
+        printf("detail volumes %s %zu: exact %.6f m3, standard %.6f m3 (%+.3f %%)\n", name, k, ok ? q[0].volume_m3 : 0,
+               ok ? q[1].volume_m3 : 0, 100 * rel);
+        char m[160];
+        snprintf(m, sizeof m, "detail volumes %s %zu: standard within 1 %% of exact", name, k);
+        check_true(m, ok && rel <= 0.01 && rel >= -0.01);
+        cc_viewfile_meta_free(&mt[0]), cc_viewfile_meta_free(&mt[1]);
+        arena_free(&a);
+    }
+    cc_ifc_scene_free(&s[0]), cc_ifc_scene_free(&s[1]);
     free(text);
 }
 
@@ -305,6 +340,7 @@ int main(int argc, char **argv) {
     static const char *const IFC[] = {"circle_column", "ishape_beam", "rect_hollow", "triangulated",
                                       "faceted_brep",  "mapped_item", "indexed_arc"};
     for (size_t i = 0; i < sizeof IFC / sizeof IFC[0]; i++) one_ifc(IFC[i]);
+    ifc_detail_volumes("circle_column"), ifc_detail_volumes("indexed_arc"), ifc_detail_volumes("ishape_beam");
     snprintf(sched, sizeof sched, "%s/schedule", dir);
     size_t on_disk = count_files(sched);
     char label[128];

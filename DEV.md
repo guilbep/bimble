@@ -257,12 +257,23 @@ themselves. Any of them on the GPU:
 ```sh
 LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_first_input.mjs     # input_time.mjs then asserts 200 ms presented
 LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_webgpu.mjs          # the real adapter accepted, pictures = WebGL2's
+LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_webgpu_links.mjs    # GPU2: six links, WebGPU = WebGL2 in 7 states, 10 live switches
 LAB_GPU=vulkan node ccore/tools/frames.mjs --force --models fixture,heavy,large                 # WebGL2: the real-GPU section of results/frames.md
 LAB_GPU=vulkan node ccore/tools/frames.mjs --force --models fixture,heavy,large --renderer webgpu
 LAB_GPU=vulkan HOST_BIN=$PWD/ccore/out/native/bimble-ccore node ccore/tools/frames.mjs --links 17  # a row of that section
 LAB_GPU=vulkan HOST_BIN=$PWD/ccore/out/native/bimble-ccore FRAMES_LINK_FOLDER=<a folder of IFC files> \
   FRAMES_CACHE_DIR=<scratch> node ccore/tools/frames.mjs --steps 5,10,14,17   # your own folder, out/frames/folder.md only
 ```
+
+**The everyday browser (GPU2, 27 Nov 2026).** Chromium 153 as the desktop starts it (no flags) on this machine draws
+WebGL2 with "ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)" and gives WebGPU **no adapter** (the owner's report); with
+`--enable-unsafe-webgpu` alone a SwiftShader fallback adapter; with `--enable-unsafe-webgpu --enable-features=Vulkan
+--use-angle=vulkan` the M1 Pro (WebGL2 and WebGPU on Vulkan). Checked with a non-headless browser process on Ozone's
+headless display (`--ozone-platform=headless`: no window), which reproduces the desktop's GL renderer; the
+`chrome://flags` equivalents (Unsafe WebGPU Support, Vulkan, ANGLE backend: Vulkan) were not checked here.
+`bimble-ccore open --app` (or the setting "Open Bimble in an app window") starts Chromium with exactly these three
+flags, an app window and its own profile (`<config dir>/browser`); `ccore/test/open_app_test.mjs` checks the arguments
+with a fake browser.
 
 A run on the GPU writes only the section "On the machine's GPU" of `ccore/results/frames.md`; a
 SwiftShader run keeps it. A timing taken without these flags measures the CPU, not a GPU: say which in

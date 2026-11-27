@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 407f400000000000 0000000000000000 407c200000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cCsgRound0000000004" "Level 0"
+grids 0
+elements 1 triangles 474 meshes yes
+000 2T2cCsgRound0000000010 IfcMember 7 Other v=252 i=474 e=60 n=60 name="csg_round" storey="Level 0" material=""

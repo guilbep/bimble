@@ -18,6 +18,7 @@ import { currentDialog } from ".";
 import { send } from "../shell/send";
 import { pickedSchedule } from "../pages/quantitiesPick";
 import { currentPanel } from "../panels"; // SIZE2: the performance panel
+import { chooseRenderer } from "../perf"; // GPU2: the renderer, live
 
 interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null;
   /** DEAD1: a disabled row says why: "not available yet" (an action of a capability this core does not serve), or the ribbon tool's reason it is off now. */
@@ -62,6 +63,10 @@ const items = computed<Item[]>(() => {
   // SIZE2: the performance panel (not an action: a panel of the lab, as the status bar's button), always there
   list.push({ label: t("perf.paletteOpen"), also: "performance", note: t("perf.paletteNote"), kbd: "—", icon: GAUGE, enabled: true,
     go: () => { currentPanel.value = "performance"; return null; } });
+  // GPU2: the 3D renderer, live (the setting `renderer`, as the panel's switch and the status bar's chip): not an action
+  for (const r of ["webgpu", "webgl2"] as const)
+    list.push({ label: t(r === "webgpu" ? "perf.paletteWebgpu" : "perf.paletteWebgl2"), also: `renderer ${r}`, note: t("perf.paletteNote"), kbd: "—", icon: GAUGE, enabled: true,
+      go: () => { chooseRenderer(r); return null; } });
   // ponytail: sheets throw without a model; no model, no entries. Schedules: the effective ones (`schedule_list`), as egui.
   try {
     for (const s of sheets()) list.push({ label: t("palette.goto", { name: `${s.number} ${s.name}` }), note: t("tab.sheets"), kbd: "—", icon: SHEET, enabled: true, go: () => tabCall("open", { type: "sheet", id: s.id }) });

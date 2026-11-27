@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 406f400000000000 0000000000000000 c06f400000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cRevolved0000000004" "Level 0"
+grids 0
+elements 1 triangles 76 meshes yes
+000 2T2cRevolved0000000010 IfcMember 7 Other v=40 i=76 e=44 n=44 name="revolved" storey="Level 0" material=""

@@ -5,6 +5,9 @@ import { lang, setLang, t, type Lang } from "../i18n";
 import { page } from "../pages";
 import { dialog } from "../dialogs";
 import { panel, currentPanel } from "../panels";
+import { gpuSide, howToWebgpu, renderer, toggleRenderer, warmRenderer } from "../perf"; // GPU2: the renderer chip
+/** GPU2: the chip's title: the renderer, and what to do when WebGPU was asked and has no adapter. */
+const chipTitle = (): string => { const h = renderer.asked === "webgpu" && renderer.using !== "WebGPU" ? howToWebgpu(renderer.reason) : null; return `${t("perf.chipTitle", { what: renderer.using })}${h ? ` \u2014 ${t(h)}` : ""}`; };
 
 const langs: Lang[] = ["fr", "en"];
 const preview = import.meta.env.VITE_CCORE === "1" ? `Preview, C core ${import.meta.env.VITE_CCORE_REV ?? "dev"} · openings drawn uncut (no boolean kernel in wasm)` : ""; // ticket PG1
@@ -90,6 +93,9 @@ const chips = (): Chip[] => {
         :aria-label="t('perf.open')" @click="currentPanel = currentPanel === 'performance' ? null : 'performance'"><svg class="pfi" width="14"
           height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path
           d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/></svg><span class="pft">{{ t('perf.open') }}</span></button>
+      <!-- GPU2: the renderer drawing now, one click from the other (live; the performance panel says more) -->
+      <button type="button" class="pf rc" data-bb="status-renderer" :aria-pressed="gpuSide()" :title="chipTitle()"
+        :aria-label="chipTitle()" @pointerenter="warmRenderer()" @click="toggleRenderer()">{{ renderer.using }}<span v-if="renderer.progress || (renderer.asked === 'webgpu' && renderer.using !== 'WebGPU')" class="rx" aria-hidden="true">*</span></button>
       <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
         <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
           :aria-pressed="lang === l" :lang="l" :title="t(l === 'fr' ? 'status.langFr' : 'status.langEn')"
@@ -131,6 +137,9 @@ const chips = (): Chip[] => {
 /* GPU1: the performance panel's button, quiet as the counts beside it */
 .pf { border: 0; background: none; padding: 2px 6px; border-radius: var(--bb-radius-pill); color: var(--bb-stone); font: inherit; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .pf[aria-pressed="true"] { background: var(--bb-sunk); color: var(--bb-ink); }
+/* GPU2: the renderer chip (DM Mono, as the counts); * : WebGPU asked and not drawing yet (or getting ready) */
+.rc { font-family: var(--bb-font-data); }
+.rc .rx { color: var(--bb-clay, #C06A41); }
 /* SIZE2: the status bar never pushes its end group (Performance, language) out: everything before it may shrink
    (clipped with an ellipsis), the end group may not; the bar clips what is left */
 .status { overflow: hidden; }

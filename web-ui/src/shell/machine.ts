@@ -24,12 +24,14 @@ export type FileCall = "new" | "open" | "import" | "close";
 
 export type Shell =
   | { at: "home" }
-  | { at: "opening"; what: FileCall; path?: string; discard: boolean; back: Shell }
+  // URL1 (ADR 0086): `url`, an open from a link (the page fetches the file: openurl.ts).
+  | { at: "opening"; what: FileCall; path?: string; url?: string; discard: boolean; back: Shell }
   | { at: "model"; show: "view" }
   | { at: "model"; show: "page"; page: string }
   | { at: "model"; show: "sheet"; sheet: string }
-  | { at: "error"; message: string; back: Shell }
-  | { at: "confirmClose"; then: FileCall; path?: string; back: Shell }
+  // URL1: `url`, the link whose open failed (Try again opens it again).
+  | { at: "error"; message: string; back: Shell; url?: string }
+  | { at: "confirmClose"; then: FileCall; path?: string; url?: string; back: Shell }
   // FIXUI: the native host stopped answering (send.ts: the change poll failed for a while). What
   // was known when it went: the file and whether it had unsaved changes. Blocking: the page cannot
   // reach the model. `reconnected` decides: the same session goes back, another says so.
@@ -38,7 +40,7 @@ export type Shell =
 
 export type Event =
   | { do: "new" }
-  | { do: "open"; path?: string }
+  | { do: "open"; path?: string; url?: string } // URL1: url, a link (Home's field, the address, a recent link)
   | { do: "import"; path?: string }
   | { do: "close" }
   | { do: "opened" }
@@ -82,10 +84,13 @@ const as = <D extends EventName>(e: Event, d: D) => e as Extract<Event, { do: D 
 // A file event: with unsaved changes (and a model to lose), ask first; else wait for the call.
 const file = (what: FileCall): Row => (s, e, core) => {
   const path = "path" in e ? e.path : undefined;
-  if (core.unsaved && core.file !== null) return { at: "confirmClose", then: what, ...(path === undefined ? {} : { path }), back: s };
-  return { at: "opening", what, ...(path === undefined ? {} : { path }), discard: false, back: s };
+  const at = { ...(path === undefined ? {} : { path }), ...("url" in e && e.url !== undefined ? { url: e.url } : {}) }; // URL1
+  if (core.unsaved && core.file !== null) return { at: "confirmClose", then: what, ...at, back: s };
+  return { at: "opening", what, ...at, discard: false, back: s };
 };
 const FILE = { new: file("new"), open: file("open"), import: file("import") };
+// URL1: the screen under a transient state (an open, the question, an error): where Try again starts from.
+const rest = (s: Shell): Shell => (s.at === "opening" || s.at === "confirmClose" || s.at === "error" ? rest(s.back) : s);
 // Where a file event fails or is cancelled, or an error is dismissed: back, as the session allows it now.
 const back = (s: Shell, core: CoreState): Shell => derive(s, core);
 const failed: Row = (s, e) => ({ at: "error", message: as(e, "failed").message, back: s });
@@ -116,7 +121,10 @@ export const TRANSITIONS: Record<Kind, Partial<Record<EventName, Row>>> = {
     // The call answered ok: the session's change (with the file) may come later; `core` re-checks.
     opened: () => VIEW,
     closed: toHome,
-    failed: (s, e) => ({ at: "error", message: as(e, "failed").message, back: (s as Extract<Shell, { at: "opening" }>).back }),
+    failed: (s, e) => {
+      const o = s as Extract<Shell, { at: "opening" }>;
+      return { at: "error", message: as(e, "failed").message, back: o.back, ...(o.url === undefined ? {} : { url: o.url }) }; // URL1: Try again
+    },
     cancel: (s, _e, core) => back((s as Extract<Shell, { at: "opening" }>).back, core),
     core: same,
     lost,
@@ -127,6 +135,9 @@ export const TRANSITIONS: Record<Kind, Partial<Record<EventName, Row>>> = {
   error: {
     back: (s, _e, core) => back((s as Extract<Shell, { at: "error" }>).back, core),
     home: toHome,
+    // URL1: Try again (a link's error): the link opened again, from the screen under the error (never
+    // nested in an earlier question or open). Only a link: the error has no Open button of its own.
+    open: (s, e, core) => (as(e, "open").url === undefined ? null : FILE.open(rest((s as Extract<Shell, { at: "error" }>).back), e, core)),
     opened, closed: toHome,
     failed: failedAgain,
     core: same,
@@ -135,7 +146,7 @@ export const TRANSITIONS: Record<Kind, Partial<Record<EventName, Row>>> = {
   confirmClose: {
     discard: (s) => {
       const c = s as Extract<Shell, { at: "confirmClose" }>;
-      return { at: "opening", what: c.then, ...(c.path === undefined ? {} : { path: c.path }), discard: true, back: c.back };
+      return { at: "opening", what: c.then, ...(c.path === undefined ? {} : { path: c.path }), ...(c.url === undefined ? {} : { url: c.url }), discard: true, back: c.back };
     },
     cancel: (s, _e, core) => back((s as Extract<Shell, { at: "confirmClose" }>).back, core),
     opened, closed: toHome,
@@ -209,7 +220,14 @@ export const CONTROLS: readonly Control[] = [
   { id: "ribbon-page", event: { do: "showPage", page: "quantities" }, shown: inModel },
   { id: "palette-page", event: { do: "showPage", page: "quantities" }, shown: inModel }, // DEAD1: Go to: <schedule>
   { id: "shell-opening-cancel", event: { do: "cancel" }, shown: k("opening") },
-  { id: "shell-error-back", event: { do: "back" }, shown: k("error") },
+  { id: "shell-error-back", event: { do: "back" }, shown: (s) => s.at === "error" && s.url === undefined },
+  // URL1 (ADR 0086): a link's error: Back to Home and Try again (ShellNotice); a link from Home's field,
+  // from Home's list of links opened, and the page's address at start (openurl.ts openFromAddress).
+  { id: "shell-error-home", event: { do: "home" }, shown: (s) => s.at === "error" && s.url !== undefined },
+  { id: "shell-error-retry", event: { do: "open", url: "https://example.org/model.ifc" }, shown: (s) => s.at === "error" && s.url !== undefined },
+  { id: "home-open-link", event: { do: "open", url: "https://example.org/model.ifc" }, shown: k("home") },
+  { id: "home-recent-link", event: { do: "open", url: "https://example.org/model.ifc" }, shown: k("home") },
+  { id: "page-link", event: { do: "open", url: "https://example.org/model.ifc" }, shown: k("home", "model.view", "model.page", "model.sheet") },
   { id: "shell-confirm-discard", event: { do: "discard" }, shown: k("confirmClose") },
   { id: "shell-confirm-cancel", event: { do: "cancel" }, shown: k("confirmClose") },
   // FIXUI: File -> Close (the model), and the connection notices.

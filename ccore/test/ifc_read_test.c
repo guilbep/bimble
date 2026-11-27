@@ -73,6 +73,15 @@ static int file_exists(const char *dir, const char *name) {
     return f != NULL;
 }
 
+/* TESS1 (ADR 0085): Rust's goldens are the exact detail; cc_ifc_read's default is standard. */
+static int read_at(const char *t, size_t n, cc_ifc_detail d, cc_ifc_scene *s, cc_error *err) {
+    cc_ifc_read_opts o = {d, 0, 0};
+    return cc_ifc_read_with(t, n, &o, s, err, NULL);
+}
+static int read_exact(const char *t, size_t n, cc_ifc_scene *s, cc_error *err) {
+    return read_at(t, n, CC_IFC_DETAIL_EXACT, s, err);
+}
+
 /* Every file of the folder matches: 1, else 0 with the first difference in `why`. */
 static int compare_in(const char *root, const char *name, const cc_ifc_scene *s, int rc, const cc_error *err,
                       char *why, size_t wn) {
@@ -301,10 +310,10 @@ static void scene_measure(const cc_ifc_scene *s, double *vol, double *lo, double
     }
 }
 
-static void write_own(const char *name, const cc_ifc_scene *s, int rc, const cc_error *err) {
+static void write_in(const char *root, const char *name, const cc_ifc_scene *s, int rc, const cc_error *err) {
     char dir[256], path[320];
-    snprintf(dir, sizeof dir, "golden/ifc_c/read/%s", name);
-    mkdir("golden/ifc_c/read", 0777);
+    snprintf(dir, sizeof dir, "%s/%s", root, name);
+    mkdir(root, 0777);
     mkdir(dir, 0777);
     for (size_t k = 0;; k++) { /* stale element files */
         snprintf(path, sizeof path, "%s/%03zu.txt", dir, k);
@@ -325,6 +334,9 @@ static void write_own(const char *name, const cc_ifc_scene *s, int rc, const cc_
         if (f) fwrite(b.p, 1, b.len, f), fclose(f);
     }
     buf_free(&b);
+}
+static void write_own(const char *name, const cc_ifc_scene *s, int rc, const cc_error *err) {
+    write_in("golden/ifc_c/read", name, s, rc, err);
 }
 
 /* Expected by hand: elements, volume (mm^3) within rel_tol, the box within box_tol (mm), and a
@@ -425,6 +437,9 @@ static const struct {
     {"deep_nesting", 1, 1e9, 1e-9, {0, 0, 0}, {1000, 1000, 1000}, 1e-3, NULL, NULL},
     /* 65: one past the bound, the proxy drawn empty and warned; the plain member 100^3: 1e6 */
     {"deep_nesting_over", 1, 1e6, 1e-9, {-50, -50, 0}, {50, 50, 100}, 1e-3, NULL, "representation nesting too deep"},
+    /* TESS1: a 5000 x 200 x 2800 wall whose opening stands 1 m beside it (nothing cut) and the same
+     * wall 5 m away with its 1200 x 1400 window through: 2 x 2.8e9 - 1200 x 200 x 1400 = 5.264e9 */
+    {"opening_beside", 2, 5.264e9, 1e-9, {0, 0, 0}, {5000, 5200, 2800}, 1e-3, NULL, NULL},
 };
 
 static void own_goldens(void) {
@@ -436,7 +451,7 @@ static void own_goldens(void) {
         char *t = slurp("golden/ifc_c/fixtures", file, &tn);
         cc_ifc_scene s;
         cc_error err;
-        int rc = cc_ifc_read(t, tn, &s, &err);
+        int rc = read_exact(t, tn, &s, &err);
         if (write) write_own(OWN[g].name, &s, rc, &err);
         char why[256] = "", m[256];
         int ok = compare_in("golden/ifc_c/read", OWN[g].name, &s, rc, &err, why, sizeof why);
@@ -486,6 +501,158 @@ static void own_goldens(void) {
     }
 }
 
+/* ---- TESS1 (ADR 0085, DEVIATIONS.md section 40): the standard and light details */
+
+static void scene_text_all(const cc_ifc_scene *s, int rc, const cc_error *err, Buf *b) {
+    if (rc) cc_ifc_error_txt(b, err);
+    else {
+        cc_ifc_scene_txt(b, s);
+        for (size_t k = 0; k < s->scene.nelements; k++) cc_ifc_mesh_txt(b, s, k);
+    }
+}
+static size_t shared_count(const cc_ifc_scene *s) {
+    size_t n = 0;
+    for (size_t k = 0; k < s->scene.nelements; k++) n += s->scene.elements[k].shape >= 0;
+    return n;
+}
+
+/* Each input at standard and light against its exact read (Rust's golden): the same elements,
+ * the same shared copies (as many found as before), the box within the detail's chord distance
+ * (2 mm, 10 mm), the volume within 2 % (standard) and 5 % (light: 12 chords a circle), never more
+ * triangles. An input whose standard read is not its exact read has a C-own golden
+ * (golden/ifc_c/standard/<name>/, CCORE_WRITE_GOLDEN=1 writes it); the others are Rust's golden
+ * still, byte for byte. Returns the number of inputs standard changed. */
+static size_t detail_one(const char *name, const char *dir, const char *file, int write) {
+    size_t tn;
+    char *t = slurp(dir, file, &tn);
+    cc_ifc_scene s0, s1, s2;
+    cc_error e0, e1, e2;
+    int r0 = read_exact(t, tn, &s0, &e0), r1 = read_at(t, tn, CC_IFC_DETAIL_STANDARD, &s1, &e1);
+    int r2 = read_at(t, tn, CC_IFC_DETAIL_LIGHT, &s2, &e2);
+    Buf a, b;
+    buf_init(&a), buf_init(&b);
+    scene_text_all(&s0, r0, &e0, &a);
+    scene_text_all(&s1, r1, &e1, &b);
+    int same = a.len == b.len && !memcmp(a.p, b.p, a.len);
+    char m[256], why[256] = "";
+    if (!same) {
+        if (write) write_in("golden/ifc_c/standard", name, &s1, r1, &e1);
+        snprintf(m, sizeof m, "standard %s: matches its C-own golden (golden/ifc_c/standard)", name);
+        int ok = compare_in("golden/ifc_c/standard", name, &s1, r1, &e1, why, sizeof why);
+        if (!ok) printf("  %s\n", why);
+        check_true(m, ok);
+    } else {
+        char d[256];
+        snprintf(d, sizeof d, "golden/ifc_c/standard/%s/scene.txt", name);
+        snprintf(m, sizeof m, "standard %s: the exact read, no C-own golden left over", name);
+        check_true(m, !file_exists(".", d));
+    }
+    const cc_ifc_scene *sc[2] = {&s1, &s2};
+    const int rcs[2] = {r1, r2};
+    const double box_tol[2] = {2.0 + 1e-3, 10.0 + 1e-3}, vol_tol[2] = {0.02, 0.05};
+    const char *lv[2] = {"standard", "light"};
+    double v0 = 0, lo0[3] = {0}, hi0[3] = {0};
+    if (!r0) scene_measure(&s0, &v0, lo0, hi0);
+    for (int d = 0; d < 2; d++) {
+        snprintf(m, sizeof m, "%s %s: read as exact is (ok or the same error)", lv[d], name);
+        check_true(m, rcs[d] == r0);
+        if (r0 || rcs[d]) continue;
+        double v, lo[3], hi[3], box = 0;
+        scene_measure(sc[d], &v, lo, hi);
+        for (int k = 0; k < 3; k++) {
+            double x = lo[k] - lo0[k], y = hi[k] - hi0[k];
+            x = x < 0 ? -x : x, y = y < 0 ? -y : y;
+            box = x > box ? x : box, box = y > box ? y : box;
+        }
+        double rel = v0 != 0 ? (v - v0) / v0 : 0;
+        rel = rel < 0 ? -rel : rel;
+        printf("%-14s %-8s triangles %7zu -> %7zu  volume %+.3e  box %.3f mm  shared %zu -> %zu\n", name, lv[d],
+               s0.triangles, sc[d]->triangles, rel, box, shared_count(&s0), shared_count(sc[d]));
+        snprintf(m, sizeof m, "%s %s: the same elements", lv[d], name);
+        check_true(m, sc[d]->scene.nelements == s0.scene.nelements);
+        snprintf(m, sizeof m, "%s %s: as many shared copies and shapes", lv[d], name);
+        check_true(m, shared_count(sc[d]) == shared_count(&s0) && sc[d]->scene.nshapes == s0.scene.nshapes);
+        snprintf(m, sizeof m, "%s %s: no more triangles", lv[d], name);
+        check_true(m, sc[d]->triangles <= s0.triangles);
+        snprintf(m, sizeof m, "%s %s: box within %g mm", lv[d], name, box_tol[d]);
+        check_true(m, box <= box_tol[d]);
+        snprintf(m, sizeof m, "%s %s: volume within %g", lv[d], name, vol_tol[d]);
+        check_true(m, rel <= vol_tol[d]);
+    }
+    threads_same(name, t, tn); /* the default (standard): 1 thread and 8 */
+    buf_free(&a), buf_free(&b);
+    cc_ifc_scene_free(&s0), cc_ifc_scene_free(&s1), cc_ifc_scene_free(&s2);
+    free(t);
+    return !same;
+}
+
+/* An opening beside its host takes nothing: at standard the host is the file's box (12
+ * triangles), not the kernel's split of it; the window is still cut (32). */
+static void opening_beside(void) {
+    size_t tn;
+    char *t = slurp("golden/ifc_c/fixtures", "opening_beside.ifc", &tn);
+    cc_ifc_scene s;
+    cc_error err;
+    int rc = read_at(t, tn, CC_IFC_DETAIL_STANDARD, &s, &err);
+    size_t n0 = rc || s.scene.nelements < 2 ? 0 : cc_scene_local_mesh(&s.scene, 0)->ni / 3;
+    size_t n1 = rc || s.scene.nelements < 2 ? 0 : cc_scene_local_mesh(&s.scene, 1)->ni / 3;
+    printf("opening_beside standard: %zu and %zu triangles\n", n0, n1);
+    check_true("standard: an opening beside its host leaves the host as given (12)", n0 == 12);
+    check_true("standard: the window is cut (32)", n1 == 32);
+    cc_ifc_scene_free(&s);
+    free(t);
+}
+
+/* TESS1: CUSTOM with light's numbers is light, byte for byte; out of its bounds it is standard. */
+static void custom_detail(void) {
+    size_t tn;
+    char *t = slurp("golden/ifc/fixtures", "circle_column.ifc", &tn);
+    cc_ifc_read_opts o[4] = {{CC_IFC_DETAIL_LIGHT, 0, 0}, {CC_IFC_DETAIL_CUSTOM, 10.0, 30.0},
+                             {CC_IFC_DETAIL_STANDARD, 0, 0}, {CC_IFC_DETAIL_CUSTOM, 0.0, 18.0}};
+    Buf b[4];
+    for (int k = 0; k < 4; k++) {
+        cc_ifc_scene s;
+        cc_error err;
+        buf_init(&b[k]);
+        int rc = cc_ifc_read_with(t, tn, &o[k], &s, &err, NULL);
+        scene_text_all(&s, rc, &err, &b[k]);
+        cc_ifc_scene_free(&s);
+    }
+    check_true("custom 10 mm, 30 degrees: light's scene", b[0].len == b[1].len && !memcmp(b[0].p, b[1].p, b[0].len));
+    check_true("custom out of bounds (0 mm): standard's scene", b[2].len == b[3].len && !memcmp(b[2].p, b[3].p, b[2].len));
+    cc_ifc_read_opts nan = {CC_IFC_DETAIL_CUSTOM, 0.0 / 0.0, 18.0}, bad = {(cc_ifc_detail)9, 1, 1};
+    cc_ifc_scene s;
+    cc_error err;
+    Buf x;
+    buf_init(&x);
+    int rc = cc_ifc_read_with(t, tn, &nan, &s, &err, NULL);
+    scene_text_all(&s, rc, &err, &x);
+    cc_ifc_scene_free(&s);
+    check_true("custom NaN: standard's scene", x.len == b[2].len && !memcmp(x.p, b[2].p, x.len));
+    buf_clear(&x);
+    rc = cc_ifc_read_with(t, tn, &bad, &s, &err, NULL);
+    scene_text_all(&s, rc, &err, &x);
+    cc_ifc_scene_free(&s);
+    check_true("an unknown detail: standard's scene", x.len == b[2].len && !memcmp(x.p, b[2].p, x.len));
+    buf_free(&x);
+    for (int k = 0; k < 4; k++) buf_free(&b[k]);
+    free(t);
+}
+
+static void details(void) {
+    opening_beside();
+    custom_detail();
+    int write = getenv("CCORE_WRITE_GOLDEN") != NULL;
+    size_t changed = 0, n = 0;
+    for (size_t g = 0; g < sizeof G / sizeof *G; g++, n++) changed += detail_one(G[g].name, G[g].dir, G[g].file, write);
+    for (size_t g = 0; g < sizeof OWN / sizeof *OWN; g++, n++) {
+        char file[128];
+        snprintf(file, sizeof file, "%s.ifc", OWN[g].name);
+        changed += detail_one(OWN[g].name, "golden/ifc_c/fixtures", file, write);
+    }
+    printf("details: %zu of %zu inputs read otherwise at standard (C-own goldens), the others as Rust\n", changed, n);
+}
+
 int main(void) {
     size_t matched = 0;
     printf("%-14s %-9s %8s %9s  %s\n", "input", "result", "elements", "ms", "note");
@@ -494,7 +661,7 @@ int main(void) {
         char *t = slurp(G[g].dir, G[g].file, &tn);
         cc_ifc_scene s, s2;
         cc_error err, err2;
-        int rc = cc_ifc_read(t, tn, &s, &err);
+        int rc = read_exact(t, tn, &s, &err);
         char why[256] = "";
         int ok = compare(G[g].name, &s, rc, &err, why, sizeof why);
         int known = 0;
@@ -502,7 +669,7 @@ int main(void) {
             known |= !strcmp(KNOWN_DIFFERENT[k], G[g].name);
         known &= !cc_boolean_kernel();
         /* Twice: the same text. */
-        int rc2 = cc_ifc_read(t, tn, &s2, &err2);
+        int rc2 = read_exact(t, tn, &s2, &err2);
         Buf a, b;
         buf_init(&a), buf_init(&b);
         if (!rc) cc_ifc_scene_txt(&a, &s);
@@ -550,7 +717,7 @@ int main(void) {
             char *t = slurp(G[g].dir, G[g].file, &tn);
             cc_ifc_scene s;
             cc_error err;
-            int rc = cc_ifc_read(t, tn, &s, &err);
+            int rc = read_exact(t, tn, &s, &err);
             char why[256] = "";
             int ok = compare(G[g].name, &s, rc, &err, why, sizeof why);
             Buf a;
@@ -623,6 +790,7 @@ int main(void) {
     robustness("golden/ifc/fixtures", "mapped_item.ifc", 777);
     robustness("test/fixtures", "curves.ifc", 4242);
     own_goldens();
+    if (cc_boolean_kernel()) details(); /* the C-own goldens were written with the kernel */
     robustness("golden/ifc_c/fixtures", "lshape_fillet.ifc", 99);
     return report("ifc_read");
 }

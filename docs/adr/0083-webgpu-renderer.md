@@ -6,7 +6,8 @@
   and delegated the design; the choices below by Claude on ticket GPU1, to be reviewed by Pierre on
   his own GPU with the performance panel.
 - Reversal cost: low (new files under `web-ui/src/gpu/`, one seam in `glviewport.ts`, a setting
-  that is written only once set; no model format, no golden).
+  that is written only once set; no model format, no golden). Amended 27 Nov 2026 (ticket GPU2): the toggle, WebGPU
+  draws links, `open --app`, the optimisations registry.
 
 ## Context / Problem
 
@@ -68,6 +69,75 @@ the owner's machine: the numbers of `ccore/results/frames.md` are SwiftShader's 
    section box's discard, cut shade and back-edge test, links in the reference colours, WebGL2's
    `polygonOffset` as the pipelines' depth bias. No anti-aliasing in either.
 
+## Amendment (27 Nov 2026, ticket GPU2): the toggle where Pierre measures, and WebGPU draws links
+
+Pierre: "would be nice to have in the ux/ui a toggle for webgpu so we can measure properly!" His case is a
+local folder of 17 IFC files (252,189 elements, 110.5 M triangles) linked into one project; with links loaded
+the page fell back to WebGL2 (ADR 0078 decision 22), so a toggle would have changed nothing there. His
+everyday Chromium (153, Asahi Linux) gives WebGPU no adapter at all ("navigator.gpu gave no adapter"). The
+choices below by Claude on ticket GPU2 under the same delegation; the orchestrator added the app window and
+the rule for "automatic" (points 10 and 12).
+
+7. **The toggle**: a two-state switch "WebGL2 | WebGPU" in the performance panel's header, the adapter and what
+   draws now under it, a progress line while the other renderer gets ready, and when WebGPU was asked and does
+   not draw, why in plain words (no WebGPU, no adapter, a software adapter, the device lost, a feature it does not
+   draw yet, named) and what to do on this platform (Linux Chromium: the three flags of point 10, or `bimble-ccore
+   open --app`). A chip in the status bar ("WebGL2" / "WebGPU", `*` while WebGPU is asked and not drawing)
+   toggles on a click; the palette has "3D renderer: WebGPU" and "3D renderer: WebGL2". All three switch live (no
+   reload) and write the setting `renderer`. The checked device is kept between switches (the probe and the
+   fill-rate test once). **Alternative:** the Settings dialog only (GPU1: three clicks and a dialog in front of
+   the view he measures).
+8. **WebGPU draws the viewport's own models** (`gpu/switch.ts` `GpuModels`, handed over by the seam): the
+   batches, instanced groups, per-element state texels, placements and link proxies glviewport.ts made for
+   WebGL2, so the two renderers draw the same picture by construction and a hide, isolate, colour or move costs
+   the same small writes on both: a model's placement is a 64-byte row of a storage buffer (a move rewrites it;
+   the compute cull turns its planes and eye into the model's frame), the state is the one RGBA8 texel per
+   element (`gl/cull.ts` `packState`) read in the vertex stage by faces and edges (an edge vertex carries its
+   element: 4 bytes a vertex, WebGL2's `edgeEl` taken over), a model all shown in its colour reads no state. A
+   link whose detail is away (released by the budget, or not taken over yet) is drawn as its coarsest proxies,
+   the budget's need/want clock is fed by WebGPU's frames, and the place tool's ghost and markers are drawn by
+   WebGPU too (left by GPU1). GPU1's own lists (`Scene.setLists`) are gone. **Alternative:** WebGPU's own lists
+   and buffers per link (GPU1's way extended: a second copy of every decision, two of every buffer).
+9. **One copy of each model on the GPU**: WebGPU takes a model's buffers over from WebGL2's (`getBufferSubData`
+   once, then WebGL2's buffer emptied: `bufferData(0)`; the links' and the open model's proxies' WebGL2 buffers
+   emptied too, filled again from the page's copies), the open model at once (the WebGL2 picture stays until
+   then), the links within 24 ms a frame (drawn as their proxies until theirs is in, with a progress line). Back
+   to WebGL2, each model is read back from WebGPU (`mapAsync` on a copy) into WebGL2's buffers while WebGPU still
+   draws; then WebGL2 draws. A device lost: the open model uploaded again from the page, the links released (the
+   budget asks them back). The budget counts the same bytes (a model's bytes are the same on either renderer).
+   Picks on a link whose arrays were dropped (SIZE2) read its triangles back from WebGPU's buffers: asynchronous,
+   so the first ray over a new element starts the read and misses it, the next finds it (WebGL2's read is
+   synchronous). **Alternative:** upload to WebGPU directly from the link's fetch (no WebGL2 upload, no read
+   back): it needs a seam inside `loadSlot`/`uploadLists`, which ticket SIZE3 is rewriting; left for after it.
+   Asking the core for picks (one path for both): asynchronous too, and every synchronous caller would change.
+10. **`bimble-ccore open --app`** (and the setting "Open Bimble in an app window", `open_app`, a lab field written
+   only once set): a Chromium-family browser in an app window with its own profile (`<config dir>/browser`) and,
+   on Linux, `--use-angle=vulkan --enable-features=Vulkan --enable-unsafe-webgpu`: the three flags that give
+   WebGPU the GPU on Chromium 153 / Asahi (checked with a non-headless browser process on Ozone's headless display,
+   which without flags gives "ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)" and no adapter, as Pierre's browser did;
+   `--enable-unsafe-webgpu` alone gives a SwiftShader fallback adapter). None found: the usual opener.
+   **Alternative:** tell him the flags only (a command line to remember, every time).
+11. **Compare renderers** (the panel, beside Record 10 s): the same camera path (an orbit of the current view, 240
+   frames of 0.0125 rad, then 2.5 s still and 10 whole still frames) on WebGL2 then WebGPU, switched live, each
+   frame waited for; the copied report holds both blocks side by side.
+12. **"Automatic"** follows the adapter check, never flags the user did not set; on the numbers below it stays
+   WebGL2 for now (Evidence (GPU2)).
+13. **Optimisations in the panel** (the owner's rule of 27 Nov: every optimisation is a user setting with a good default
+   and an off value, shown in the panel): a section of the performance panel lists the rows of a registry
+   (`web-ui/src/optimisations.ts`: key, FR/EN label, toggle / choice / number, default, off value; other tickets add
+   rows with `registerOptimisation` in their own modules), seeded with `renderer`, `moving_fps`, `moving_proxies`
+   (simplified far parts), `link_gpu_mb` (the links' GPU budget, SIZE3) and `gpu_cull`; the copied report lists each value.
+
+What still falls back to WebGL2 (the panel names it): nothing that the lab draws today; WebGL2-only remain the
+occlusion queries (off by default, a bench hook), the selection's overpaint over the kept picture, the
+large-mesh box preview before the lists.
+
+GPU culling of the merged lists per element (point 4's alternative) is not built: it needs an index compaction
+per frame (a compute pass writing each kept element's index range into an indirect draw list per batch, WebGPU
+has no multi-draw-indirect: a draw per kept batch, or the elements' indices copied into one compacted index
+buffer per frame, 4 bytes an index moved). The CPU cut per batch costs a binary search a batch; on the real GPU
+the frames below show where the time goes before building it.
+
 ## Evidence
 
 `ccore/test/lab_webgpu.mjs`, this machine (aarch64, Chromium 153 headless). Chromium as the lab tests
@@ -107,11 +177,75 @@ Bundle (`VITE_CCORE=1 vite build`, bytes, gzip -9 in brackets), before → after
 `glviewport` 87,842 (31,467) → 90,896 (32,703): the seam and `gpu/switch.ts`; new, loaded only when
 WebGPU is asked: `render` 30,404 (11,349) and `device` 2,873 (1,548).
 
+### Evidence (ticket GPU2)
+
+`ccore/test/lab_webgpu_links.mjs`, six synthetic links (`bench/links_synth.mjs`: 160 unique closed meshes of about
+600 triangles each), five in a row and one 1.5 km behind, link_0 red, link_1 purple; WebGPU's picture against
+WebGL2's at three cameras, the renderer switched live between them, per state the pixels over 24 levels (of
+1280 x 800; the tolerance as above, at most 1 %):
+
+| state (3 cameras) | SwiftShader (`LAB_GPU=software`, `?gpuSoftware=1`) | the M1 Pro (`LAB_GPU=vulkan`) |
+|---|---|---|
+| plain (the far link from its proxies) | 0.27 / 0.37 / 0.35 % | 0.004 / 0.012 / 0.013 % |
+| a link hidden | 0.23 / 0.32 / 0.29 % | 0.003 / 0.011 / 0.011 % |
+| an element of a link hidden | 0.29 / 0.40 / 0.34 % | 0.004 / 0.013 / 0.013 % |
+| a class isolated | 0.032 / 0.035 / 0.023 % | 0 / 0.002 / 0.000 % (1 px) |
+| a link moved, another recoloured | 0.26 / 0.39 / 0.35 % | 0.003 / 0.011 / 0.014 % |
+| the budget at 0 (the far link released: its coarsest proxies) | 0.27 / 0.37 / 0.35 % | 0.004 / 0.012 / 0.013 % |
+| a section box around a linked element | 0.024 / 0.035 / 0.007 % | 0 / 0 / 0 % |
+
+The differing pixels are edge pixels (the largest difference 195-207 levels: a 1-px line drawn by one API and
+not the other, as GPU1 found). Under WebGPU every loaded model is WebGPU's and WebGL2 keeps 8 kB (its state
+texture): 12.45 MB on WebGPU against 12.72 MB on WebGL2 for the same scene. Ten live switches each way: each
+renderer's bytes the same every time (12.72 and 12.45 MB, on both rasterisers); a switch (the toggle to the end of
+the other renderer's first frame, the six links taken over or given back included) 135-221 ms on the M1 Pro,
+165-439 ms on SwiftShader. No draw list rebuilt and
+no whole `/mesh` asked by a switch. A pick on a link under WebGPU finds the element WebGL2 picked once its
+triangles are read back (the first ray misses it). `lab_webgpu.mjs` (GPU1's 52 checks, GPU culling included) and
+`lab_perf.mjs` (the switch, the chip, the palette, Compare renderers, each click timed by `input_time.mjs`:
+SwiftShader page 25-139 ms, presented 50-308 ms; the first switch to WebGPU 584-659 ms with the device check,
+the next ones 90-162 ms) pass.
+
+**On the machine's GPU** (27 Nov 2026, `LAB_GPU=vulkan`: ANGLE on Vulkan for WebGL2 and Dawn's Vulkan for WebGPU,
+both on Mesa's driver for the Apple M1 Pro; `ccore/tools/frames.mjs --links N --renderer webgl2|webgpu`, native host
+built by clang, 1280 x 800, the frame finished by a 1x1 `readPixels` (WebGL2) or `onSubmittedWorkDone` (WebGPU); the
+two waits alone cost 0.7 ms and 0.1 ms here, so they do not explain the gap). The last of three batteries, after the
+two fixes they found (the bench timed a WebGL2 read inside every WebGPU frame; the placement rows read from a storage
+buffer by every vertex), 1-minute load 5.7-7.2 (other tickets' builds and browsers on the machine):
+
+| synthetic links | WebGL2 6 | WebGPU 6 | WebGL2 17 | WebGPU 17 |
+|---|---|---|---|---|
+| open → first picture (the links' proxies) | 384 ms | 257 ms | 244 ms | 353 ms |
+| open → complete picture | 515 ms | 461 ms | 599 ms | 759 ms |
+| still frame (558,144 / 1,581,408 triangles; 12 / 34 draws) | 2.8 ms | 3.5 ms | 4.3 ms | 5.3 ms |
+| moving frame median (p95) | 1.7 (3.6) ms | 3.8 (6.0) ms | 2.3 (4.2) ms | 4.2 (7.9) ms |
+| close still frame | 1.6 ms | 4.1 ms | 3.1 ms | 5.5 ms |
+| GPU MB (the scene; half hidden, budget ½) | 12.1 (6.2) | 12.1 (6.2) | 34.4 (16.7) | 34.4 (16.7) |
+
+The earlier batteries (load 4.5-11) gave the same order: WebGPU's still and moving frames 1-4 ms longer on these
+scenes, its first picture and complete picture within ±40 % (the take-over of WebGL2's buffers is in WebGPU's
+"complete"). `ccore/results/frames.md` holds the rows. On the local folder of 17 IFC files (110.5 M triangles) WebGL2
+was measured (its still frame of 67.9 M triangles and 5,553 draws about a tenth of a second, as SIZE2 found); WebGPU
+was not: a second page of that project, and the first switch before the transfer was streamed, took the machine
+under its 2.5 GB floor (the watchdog stopped them), and the streamed version's run was stopped when the orchestrator
+asked every run on that folder to use a scratch cache directory (none of these runs wrote to the folder: no file in
+it changed during them).
+
+**Decision for "automatic" (point 12): it stays WebGL2** (`AUTO_WEBGPU = false` in `gpu/switch.ts`). On the only GPU
+measured, WebGPU draws the same pictures but no frame faster, and opens a project of links later (it takes WebGL2's
+buffers over after their upload); no measurement shows a scene where it wins. The mechanism the orchestrator asked
+for is in place: with `AUTO_WEBGPU` true, automatic takes WebGPU only on a hardware adapter that passes the check
+(never a fallback or software one, never flags the user did not set: an everyday Linux Chromium has no adapter, so
+WebGL2). Revisit with Pierre's own Compare renderers report from his folder, and once WebGPU uploads a link's mesh
+directly (no WebGL2 upload and read back).
+
 ## What is left
 
-- The place tool's ghost and markers are drawn by WebGL2 (the frame switches canvas while they show).
-- The WebGL2 path's buffers stay allocated while WebGPU draws (the seam does not touch
-  `glviewport.ts`'s uploads): GPU memory is the sum while WebGPU is on.
+- (GPU2: the ghost and markers are WebGPU's too, and a model's buffers live on one renderer at a time.)
+- GPU2: WebGPU receives a link's mesh through WebGL2's upload and a read back (a seam inside `loadSlot` and
+  `uploadLists`, after ticket SIZE3, would upload it directly); a pick on a dropped link's element under WebGPU misses
+  the first ray (an asynchronous read back); WebGPU's frames on small scenes are 1-3 ms longer than WebGL2's on the M1
+  Pro (not profiled to the end: the page's own work is under 1 ms of it); the local folder not measured on WebGPU.
 - Occlusion queries (off by default on WebGL2), the large-mesh box preview before the lists and the
   selection overpaint are WebGL2's only.
 - Per-element GPU culling of the merged lists, a depth pyramid (Rust #10's full form), and the frame

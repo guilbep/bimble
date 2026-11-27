@@ -117,6 +117,19 @@ const close = () => { currentDialog.value = null; };
         <label v-if="s?.applies.moving_proxies" class="row"><span>{{ tx('settings.proxies') }}</span>
           <input type="checkbox" :checked="v.moving_proxies" data-bb="settings-moving-proxies" data-setting="moving_proxies" @change="set({ moving_proxies: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s?.applies.moving_proxies" class="note" data-bb="settings-proxies-note">{{ tx('settings.proxiesNote') }}</p>
+        <!-- TESS1 (ADR 0085): the reader's detail for the links' conversions -->
+        <label v-if="s?.applies.link_detail" class="row"><span>{{ tx('settings.linkDetail') }}</span>
+          <select class="inp" :value="v.link_detail ?? 'standard'" data-bb="settings-link-detail" data-setting="link_detail" @change="set({ link_detail: ($event.target as HTMLSelectElement).value as 'exact' | 'standard' | 'light' | 'custom' })">
+            <option value="exact">{{ tx('settings.linkDetail.exact') }}</option>
+            <option value="standard">{{ tx('settings.linkDetail.standard') }}</option>
+            <option value="light">{{ tx('settings.linkDetail.light') }}</option>
+            <option value="custom">{{ tx('settings.linkDetail.custom') }}</option>
+          </select></label>
+        <label v-if="s?.applies.link_chord_mm && v.link_detail === 'custom'" class="row"><span>{{ tx('settings.linkChord') }}</span>
+          <input class="inp" type="number" min="0.01" max="1000" step="0.5" :value="v.link_chord_mm ?? 2" data-bb="settings-link-chord" data-setting="link_chord_mm" @change="set({ link_chord_mm: Number(($event.target as HTMLInputElement).value) })"></label>
+        <label v-if="s?.applies.link_max_deg && v.link_detail === 'custom'" class="row"><span>{{ tx('settings.linkMaxDeg') }}</span>
+          <input class="inp" type="number" min="1" max="90" step="1" :value="v.link_max_deg ?? 18" data-bb="settings-link-max-deg" data-setting="link_max_deg" @change="set({ link_max_deg: Number(($event.target as HTMLInputElement).value) })"></label>
+        <p v-if="s?.applies.link_detail" class="note" data-bb="settings-link-detail-note">{{ tx('settings.linkDetailNote') }}</p>
         <!-- SIZE3 (ADR 0078 amendment 5): the links' GPU budget, MB -->
         <label v-if="s?.applies.link_gpu_mb" class="row"><span>{{ tx('settings.linkGpu') }}</span>
           <select class="inp" :value="v.link_gpu_mb ?? 768" data-bb="settings-link-gpu" data-setting="link_gpu_mb" @change="set({ link_gpu_mb: Number(($event.target as HTMLSelectElement).value) })">
@@ -129,6 +142,10 @@ const close = () => { currentDialog.value = null; };
             <option v-for="r in ['auto', 'webgl2', 'webgpu']" :key="r" :value="r">{{ tx(`settings.renderer.${r}` as K) }}</option>
           </select></label>
         <p v-if="s?.applies.renderer" class="note" data-bb="settings-renderer-note">{{ tx('settings.rendererNote') }}</p>
+        <!-- GPU2: `bimble-ccore open` in an app window of Chromium with the flags that give WebGPU (the native host's) -->
+        <label v-if="s?.applies.open_app" class="row"><span>{{ tx('settings.openApp') }}</span>
+          <input type="checkbox" :checked="v.open_app ?? false" data-bb="settings-open-app" data-setting="open_app" @change="set({ open_app: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.open_app" class="note" data-bb="settings-open-app-note">{{ tx('settings.openAppNote') }}</p>
         <label v-if="s?.applies.gpu_cull" class="row"><span>{{ tx('settings.gpuCullOn') }}</span>
           <input type="checkbox" :checked="v.gpu_cull" data-bb="settings-gpu-cull-on" data-setting="gpu_cull" @change="set({ gpu_cull: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s && !s.applies.gpu_cull" class="note" data-bb="settings-gpu-cull">{{ tx('settings.gpuCull') }}</p>

@@ -45,6 +45,7 @@ export const SETTINGS_KEY = "bimble.settings";
 // ---- FS1: one code path for pickers and the unsaved question (files.ts) ----
 import { pickFile } from "./files";
 // ---- end FS1 ----
+import { linkInAddress } from "./openurl"; // URL1
 
 interface Exports {
   memory: WebAssembly.Memory;
@@ -402,12 +403,17 @@ function fileAction(name: string): boolean {
 /** Loads the module, opens the model and returns a `Wasm` for bimble.ts. */
 export async function ccoreClient(params: URLSearchParams, steps: OpenSteps = {}): Promise<CcoreClient> {
   const base = document.baseURI;
-  const wasmUrl = new URL(params.get("ccore_wasm") ?? "ccore/ccore.wasm", base).href;
-  const modelUrl = new URL(params.get("model") ?? "ccore/frame.json", base).href;
+  // ---- URL1 (ADR 0086): in a built page, ?ccore_wasm= and ?model= name a file of this site only (a
+  // link fetches no other address without a click: another site's model opens with #open=, which asks).
+  // With a link (#open= / ?open=) the start opens no model: the link's model is the first (openurl.ts). ----
+  const here = (p: string | null) => { if (p === null || !import.meta.env.PROD) return p; try { if (new URL(p, base).origin === location.origin) return p; } catch { /* refused below */ } console.warn(`ccore: ${p}: not on this site, ignored (open another site's model with #open=<url>)`); return null; };
+  const wasmUrl = new URL(here(params.get("ccore_wasm")) ?? "ccore/ccore.wasm", base).href;
+  const modelUrl = linkInAddress() ? null : new URL(here(params.get("model")) ?? "ccore/frame.json", base).href;
+  // ---- end URL1 ----
   steps.step?.("read");
-  const [wr, mr] = await Promise.all([fetch(wasmUrl), fetch(modelUrl)]);
+  const [wr, mr] = await Promise.all([fetch(wasmUrl), modelUrl === null ? null : fetch(modelUrl)]);
   if (!wr.ok) throw new Error(`ccore: ${wasmUrl}: HTTP ${wr.status} (run npm run ccore:wasm)`);
-  if (!mr.ok) throw new Error(`ccore: ${modelUrl}: HTTP ${mr.status}`);
+  if (mr && !mr.ok) throw new Error(`ccore: ${modelUrl}: HTTP ${mr.status}`);
   const wasmBuf = await wr.arrayBuffer();
   const { instance } = await WebAssembly.instantiate(wasmBuf, {});
   const X = instance.exports as unknown as Exports;
@@ -418,14 +424,16 @@ export async function ccoreClient(params: URLSearchParams, steps: OpenSteps = {}
   X.guid_entropy(sp, sn);
   X.cc_free(sp);
 
-  const text = new Uint8Array(await mr.arrayBuffer());
-  const name = decodeURIComponent(new URL(modelUrl).pathname.split("/").pop() || "model.bimble");
-  await yieldTask(); // PERF2: the instantiation and the parse in two tasks
-  steps.step?.("parse");
-  const o = run(X.host_open_text.bind(X), [enc.encode(name), text]);
-  if (o.status !== 200) throw new Error(`ccore: ${name}: ${dec.decode(o.bytes)}`);
+  const text = mr ? new Uint8Array(await mr.arrayBuffer()) : new Uint8Array(0);
+  const name = modelUrl ? decodeURIComponent(new URL(modelUrl).pathname.split("/").pop() || "model.bimble") : "";
+  if (mr && modelUrl) { // URL1: none with a link
+    await yieldTask(); // PERF2: the instantiation and the parse in two tasks
+    steps.step?.("parse");
+    const o = run(X.host_open_text.bind(X), [enc.encode(name), text]);
+    if (o.status !== 200) throw new Error(`ccore: ${name}: ${dec.decode(o.bytes)}`);
+  }
   window.__bbCcore = { wasmBytes: wasmBuf.byteLength, readyMs, openMs: performance.now(), model: name, modelBytes: text.length, memBytes: () => X.memory.buffer.byteLength }; // GPU1: memBytes
-  await warm(X, steps); // PERF2: the scene and the mesh, each in its own task, before the page asks
+  if (mr) await warm(X, steps); // PERF2: the scene and the mesh, each in its own task, before the page asks
 
   let listener: ((json: string) => void) | null = null;
   let last = "";
