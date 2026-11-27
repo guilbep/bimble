@@ -186,3 +186,49 @@ Synthetic set (17 links, 272 MB of IFC): the caches 55.4 → 20.2 MB, 20.3 % →
 gzip blocks shrink them). A local folder of 17 IFC files (4.18 GB): its caches 1.716 GB (`ELEM` 231 MB, `HLOD` 619 MB,
 `PROP` 865 MB) → 281 MB, 6.7 % of the IFC (`ELEM` 231 MB, `HLOD` 14.8 MB, `PRPZ` 34.5 MB); the 17 converted one after
 the other in 50 s (the machine loaded by two other measuring agents), loaded together from their caches in 0.93 s.
+
+## Amendment (27 Nov 2026, ticket SIZE3): one copy in the host, a refused link retried when idle
+
+After SIZE2 the host still held, for the local folder's 17 links from their caches, each cache's geometry bytes and
+every decoded mesh: 1.15 GB, as much as Rust's whole app with its renderer. Choices by Claude on ticket SIZE3 under the
+same delegation.
+
+19. **A link's cache is read in place** (`cc_viewfile_read_mapped`; the native carrier maps it, `map_file`): the strings
+    point into the mapping, each mesh is decoded once into a scratch to check it (the same checks as before; the mapped
+    reader and the reader give the same verdict on every prefix and on 3,000 damaged files) and only its counts, its
+    place in the file and its box are kept. The mapping goes with the link. A gzipped cache, a carrier without
+    `map_file` (the wasm module) or a cache whose size is a multiple of the page are read as before.
+20. **`GET /mesh?link=k` is the cache's own bytes**: version 4's rows, shapes and placements from the counts, each block
+    the file's BMG1 bytes (`cc_scene_bmsh4_blocks`), byte for byte what encoding the decoded scene gives (checked on a
+    heavy view file). Copied once into the answer, freed after it is sent (SIZE2); a scatter-gather send from the mapping
+    is left.
+21. **A link's meshes are decoded only when a call needs its geometry** (`cc_link_scene`, `cc_link_raw_scene`: a
+    measure whose ray passes near the link's box, Box to selection, a plan or a section through the link, PDF, the
+    element's volume), into an arena of the link's: the only way to a link's geometry. The calls that need its rows
+    only use `cc_link_rows` (the Links panel, `visibility_sets`, `link_draw`, the LNKS heads, ids, texts), where a link
+    not decoded shows EMPTY meshes (counts 0, a zeroed shapes array of its own): its counts live in the view file only
+    (`cc_link_triangles`, the served blocks), so geometry code handed the wrong scene sees nothing, never a NULL array;
+    `cc_scene_world_mesh` and the BMSH writers refuse a mesh whose counts promise arrays it lacks. (A first version kept
+    the counts with NULL arrays in the rows: the element query's volume and GET /mesh's version 1 trailer read them and
+    the host crashed twice in the owner's dev build; `link_lazy_test` now calls every such entry point on a cold link
+    and after a drop, also under ASan.) They are dropped again past a budget of 256 MB of
+    decoded meshes across links (`link_mesh_budget`, `BIMBLE_LINK_MESH_BUDGET_MB`), least recently used first, never one
+    used in the last 10 s (a measure over every link keeps them while it runs; `BIMBLE_LINK_KEEP_MS` for the tests), at
+    the carrier's tick, and the freed memory given back to the system (platform `trim`: glibc's `malloc_trim`).
+    Decoding and dropping are logged with their size and time. **Alternative:** decode per element on demand (every
+    consumer walks the scene's arrays directly: a rewrite of measure, plans, sections and paper).
+22. **A link refused for memory is retried when the host is idle too** (`cc_links_wants_tick`): the carrier looked at its
+    links only while one was queued or converting, so a refused last link stayed refused (decision 16 did not hold).
+    `BIMBLE_MEM_AVAILABLE=@<file>` reads the free memory from a file at each call (`test/link_retry_test.mjs`).
+23. Not done: a link ready before its proxies exist (ticket SIZE3 E: geometry and names first, then the proxies appended
+    by the same worker, a "complete" marker in the cache, the Links panel's converting → ready → indexing); the
+    conversion still builds the proxies before "ready" (17.4 of 50.5 s on the local folder).
+
+Evidence (`link_lazy_test.mjs`, a scratch script reading `/proc/<host>/status`, `frames.mjs`'s folder mode). A local
+folder of 17 IFC files, from caches made by the same build, the SIZE2 host and this one the same hour: host at rest
+after the 17 links are ready 1,145 MB RSS, 1,141 MB anonymous → 348 MB RSS, 121 MB anonymous (the rest the caches'
+file pages, which the kernel may drop); after the page's requests (the lazy mesh, each link's mesh and proxies) 1,178 →
+375 MB RSS (1,173 → 148 MB anonymous); in the browser run, after the open, 319 MB RSS, 92 MB anonymous. The slowest
+link's mesh served in 890 → 137 ms. A measure over every link decodes all 17 (1.1 GB, 0.86 s; anonymous 1.72 GB at its
+peak) and they are dropped down to the budget 10 s later (392 MB anonymous); a pointer whose ray meets no link's box
+decodes none (2 ms). The synthetic set (17 links, converted by the same host): 102 → 66 MB anonymous at rest.

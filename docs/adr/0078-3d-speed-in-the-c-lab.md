@@ -348,6 +348,62 @@ links' detail within the default budget); still frame 104 ms (67.9 M triangles d
 peaked at 2.0 GB during the open (every link's mesh read back before the first upload: decision 24 drops them after);
 uploading each link as it arrives would bound that peak.
 
+## Amendment 5 (27 Nov 2026, ticket SIZE3): copies shared as Rust, a folder opened within bounds, the GPU budget a setting
+
+The Rust and C comparison on a real folder (`docs/research/2026-11-27-rust-vs-c-on-a-real-folder.md`) left four gaps for
+the page: an imported `.bimble` model stored 2.0 M triangles where Rust stores 0.30 M, the tab's JS heap peaked at 2.0 GB
+while a folder of 17 links opened, the GPU held 1.62 GB of links (the budget never bit), the first detailed frame came
+after 10.5 s. Choices by Claude on ticket SIZE3 under the same delegation.
+
+27. **A model's copies are shared as Rust's `Scene::from_model` shares them** (`ccore/src/scene.c` `shared_shapes`,
+   `scene.rs:266-312`): elements whose mesh generators hold one positions array (the binary `.bimble`'s table of mesh
+   arrays, ADR 0042 decision 4: one array per IfcMappedItem's shape), uncut, are one shape meshed once (the first one's
+   `element_mesh`: crease edges, no edge normals) and placed by their placement and storey; the scene's origin takes
+   their placed boxes' corners (`Body::Instance`). C meshed each element alone and relied on `share_copies` alone,
+   whose fit finds turned, scaled and stretched copies but not those its bucket cap (16 shapes of one vertex, triangle
+   and edge count) leaves out. Per kind of copy (`test/scene_dedup_test.c`), dedup shares translated, turned (90° about
+   z, 30° about an oblique axis), scaled, stretched and within-0.1-mm copies, not mirrored ones (faces kept outward),
+   faces in another order, nor a corner 0.2 mm off: as `dedup.rs`, whose test is ported. Every Rust golden unchanged.
+   **Alternative:** raise or drop the bucket cap (hostile buckets of thousands of distinct meshes: quadratic fits).
+28. **A folder opens with bounded page memory, its detail on demand.** Each link's mesh (BMSH version 4) is read in a
+   Web Worker (`gl/bmsh4.worker.ts`, the bytes transferred both ways), one link at a time, the smallest first. A link
+   whose version 3 bytes fit what is left of 128 MB (`OPEN_KEEP_BYTES`) is decoded whole and uploaded with the open;
+   any other is read as its rows and its elements' boxes only (`bmsh4Rows`: one block decoded at a time into a scratch,
+   the boxes in `upload`'s arithmetic, `bake`'s rows), never its whole arrays: its rows, boxes and batches stand without
+   them (`Bmsh.dropped`, `preBox`). Its detail is asked again only when a frame wants it (its batches in view and not
+   replaced by its proxies), one link at a time, the largest on screen first (`wantScore`), then uploaded and dropped
+   from the page (amendment 4); until then its proxies stand for it, by their normal cut when the frame does not want its
+   detail (`wantedLast`), else by its coarsest. **Alternative:** a pipeline of 2 (twice the transient memory for little:
+   the fetch is not the slow part); decode on the page's thread in slices (25 ms slices: over a frame).
+29. **The links' GPU budget is a setting in MB** (`link_gpu_mb`, 64 to 65536, 768 by default; `ccore/session/settings.c`,
+   not Rust's: written to the file only once set, as `renderer`), in Settings and in the performance panel and report
+   ("linked files on the GPU: used of budget"). Before: `memory_share` of half of `navigator.deviceMemory` (Chromium caps
+   it at 8 GiB: 3.2 GB here); 1.62 GB of links never reached it. **Alternative:** keep the automatic share (it cannot know
+   the GPU's own memory; the owner asked for a number he can see).
+
+### Evidence (ticket SIZE3)
+
+A local imported model (`.bimble`, 1,749 elements, 2.2 M triangles; `scene.c` before and after, one process):
+elements placed as copies 1,081 → 1,472 (Rust: 1,472), stored triangles 1,674,526 → 302,909 (Rust: 304,381), BMSH
+version 3 66.8 → 12.4 MB, version 4 17.4 → 2.7 MB, its scene built in 1,067 → 170 ms (Rust reads and meshes it in
+180-220 ms).
+
+`ccore/tools/frames.mjs --links 17` (the synthetic set), native host, `LAB_GPU=vulkan` (ANGLE, Mesa, Apple M1 Pro), load
+8.7: first picture (proxies) 475 ms, the links in view detailed at 1,074 ms, complete 1,335 ms (SIZE2: 359 → 869 ms: the
+detail now follows the frames' wants), the open's JS heap and array buffers at most 57.5 MB (polled every 250 ms), every
+decode in the worker, GPU 34.4 MB, still 6.4 ms, moving 4.8 ms (SIZE2: 6.6 / 4.7). `lab_links_3d`: an open with a budget
+of 0 decodes no link whole and gives the same picture as an open keeping them all (0 pixels differ by more than 40 levels), once the
+links in view are back.
+
+A local folder of 17 IFC files (4.18 GB, 252,189 elements, 22.5 M stored triangles), from its caches, the same tool's
+folder mode, `LAB_GPU=vulkan`, load 2.6, against SIZE2's run of the day before: first picture 0.76 → 0.88 s (proxies),
+the links in view detailed 10.5 → 5.0 s (14 of 17 links' detail on the GPU, the other three out of view or far), GPU
+1.62 GB → 0.94 GB (the links' detail 0.95 GB against a budget of 0.77 GB: the links on screen are kept past it), still
+frame 104 → 113 ms (67.9 M triangles), moving 77 → 80 ms, JS heap and array buffers after the open 59 + 76 → 62 + 85 MB.
+Their peak: 2.0 GB → 0.59, 0.93 and 1.33 GB in three runs: the open itself stays within 128 MB of decoded arrays plus
+the rows, but a wanted large link's detail is still decoded and uploaded whole (one link of 420 MB of arrays: its
+version 3 bytes, its index lists and its vertex tables at once), and the collector frees the one before late.
+
 ## What is left
 
 Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core), GPU occlusion
@@ -371,8 +427,10 @@ Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core)
   ported (the queries stand for #5; #6 needs a depth read-back pass; #10 needs compute shaders).
 - **Proxies of linked models**: done by amendment 3 (baked in each link's cache).
 - **For 100-200 million triangles** (amendment 3's numbers): a mesh per link, fetched and dropped from the page, is
-  done (amendment 4). Left: every link's mesh is still fetched at open (one after the other) and uploaded before the
-  budget releases some; tiles streamed by view (the link's HLOD leaves as the unit: the cache already orders them) would
+  done (amendment 4); the open bounded and the detail on demand (amendment 5). Left: every link's mesh is still fetched
+  once at open for its rows and boxes (a rows-only answer from the host would spare 227 MB of transfer on the local
+  folder); a large link's detail is uploaded whole (slices of its blocks into `bufferSubData` would bound the page's
+  peak to a block); tiles streamed by view (the link's HLOD leaves as the unit: the cache already orders them) would
   fetch only what the view needs. Proxies of a shared shape instanced, levels coarser than a cell's 4,096 triangles (a
   link at 50 px should cost a few hundred), 16-bit positions per cell: not built. Quantised vertices (16-bit positions in each leaf's box,
   8-bit normals) would halve the GPU bytes of positions; the state texel per element is already 4 bytes.
