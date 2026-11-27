@@ -861,6 +861,8 @@ int cc_links_busy(const cc_session *s) {
 
 int cc_links_wants_tick(const cc_session *s) {
     if (cc_links_busy(s)) return 1;
+    for (size_t i = 0; i < s->nlinks; i++) /* SIZE3 (F): a link refused for memory, retried once by itself */
+        if (s->links[i].state == CC_LS_REFUSED && !s->links[i].auto_retried && s->pf->mem_available) return 1;
     uint64_t total = 0; /* SIZE3: decoded meshes past the budget, dropped after CC_LINK_KEEP_MS */
     for (size_t i = 0; i < s->nlinks; i++) total += s->links[i].resident ? s->links[i].mbytes : 0;
     return total > s->link_mesh_budget;

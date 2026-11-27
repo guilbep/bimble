@@ -193,10 +193,21 @@ static int np_make_dir(void *ctx, const char *path) {
 
 /* ---- LINKF (platform.h) ---- */
 /* MemAvailable of /proc/meminfo (Linux); elsewhere unknown (0). BIMBLE_MEM_AVAILABLE (bytes)
- * overrides it: the tests refuse a file without needing a small machine. */
+ * overrides it: the tests refuse a file without needing a small machine. SIZE3: "@<file>": the bytes
+ * read from that file at each call (a test frees the memory while the host runs). */
 static uint64_t np_mem_available(void *ctx) {
     (void)ctx;
     const char *e = getenv("BIMBLE_MEM_AVAILABLE");
+    if (e && *e == '@') {
+        FILE *f = fopen(e + 1, "r");
+        char t[32] = "";
+        if (f) {
+            size_t n = fread(t, 1, sizeof t - 1, f);
+            t[n] = 0;
+            fclose(f);
+        }
+        return strtoull(t, NULL, 10);
+    }
     if (e && *e) return strtoull(e, NULL, 10);
     FILE *f = fopen("/proc/meminfo", "r");
     if (!f) return 0;
