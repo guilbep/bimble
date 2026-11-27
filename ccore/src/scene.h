@@ -15,9 +15,10 @@
  *
  * Generators: all of them (rect_column, pad_footing, rect_beam, wall, slab, extruded_polygon with
  * voids, mesh). Profiles are triangulated by earcut.c, a faithful port of the earcutr crate. An
- * element Rust cannot mesh is left out with Rust's warning text in `warnings`. Mesh generators are
- * always own meshes here: Rust shares one only when several elements hold the same Arc, which the
- * JSON text form never gives (each element parses its own positions); share_copies still applies.
+ * element Rust cannot mesh is left out with Rust's warning text in `warnings`. Mesh generators
+ * holding the same positions array (several uncut elements: the binary .bimble's table, ADR 0042;
+ * the JSON text form never gives it) are one shape meshed once and placed, as Rust shares one Arc
+ * (ticket SIZE3); share_copies then applies to the own meshes.
  * Openings are not in the C model. All memory lives in the scene's arena. No libm: sqrt is exact
  * in software, and the 20 degree crease cosine is glibc's cosf value (ticket 13 must recheck it
  * on wasm). */

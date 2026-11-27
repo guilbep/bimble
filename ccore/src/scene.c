@@ -1177,18 +1177,99 @@ static int fail(cc_error *err, const char *a, const char *b, const char *c) {
 /* The scene's arena keeps only the scene. The per-element working memory (local mesh, weld and
  * edge tables) lives in `scratch`, reset per element, and the world triangles in `wa`, until the
  * meshes are built: before, both stayed in the scene's arena, ~10 KB per element (T16). */
+/* scene.rs from_model `shared_key`: a mesh generator of an uncut element. Elements whose mesh
+ * generators hold the same positions array (the binary .bimble's table of mesh arrays, ADR 0042
+ * decision 4: one array per IfcMappedItem's shape) are copies of one shape: meshed once (the
+ * first one's element_mesh: mesh_from_tris and its crease edges, no edge normals) and placed by
+ * their placement and storey (Transform), as the IFC reader places its maps (ADR 0034). Rust
+ * keys on the positions alone (`Arc::as_ptr(positions)`), so does this. A reference plane has
+ * no mesh here (WAVE1B): never a key. */
+static const void *shared_key(const cc_element *e) {
+    if (e->cls == CC_IFC_VIRTUAL_ELEMENT || e->generator.kind != CC_GEN_MESH || e->nopenings) return NULL;
+    return (const void *)e->generator.u.mesh.positions;
+}
+
+/* The shared shapes of from_model: inst[i] = the shape element i places (an index into
+ * s->shapes), or -1; tf[i] its Transform (columns x, y, z, t; f64, world mm). Shapes that do
+ * not mesh are left out: their elements are meshed one by one and warn as before. */
+static int shared_shapes(cc_scene *s, const cc_model *m, Arena *scratch, Arena *wa, int32_t *inst, double (*tf)[4][3]) {
+    size_t n = m->nelements, nk = 0;
+    const void **keys = arena_alloc(wa, (n + 1) * sizeof *keys, 8);
+    size_t *first = arena_alloc(wa, (n + 1) * sizeof *first, 8), *count = arena_alloc(wa, (n + 1) * sizeof *count, 8);
+    int32_t *of = arena_alloc(wa, (n + 1) * sizeof *of, 4), *shape = arena_alloc(wa, (n + 1) * sizeof *shape, 4);
+    Tab tab;
+    if (!keys || !first || !count || !of || !shape || tab_init(&tab, wa, n)) return -1;
+    for (size_t i = 0; i < n; i++) {
+        inst[i] = of[i] = -1;
+        const void *k = shared_key(&m->elements[i]);
+        if (!k) continue;
+        keys[nk] = k;
+        int32_t at = tab_find(&tab, &k, sizeof k, keys, sizeof *keys, (int32_t)nk);
+        if ((size_t)at == nk) first[nk] = i, count[nk] = 0, nk++;
+        count[at]++;
+        of[i] = at;
+    }
+    size_t nshared = 0;
+    for (size_t k = 0; k < nk; k++) nshared += count[k] > 1;
+    if (!nshared) return 0;
+    s->shapes = arena_alloc(&s->arena, (nshared + 1) * sizeof *s->shapes, 8);
+    if (!s->shapes) return -1;
+    for (size_t k = 0; k < nk; k++) {
+        shape[k] = -1;
+        if (count[k] < 2) continue;
+        cc_mesh l;
+        memset(&l, 0, sizeof l);
+        Buf why;
+        buf_init(&why);
+        arena_reset(scratch);
+        size_t uncut = 0;
+        int rc = local_mesh(&m->elements[first[k]], scratch, &l, &why, &uncut);
+        int oom = why.oom;
+        buf_free(&why);
+        if (rc < 0 || oom) return -1;
+        if (rc) continue; /* element_mesh failed: its elements mesh alone (and warn) */
+        cc_mesh *sh = &s->shapes[s->nshapes];
+        memset(sh, 0, sizeof *sh);
+        sh->nv = l.nv, sh->ni = l.ni;
+        sh->pos = arena_dup(&s->arena, l.pos, ((size_t)l.nv + 1) * sizeof l.pos[0]);
+        sh->idx = arena_dup(&s->arena, l.idx, ((size_t)l.ni + 1) * sizeof(uint32_t));
+        if (!sh->pos || !sh->idx || crease_edges(sh, &s->arena, scratch)) return -1;
+        sh->nn = 0; /* mesh_from_tris keeps crease_edges' segments only: no edge normals */
+        shape[k] = (int32_t)s->nshapes++;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (of[i] < 0 || shape[of[i]] < 0) continue;
+        const cc_element *e = &m->elements[i];
+        const cc_storey *st = cc_model_storey(m, &e->storey);
+        if (!st) continue; /* the caller refuses the model */
+        const double *x = e->placement.x_axis, *z = e->placement.z_axis, *o = e->placement.origin;
+        double y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
+        for (int r = 0; r < 3; r++) tf[i][0][r] = x[r], tf[i][1][r] = y[r], tf[i][2][r] = z[r];
+        tf[i][3][0] = o[0], tf[i][3][1] = o[1], tf[i][3][2] = o[2] + st->elevation;
+        inst[i] = shape[of[i]];
+    }
+    return 0;
+}
+
 static int scene_build(cc_scene *s, const cc_model *m, cc_error *err, Arena *scratch, Arena *wa) {
     Arena *a = &s->arena;
     size_t n = m->nelements;
     World *w = arena_alloc(wa, (n + 1) * sizeof *w, 8);
+    int32_t *inst = arena_alloc(wa, (n + 1) * sizeof *inst, 4);
+    double (*tf)[4][3] = arena_alloc(wa, (n + 1) * sizeof *tf, 8);
     s->elements = arena_alloc(a, (n + 1) * sizeof *s->elements, 8);
     s->warnings = arena_alloc(a, (n + 1) * sizeof *s->warnings, 8);
-    if (!w || !s->elements || !s->warnings) return fail(err, "out of memory", "", "");
+    if (!w || !inst || !tf || !s->elements || !s->warnings) return fail(err, "out of memory", "", "");
+    if (shared_shapes(s, m, scratch, wa, inst, tf)) return fail(err, "out of memory", "", "");
     for (size_t i = 0; i < n; i++) {
         const cc_element *e = &m->elements[i];
         const cc_storey *st = cc_model_storey(m, &e->storey);
         const cc_material *mat = cc_model_material(m, &e->material);
         if (!st || !mat) return fail(err, "invalid model: element without its storey or material", "", "");
+        if (inst[i] >= 0) { /* placed in the second pass */
+            w[i].ntris = 0;
+            continue;
+        }
         cc_mesh l;
         memset(&l, 0, sizeof l);
         Buf why;
@@ -1256,15 +1337,49 @@ static int scene_build(cc_scene *s, const cc_model *m, cc_error *err, Arena *scr
     }
     /* SceneBuilder::finish: the origin is the middle of the world box, rounded to mm. */
     double lo[3] = {1.0 / 0.0, 1.0 / 0.0, 1.0 / 0.0}, hi[3] = {-1.0 / 0.0, -1.0 / 0.0, -1.0 / 0.0};
-    for (size_t i = 0; i < n; i++)
+    for (size_t i = 0; i < n; i++) {
         for (uint32_t t = 0; t < w[i].ntris; t++)
             for (int k = 0; k < 3; k++)
                 for (int r = 0; r < 3; r++) lo[r] = min64(lo[r], w[i].tris[t][k][r]), hi[r] = max64(hi[r], w[i].tris[t][k][r]);
+        if (inst[i] < 0 || !s->shapes[inst[i]].ni) continue;
+        /* Body::Instance: the corners of the shape's f32 box (Aabb::of_points), placed in f64 */
+        const cc_mesh *sh = &s->shapes[inst[i]];
+        float blo[3] = {1.0f / 0.0f, 1.0f / 0.0f, 1.0f / 0.0f}, bhi[3] = {-1.0f / 0.0f, -1.0f / 0.0f, -1.0f / 0.0f};
+        for (uint32_t v = 0; v < sh->nv; v++)
+            for (int k = 0; k < 3; k++) blo[k] = min32(blo[k], sh->pos[v][k]), bhi[k] = max32(bhi[k], sh->pos[v][k]);
+        for (int c = 0; c < 8; c++) {
+            double p[3];
+            for (int k = 0; k < 3; k++) p[k] = (double)((c >> k & 1) == 0 ? blo[k] : bhi[k]);
+            for (int r = 0; r < 3; r++) {
+                double q = tf[i][0][r] * p[0] + tf[i][1][r] * p[1] + tf[i][2][r] * p[2] + tf[i][3][r];
+                lo[r] = min64(lo[r], q), hi[r] = max64(hi[r], q);
+            }
+        }
+    }
     for (int r = 0; r < 3; r++) s->origin[r] = is_finite(lo[0]) ? round64((lo[r] + hi[r]) / 2.0) : 0.0;
     for (size_t i = 0; i < n; i++) {
-        if (!w[i].ntris) continue; /* push: no triangles, no element */
         const cc_element *e = &m->elements[i];
         cc_scene_element *se = &s->elements[s->nelements];
+        if (inst[i] >= 0) { /* push_instance (no triangles, no element), relative_to(origin) */
+            if (!s->shapes[inst[i]].ni) continue;
+            memset(&se->mesh, 0, sizeof se->mesh);
+            for (int r = 0; r < 3; r++) {
+                se->to_scene.x[r] = (float)tf[i][0][r];
+                se->to_scene.y[r] = (float)tf[i][1][r];
+                se->to_scene.z[r] = (float)tf[i][2][r];
+                se->to_scene.t[r] = (float)(tf[i][3][r] - s->origin[r]);
+            }
+            se->id = e->id;
+            se->cls = e->cls;
+            se->class_name.p = e->has_ifc_entity ? e->ifc_entity.p : cc_ifc_class_name(e->cls);
+            se->class_name.n = e->has_ifc_entity ? e->ifc_entity.n : strlen(se->class_name.p);
+            se->category = cc_model_material(m, &e->material)->category;
+            se->model_index = i;
+            se->shape = inst[i];
+            s->nelements++;
+            continue;
+        }
+        if (!w[i].ntris) continue; /* push: no triangles, no element */
         arena_reset(scratch);
         if (build_mesh(&w[i], s->origin, a, scratch, &se->mesh)) return fail(err, "out of memory", "", "");
         if (!se->mesh.ni) continue; /* all degenerate */
