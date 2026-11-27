@@ -57,14 +57,10 @@ registerOptimisation(setting("moving_proxies", {
   label: { fr: "Parties lointaines simplifiées", en: "Simplified far parts" }, kind: "toggle", default: true, off: false,
   hint: { fr: "Les cellules lointaines (et les liens) dessinées par leurs simplifications.", en: "Far cells (and links) drawn as their proxies." },
 }));
-registerOptimisation(setting("memory_share", {
-  label: { fr: "Mémoire graphique des liens", en: "Links' GPU memory" }, kind: "number", default: 0.8, off: 1, min: 0.2, max: 1, step: 0.1,
-  hint: { fr: "Part de la mémoire au-delà de laquelle les liens lointains rendent leur détail (1 : jamais).", en: "Share of memory past which far links give their detail back (1: never)." },
+registerOptimisation(setting("link_gpu_mb", {
+  label: { fr: "Mémoire graphique des liens", en: "Links' GPU memory" }, kind: "number", default: 768, off: 65536, min: 64, max: 65536, step: 64, unit: "MB",
+  hint: { fr: "Au-delà, les liens lointains rendent leur détail et sont dessinés simplifiés (65 536 : jamais).", en: "Past it, far links give their detail back and are drawn as proxies (65,536: never)." },
 }));
-{ // (the page's link budget reads memory_share, gl/linkmem.ts, though the core says it applies no budget of its own)
-  const m = optimisations().find((o) => o.key === "memory_share")!;
-  registerOptimisation({ ...m, applies: () => !!userSettings.value });
-}
 registerOptimisation(setting("gpu_cull", {
   label: { fr: "Tri des copies sur la carte", en: "GPU culling of copies" }, kind: "toggle", default: false, off: false,
   hint: { fr: "Avec WebGPU : les copies d'une forme testées par un compute shader.", en: "With WebGPU: a shape's copies tested by a compute shader." },

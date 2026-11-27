@@ -126,7 +126,7 @@ the rule for "automatic" (points 10 and 12).
    and an off value, shown in the panel): a section of the performance panel lists the rows of a registry
    (`web-ui/src/optimisations.ts`: key, FR/EN label, toggle / choice / number, default, off value; other tickets add
    rows with `registerOptimisation` in their own modules), seeded with `renderer`, `moving_fps`, `moving_proxies`
-   (simplified far parts), `memory_share` (the links' GPU budget) and `gpu_cull`; the copied report lists each value.
+   (simplified far parts), `link_gpu_mb` (the links' GPU budget, SIZE3) and `gpu_cull`; the copied report lists each value.
 
 What still falls back to WebGL2 (the panel names it): nothing that the lab draws today; WebGL2-only remain the
 occlusion queries (off by default, a bench hook), the selection's overpaint over the kept picture, the

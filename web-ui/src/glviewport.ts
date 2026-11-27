@@ -870,7 +870,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     linkPrx: modelPrx, prePrx, linkColour: (c) => LINK_SRGB[c] ?? REFERENCE_SRGB,
     cutLink: (x, xf, usable, planes, eye, px) => cutLinkPrx(x as LinkPrx, xf, usable, planes, eye as V3, px),
     need: (k) => { const x = slots[k]; if (x && k > 0) x.needFrame = drawFrame, x.needAt = performance.now(); },
-    want: (k) => { wanted.add(k); },
+    want: (k, sz) => { wanted.add(k); if (sz > (wantScore.get(k) ?? 0)) wantScore.set(k, sz); }, // (SIZE3 (B): the largest on screen asked first)
+    notWanted: (k) => wantedLast.get(k) === false,
     readGl: (g) => { // (each buffer streamed in chunks by its reader: never a whole copy in the page)
       const mg = g as ModelGl, out: GlStream[] = [];
       for (const n of GL_BUFS) {

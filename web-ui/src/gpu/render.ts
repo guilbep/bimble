@@ -227,7 +227,7 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
           lusable.set(x, (us = { key: uk, u: usableCells(x.p, (el) => v.shown[l.e0 + el] === 1 && !(sel && sel.link === l.name && sel.id === m.ids[l.e0 + el])) }));
         }
         const normal = M.cutLink(x, l.xf, us.u, planes, e, moving ? MOVING_PROXY_PX : STILL_PROXY_PX);
-        const { cells, replaced: r } = held(k + 1) ? normal : M.cutLink(x, l.xf, us.u, planes, e, Infinity);
+        const { cells, replaced: r } = held(k + 1) || M.notWanted(k + 1) ? normal : M.cutLink(x, l.xf, us.u, planes, e, Infinity);
         linkRep[k + 1] = r, linkNeed[k + 1] = normal.replaced;
         if (cells.length) linkCut.push({ x, cells, mdl: k + 1, colour: l.colour ?? -1 });
       });
@@ -241,7 +241,12 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
       if (!held(d.model)) { // its model's detail away: its proxies stand for it, else its box; asked back
         if (!planes || boxInFrustum(planes, d.b.box, 0)) {
           const nr = linkNeed[d.model], r2 = linkRep[d.model];
-          if (!(nr && d.b.group >= 0 && nr[d.b.group])) { if (!M.slots[d.model]?.gl) M.want(d.model); M.need(d.model); }
+          if (!(nr && d.b.group >= 0 && nr[d.b.group])) {
+            const bx = d.b.box, q = [0, 1, 2].map((a) => Math.min(Math.max(e[a]!, bx[a]!), bx[3 + a]!)); // (its size on screen: SIZE3's order)
+            const sz = Math.hypot(bx[3]! - bx[0]!, bx[4]! - bx[1]!, bx[5]! - bx[2]!) / (v.ortho ? 1 : Math.max(1, Math.hypot(q[0]! - e[0]!, q[1]! - e[1]!, q[2]! - e[2]!)));
+            if (!M.slots[d.model]?.gl) M.want(d.model, sz);
+            M.need(d.model);
+          }
           if (!(r2 && d.b.group >= 0 && r2[d.b.group])) missing.push(d.b.box);
         }
         d.k0 = d.k1 = 0;

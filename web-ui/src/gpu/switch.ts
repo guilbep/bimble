@@ -61,7 +61,9 @@ export interface GpuModels {
   /** A link's proxies cut this frame (glviewport.ts cutLinkPrx: the eye in its frame, its cells placed). */
   cutLink: (x: GpuLinkPrx, xf: ModelXf, usable: Uint8Array, planes: Float64Array | null, eye: number[], px: number) => { cells: number[]; replaced: Uint8Array };
   /** The frame needed model k's detail (the memory budget's clock); its detail is released: ask it back. */
-  need: (k: number) => void; want: (k: number) => void;
+  need: (k: number) => void; want: (k: number, size: number) => void;
+  /** SIZE3 (B): link k was not wanted in detail last frame (its normal proxies' cut stands, not its coarsest). */
+  notWanted: (k: number) => boolean;
   /** WebGL2's buffers of a slot: those that hold bytes (streamed), emptied (WebGPU owns the model), filled again in
    *  chunks (`fillGl` sizes one and gives its writer), given back (`ownGl` false: WebGL2 draws it again). */
   readGl: (gl: object) => GlStream[]; emptyGl: (gl: object) => void;
