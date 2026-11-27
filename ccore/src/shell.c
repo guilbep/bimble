@@ -1,4 +1,4 @@
-/* The exterior shell (shell.h; ticket SHELL1, ADR 0078 amendment 7). */
+/* The exterior shell (shell.h; ticket SHELL1, ADR 0078 amendment 8). */
 #ifdef __clang__
 #pragma clang fp contract(off) /* the same bytes from every build (native, wasm): no fused multiply-add */
 #endif

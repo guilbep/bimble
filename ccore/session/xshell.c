@@ -1,4 +1,4 @@
-/* The cross-link exterior shell (xshell.h; ticket SHELL1, ADR 0078 amendment 7). */
+/* The cross-link exterior shell (xshell.h; ticket SHELL1, ADR 0078 amendment 8). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

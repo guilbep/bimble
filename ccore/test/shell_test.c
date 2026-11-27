@@ -1,4 +1,4 @@
-/* Suite shell (ticket SHELL1, ADR 0078 amendment 7): the exterior shell (src/shell.h) and its place in the tile pyramid
+/* Suite shell (ticket SHELL1, ADR 0078 amendment 8): the exterior shell (src/shell.h) and its place in the tile pyramid
  * (src/tiles.h: element flag 4, tile flag 16, the shell table, the outside walk, the exterior leaf answer):
  *   - a closed box of walls and slabs with an object inside: the object is interior, the walls exterior;
  *   - the same box with a window (a non-opaque class filling a hole in a wall): the object behind it is exterior;

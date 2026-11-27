@@ -77,7 +77,7 @@ typedef struct {
      * the flags that give WebGPU (host/main.c, as `open --app`). A lab field as `renderer`: not in
      * to_json, written only once set; false by default. */
     int open_app;
-    /* SHELL1 (ADR 0078 amendment 7): the links' baked exterior shell, "priority" (the default: the same tiles, those seen from
+    /* SHELL1 (ADR 0078 amendment 8): the links' baked exterior shell, "priority" (the default: the same tiles, those seen from
      * outside fetched and drawn first, tiles.h CC_TILES_SEL_PRIORITY) | "off" (plain order) | "filter" (EXPERIMENTAL: the outside
      * walk leaves out what the shell says is inside; can hide visible elements, measured 0 to 1.2 % of the seen elements per
      * frame on a real project). Not Rust's: as `renderer`, written once set. */

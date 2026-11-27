@@ -1,4 +1,4 @@
-/* The exterior shell of a link (ticket SHELL1, ADR 0078 amendment 7): which elements can be seen from outside at all.
+/* The exterior shell of a link (ticket SHELL1, ADR 0078 amendment 8): which elements can be seen from outside at all.
  *
  * A software depth buffer, no GPU. For each of N directions (the six sides, the eight corner diagonals, then a Fibonacci
  * sphere), an orthographic view of the link's whole bounding sphere at res x res pixels:

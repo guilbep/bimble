@@ -1,4 +1,4 @@
-/* The cross-link exterior shell (ticket SHELL1, ADR 0078 amendment 7; src/shell.h).
+/* The cross-link exterior shell (ticket SHELL1, ADR 0078 amendment 8; src/shell.h).
  *
  * A link's own shell is computed alone: its columns, pipes and furniture are "exterior" in their file although another
  * link's facade hides them (a project split by discipline: on the owner's folder of 17 links the links' own shells marked

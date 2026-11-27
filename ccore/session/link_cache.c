@@ -459,7 +459,7 @@ static void bake_hlod(cc_link_job *j, Buf *vb) {
     j->hlod_ms = pf->now_ms(pf->ctx) - t0;
 }
 
-/* SHELL1 (ADR 0078 amendment 7, src/shell.h): the exterior shell of the pyramid just built (`sec`), classified from the
+/* SHELL1 (ADR 0078 amendment 8, src/shell.h): the exterior shell of the pyramid just built (`sec`), classified from the
  * cache's bytes read in place (a run of leaves decoded at a time; the views' buffers bounded), in steps (cancellable),
  * then applied to the section (`out`: flags, the exterior proxies, the table). A failure leaves the pyramid without it
  * (the outside walk is then the full walk), said in the report. */

@@ -1010,7 +1010,7 @@ export interface SettingsValues {
   link_max_deg?: number;
   /** GPU2: `bimble-ccore open` starts a Chromium-family browser in an app window with the WebGPU flags (native host only). */
   open_app?: boolean;
-  /** SHELL1 (ADR 0078 amendment 7): exterior-first fetch and draw order (not Rust's; absent from an older core: priority);
+  /** SHELL1 (ADR 0078 amendment 8): exterior-first fetch and draw order (not Rust's; absent from an older core: priority);
    *  "filter" is experimental (can hide visible elements). */
   shell_mode?: "off" | "priority" | "filter";
   /** VIS1 (ADR 0078 amendment 7): "Draw only what can be seen" (not Rust's; absent from an older core: off). */

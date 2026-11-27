@@ -151,7 +151,7 @@ check("levels of detail off (lod=0, a setting's off value): every leaf even from
 check("the walker's frame: far, the coarsest tile alone; close, every leaf", g.status === 200 && far.tiles === 1 && far.links[0].proxies + far.links[0].leaves === 1 &&
   close.triangles === close.detail && close.leaf_bytes > 0, `bounds ${bounds.map(Math.round)}; far ${far.triangles} tris ${far.bytes} B; close ${close.triangles} tris ${close.bytes} B`);
 
-// ---- SHELL1 (ADR 0078 amendment 7): the exterior shell baked after the pyramid ----
+// ---- SHELL1 (ADR 0078 amendment 8): the exterior shell baked after the pyramid ----
 {
   check("SHELL1: the shell baked (header flag 1), its elements flagged 4, its tiles 16", toc && (toc.bake & 1) === 1 && [...toc.elFlags].some((f) => f & 4) &&
     [...toc.flags].some((f) => f & 16), `bake ${toc?.bake}`);

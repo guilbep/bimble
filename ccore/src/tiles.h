@@ -194,7 +194,7 @@ int cc_tiles_proxy_check(const uint8_t *p, size_t n, cc_error *err);
  * triangle in `cat` (one byte a triangle). 0 ok, -1 damaged or out of memory. */
 int cc_tiles_proxy_mesh(const uint8_t *p, size_t n, const float box[6], Arena *a, cc_mesh *m, uint8_t **cat);
 
-/* ---- SHELL1 (ADR 0078 amendment 7, shell.h): the exterior shell, baked after the pyramid ----
+/* ---- SHELL1 (ADR 0078 amendment 8, shell.h): the exterior shell, baked after the pyramid ----
  * With the header's bake flag 1: element flag 4 marks the elements seen from outside, tile flag 16 the tiles holding one,
  * and the blobs end with the SHELL TABLE and a trailer (the section's last 16 bytes: "TSHT", u32 table bytes, u64 the
  * table's offset from the blobs' start; 8-aligned). Readers of the layout without it are unchanged: the blobs are only
@@ -268,7 +268,7 @@ typedef struct {
 } cc_tiles_view;
 /* flags: CC_TILES_SEL_LEAVES: levels of detail off: every leaf in the frustum (error_px and budget ignored). The renderers'
  * settings: error_px (default 1 still), budget (default none), levels of detail (default on), occluders (cc_tiles_occ). */
-/* SHELL1 (ADR 0078 amendment 7). CC_TILES_SEL_PRIORITY (the renderers' default, setting shell_mode "priority"): the same
+/* SHELL1 (ADR 0078 amendment 8). CC_TILES_SEL_PRIORITY (the renderers' default, setting shell_mode "priority"): the same
  * selection as without it, ORDERED exterior first: the tiles holding an exterior element (the cross-link marks when attached,
  * else tile flag 16), front to back, then the others, front to back. The shell never removes anything: a renderer fetches
  * and draws what is probably seen first; its run-time occlusion decides what is seen.
