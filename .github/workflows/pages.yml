@@ -146,6 +146,8 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build:ccore -- --outDir ../../ccore-lab --emptyOutDir
           test -f ../../ccore-lab/index.html && test -f ../../ccore-lab/ccore/ccore.wasm && test -f ../../ccore-lab/ccore/ccore-view.wasm
+          # URL1 (ADR 0086): the samples a link opens (?open=samples/frame.ifc), copied from ccore/golden/ by copy-ccore.mjs
+          test -f ../../ccore-lab/samples/frame.ifc && test -f ../../ccore-lab/samples/frame.bimbleview
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-lab

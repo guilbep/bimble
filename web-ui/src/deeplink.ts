@@ -6,12 +6,17 @@
 // Each wasm step waits for the next state change (or 1 s) before the next one; never called inside on_change.
 // data-bb-ready is set when all steps are done and the page is on screen (FIRST1, `onScreen`): the
 // design check and the lab checks wait for it.
+// URL1 (ADR 0086; the audit of 26 Nov, C9): a shared link must not run actions. In a built page
+// (import.meta.env.PROD: the published site, the desktop build) `action=` is ignored, and `edit=` too
+// when the page opens a model by address (`open=`, `model=`): the test hooks act only on the built-in
+// demo there (lab_pages: the viewer-only build refuses the verb). The dev server keeps both (lab tests).
 import { watch } from "vue";
 import { modelReady, state, storeys, openView, select, runAction, runVerb, tabCall, openViews, query, type ViewSummary } from "./bimble";
 import { activeTab, isTabId } from "./shell/tabs";
 import { send } from "./shell/send";
 import { currentDialog } from "./dialogs";
 import { currentPanel } from "./panels";
+import { linkInAddress } from "./openurl"; // URL1
 
 /** The next state refresh, or `ms` without one (a step that changes nothing). */
 function nextChange(ms = 1000): Promise<void> {
@@ -84,8 +89,13 @@ async function onScreen(): Promise<void> {
 export async function applyDeepLink(): Promise<void> {
   await modelReady;
   const q = new URLSearchParams(location.search);
+  // URL1: what a link may run (see the header)
+  const built = import.meta.env.PROD, byAddress = linkInAddress() !== null || q.has("model");
+  const mayAct = !built, mayEdit = !built || !byAddress;
+  if (!mayAct && q.has("action")) console.warn("deep link action: ignored in a built page (a link runs no action)");
+  if (!mayEdit && q.has("edit")) console.warn("deep link edit: ignored for a model opened by address");
   try {
-    if (q.get("edit") === "move-first-beam") {
+    if (mayEdit && q.get("edit") === "move-first-beam") {
       const ids = selection("first:IfcBeam");
       if (ids.length) await step("edit", () => runVerb("move", { ids, d: [1, 0, 0] }));
     }
@@ -110,7 +120,7 @@ export async function applyDeepLink(): Promise<void> {
     if (q.get("paper") === "1" && openViews.value.paper.offered && !openViews.value.paper.on) {
       await step("paper", () => runAction("paper_view"));
     }
-    for (const a of (q.get("action") ?? "").split(",").filter(Boolean)) await step(a, () => runAction(a));
+    if (mayAct) for (const a of (q.get("action") ?? "").split(",").filter(Boolean)) await step(a, () => runAction(a));
     const pg = q.get("page");
     if (pg) send(pg === "home" ? { do: "home" } : { do: "showPage", page: pg });
     currentPanel.value = q.get("panel") ?? (q.get("perf") === "1" ? "performance" : null); // GPU1: ?perf=1

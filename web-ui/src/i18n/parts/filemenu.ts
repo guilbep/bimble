@@ -13,6 +13,7 @@ export const fr = {
   "filemenu.shareView": "Partager pour consulter (.bimbleview)…",
   "filemenu.ifc4": "Exporter IFC4…",
   "filemenu.ifc2x3": "Exporter IFC2x3…",
+  "filemenu.copyLink": "Copier le lien", // URL1: a model opened from a link
   "filemenu.paper": "Papier",
   "filemenu.print": "Imprimer et exporter…",
   "filemenu.exportView": "Exporter la vue…",
@@ -40,6 +41,7 @@ export const en: Record<keyof typeof fr, string> = {
   "filemenu.shareView": "Share for viewing (.bimbleview)…",
   "filemenu.ifc4": "Export IFC4…",
   "filemenu.ifc2x3": "Export IFC2x3…",
+  "filemenu.copyLink": "Copy link", // URL1: a model opened from a link
   "filemenu.paper": "Paper",
   "filemenu.print": "Print and export…",
   "filemenu.exportView": "Export view…",

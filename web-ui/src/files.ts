@@ -19,10 +19,14 @@
 //   there as a dropped document (Save asks where; no recent file). A dropped PDF or DXF is refused
 //   there: a reference plan keeps its file's path, and a staged copy is no place to keep.
 // - The page's `beforeunload` asks the browser's own question with unsaved changes.
+// - URL1 (ADR 0086): a model from a link (`#open=<url>`, Home's field): the shell's `open {url}`; its
+//   picker is `pickUrl` (openurl.ts fetches the file in the page), and the file goes on as a dropped one:
+//   its bytes (wasm), or staged on the native host (POST /stage, 256 MB at most: the host has no HTTP client).
 import { nextTick, shallowRef, watch } from "vue";
 import { currentDialog } from "./dialogs";
 import { actionBody, fileRoutes, state } from "./bimble";
 import { here, send } from "./shell/send";
+import { fetchLink, openFromAddress } from "./openurl"; // URL1
 
 export type Purpose = "open" | "import_ifc" | "link_model" | "link_folder" | "link_pdf" | "link_dxf" | "save_as" | "export_ifc4" | "export_ifc2x3" | "share_for_viewing";
 
@@ -145,6 +149,14 @@ export async function pickFile(purpose: Purpose): Promise<Picked | null> {
   return { path: a };
 }
 
+/** URL1: the picker of `open {url}`: the linked file fetched by the page (openurl.ts), then as a dropped
+ *  file. Null when the question for another site was answered Cancel; throws the message to show. */
+export async function pickUrl(url: string, current: () => boolean): Promise<Picked | null> {
+  const f = await fetchLink(url, current);
+  if (!f || !current()) return null;
+  return isNative() ? { path: await stage(f), dropped: true } : { file: f };
+}
+
 /** Open a file the host can read (a recent file): through the shell. False when it refused now. */
 export const openPath = (path: string): boolean => send({ do: "open", path });
 
@@ -257,6 +269,7 @@ let installed = false;
 export function installFiles(): void {
   if (installed || (!isNative() && !isWasm())) return; // the Rust lab: egui takes its own drops
   installed = true;
+  openFromAddress(); // URL1: the address's link (#open= / ?open=), at once: the `opening` state is the first feedback
   // A dropped file waits only while the shell asks or opens: answered Cancel, it is forgotten.
   watch(here, (s) => { if (s.at !== "confirmClose" && s.at !== "opening") dropped = null; });
   window.addEventListener("dragover", (e) => {

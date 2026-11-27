@@ -9,7 +9,8 @@ export const hint = () => (st.value.file === null ? { key: "home.noModel" } : ""
 // A1 Home (fr/Home.html). Layout only; every button is one runAction (ADR 0048).
 import { computed, ref } from "vue";
 import { state, actions, recentFiles, actionBody, type RecentFile } from "../bimble";
-import { isNative, openPath } from "../files"; // FS1
+import { isNative, isWasm, openPath } from "../files"; // FS1
+import { forgetLink, openLink, recentLinks } from "../openurl"; // URL1
 import { t } from "../i18n";
 import { act as run, send, shown as control } from "../shell/send";
 import NotAvailable from "../shell/NotAvailable.vue"; // FAKE1
@@ -33,6 +34,11 @@ const byPath = isNative();
 const openRecent = (f: RecentFile) => { if (byPath && f.exists) void openPath(f.path); };
 const removeRecent = (f: RecentFile) => { try { actionBody("recent_remove", { path: f.path }); } catch (e) { console.warn(e); } bump.value++; };
 // ---- end FS1 ----
+// ---- URL1 (ADR 0086): open from a link (the C builds: the page fetches; the Rust lab has no such path) ----
+const byLink = isWasm() || isNative();
+const link = ref("");
+const openTyped = () => { if (link.value.trim() && control('home-open-link')) openLink(link.value); };
+// ---- end URL1 ----
 </script>
 
 <template>
@@ -53,6 +59,14 @@ const removeRecent = (f: RecentFile) => { try { actionBody("recent_remove", { pa
         <!-- Rust home.rs "Back to the model": shown while a model is loaded. -->
         <button v-if="control('home-back')" class="btn s" type="button" data-bb="home-back" @click="send({ do: 'showView' })">{{ t('home.backToModel') }}</button>
       </div>
+      <!-- URL1: paste a link, Enter -->
+      <form v-if="byLink" class="link" data-bb="home-link" @submit.prevent="openTyped">
+        <label class="eyebrow" for="home-link-input">{{ t('openurl.home.label') }}</label>
+        <div class="row">
+          <input id="home-link-input" v-model="link" class="inp" type="url" inputmode="url" autocomplete="url" spellcheck="false" :placeholder="t('openurl.home.placeholder')" data-bb="home-link-input">
+          <button class="btn s" type="submit" :disabled="!link.trim()" data-bb="home-link-open">{{ t('openurl.home.open') }}</button>
+        </div>
+      </form>
       <NotAvailable v-if="!hasUser" class="you" compact :what="t('na.screen.you')" :instead="t(INSTEAD.you!)" /><!-- FAKE1 -->
       <div v-else class="card you" data-bb="home-you">
         <div class="eyebrow">{{ t('home.you') }}</div>
@@ -69,6 +83,18 @@ const removeRecent = (f: RecentFile) => { try { actionBody("recent_remove", { pa
         <span style="flex:1"></span>
         <input v-if="hasRecent" v-model="filter" class="inp" :placeholder="t('home.filter')" :aria-label="t('home.filter')" data-bb="home-filter">
       </div>
+      <!-- URL1: the links opened in this browser (the address and a name; a click fetches again) -->
+      <template v-if="byLink && recentLinks.length">
+        <div class="eyebrow">{{ t('openurl.home.recent') }}</div>
+        <ul class="links" data-bb="home-recent-links">
+          <li v-for="l in recentLinks" :key="l.url" class="card lk">
+            <a href="#" :title="l.url" data-bb="home-recent-link" :data-url="l.url" @click.prevent="control('home-recent-link') && openLink(l.url)">
+              <span class="name">{{ l.name }}</span><span class="mono where">{{ l.url }}</span>
+            </a>
+            <button class="rm" type="button" :aria-label="t('openurl.home.remove')" :title="t('openurl.home.remove')" data-bb="home-recent-link-remove" @click="forgetLink(l.url)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+          </li>
+        </ul>
+      </template>
       <NotAvailable v-if="!hasRecent" compact :what="t('na.screen.recent')" :instead="t(INSTEAD.recent!)" /><!-- FAKE1 -->
       <div v-else class="grid" data-bb="home-recent">
         <!-- ---- FS1: the native host opens a recent file by its path; the web bridge cannot (no file system): drawn, disabled. ---- -->
@@ -134,4 +160,13 @@ h2.disp { font-size: 20px; }
 .name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .where { font-size: 11.5px; color: var(--bb-stone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 :focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
+/* URL1: open from a link; the links opened */
+.link { display: flex; flex-direction: column; gap: 6px; }
+.link .row { justify-content: flex-start; }
+.link .inp { flex: 1; width: auto; }
+.links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.lk { position: relative; padding: 8px 40px 8px 12px; }
+.lk a { display: flex; flex-direction: column; gap: 2px; color: var(--bb-ink); text-decoration: none; min-width: 0; }
+.lk:hover { border-color: var(--bb-stone); }
+.lk:hover .rm, .lk .rm:focus-visible { opacity: 1; }
 </style>
