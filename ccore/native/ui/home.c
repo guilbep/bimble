@@ -374,7 +374,8 @@ void optimisations_apply(App *a) {
     a->topts.lod = opt_num(a, "lod", 1) != 0 && a->topts.error_px > 0;
     a->topts.cull_back = opt_num(a, "cull_back", D_CULL_BACK) != 0;
     a->topts.groups = opt_num(a, "occlusion_groups", 1) != 0;
-    nv_tiles_group_size((uint32_t)opt_num(a, "occlusion_group", 8));
+    nv_tiles_group_size((uint32_t)opt_num(a, "occlusion_group", 2));
+    if (a->r) nv_tiles_hiz_block(a->r, (uint32_t)opt_num(a, "hiz_block", 4));
     a->topts.clip_planes = opt_num(a, "section_clip_planes", 1) != 0;
     a->topts.budget = a->gpu_budget;
     a->still_cut = (float)opt_num(a, "still_px", D_STILL_PX);

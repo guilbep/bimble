@@ -29,7 +29,8 @@ void main() {
     if (!vis) {
         if (mx.x < 0.0 || mx.y < 0.0 || mn.x > px.x || mn.y > px.y) vis = false; // off screen
         else {
-            ivec2 a = ivec2(clamp(floor(mn), vec2(0.0), px.xy - 1.0)) / 4, b = ivec2(clamp(floor(mx), vec2(0.0), px.xy - 1.0)) / 4;
+            int B = int(px.w); // pixels a level-0 texel side
+            ivec2 a = ivec2(clamp(floor(mn), vec2(0.0), px.xy - 1.0)) / B, b = ivec2(clamp(floor(mx), vec2(0.0), px.xy - 1.0)) / B;
             int L = 0;
             while (L < n.y - 1 && max((b.x >> L) - (a.x >> L), (b.y >> L) - (a.y >> L)) > 3) L++; // NUI2: up to 4 x 4 texels (tighter than 2 x 2)
             float far = 3.0e38;

@@ -782,12 +782,20 @@ void nv_tiles_release(R *r) {
     memset(T, 0, sizeof *T);
 }
 
+static uint32_t hiz_block = 4; /* hiz_block: pixels a level-0 texel side (1, 2, 4) */
+void nv_tiles_hiz_block(nv_render *r, uint32_t b) {
+    b = b <= 1 ? 1 : b <= 2 ? 2 : 4;
+    if (b != hiz_block) {
+        hiz_block = b;
+        if (r->W && r->H) SDL_WaitForGPUIdle(r->dev), nv_tiles_targets(r, r->W, r->H);
+    }
+}
 /* the depth pyramid for a w x h depth: level 0 a quarter a side (each texel the farthest of its 4 x 4 pixels), then
  * halves (the farthest of 2 x 2), side by side in one R32F texture */
 int nv_tiles_targets(R *r, uint32_t w, uint32_t h) {
     nv_tiles_r *T = &r->tl;
     if (T->hiz) SDL_ReleaseGPUTexture(r->dev, T->hiz), T->hiz = NULL, r->gpu_bytes -= (uint64_t)T->hiz_w * T->hiz_h * 4;
-    uint32_t lw = (w + 3) / 4, lh = (h + 3) / 4, ox = 0, n = 0;
+    uint32_t B = hiz_block, lw = (w + B - 1) / B, lh = (h + B - 1) / B, ox = 0, n = 0;
     while (n < 16) {
         T->lv[n][0] = ox, T->lv[n][1] = lw, T->lv[n][2] = lh;
         ox += lw, n++;
@@ -966,7 +974,7 @@ static uint32_t group_test(float lo[3], float hi[3]) {
 static void grow_box(float lo[3], float hi[3], const float a[3], const float b[3]) { /* an element's box, 1 mm wider (f32 slack) */
     for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], a[d] - 1), hi[d] = fmaxf(hi[d], b[d] + 1);
 }
-static uint32_t CLN = 8; /* occlusion_group: elements a group (the A/B: 1, 2, 4, 8, 16, 32, 64) */
+static uint32_t CLN = 2; /* occlusion_group: elements a group (the A/B: 1, 2, 4, 8, 16, 32, 64) */
 void nv_tiles_group_size(uint32_t n) { CLN = n < 1 ? 1 : n > 256 ? 256 : n; }
 static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *cut) {
     int back = T->o.cull_back && !T->o.reference, pgi = g->page;
@@ -1337,7 +1345,7 @@ int nv_tiles_has_pass2(const R *r) { return r->tl.read_vis_planned && F.ntest > 
 void nv_tiles_occlusion(R *r, SDL_GPUCommandBuffer *cmd) {
     nv_tiles_r *T = &r->tl;
     if (!T->read_vis_planned) return;
-    struct { int32_t a[4], b[4]; } u0 = {{(int)r->W, (int)r->H, (int)T->lv[0][1], (int)T->lv[0][2]}, {0, 0, 0, 0}};
+    struct { int32_t a[4], b[4]; } u0 = {{(int)r->W, (int)r->H, (int)T->lv[0][1], (int)T->lv[0][2]}, {(int)hiz_block, 0, 0, 0}};
     SDL_GPUStorageTextureReadWriteBinding tw = {.texture = T->hiz, .mip_level = 0, .layer = 0, .cycle = false};
     SDL_GPUComputePass *p = SDL_BeginGPUComputePass(cmd, &tw, 1, NULL, 0);
     SDL_BindGPUComputePipeline(p, T->hiz0);
@@ -1357,7 +1365,7 @@ void nv_tiles_occlusion(R *r, SDL_GPUCommandBuffer *cmd) {
     /* the tests: every selected tile's box */
     struct { float vp[16]; float px[4]; int32_t n[4]; int32_t lv[16][4]; } tu;
     memcpy(tu.vp, r->last_vp, sizeof tu.vp);
-    tu.px[0] = (float)r->W, tu.px[1] = (float)r->H, tu.px[2] = (float)NEAR_MM, tu.px[3] = 0;
+    tu.px[0] = (float)r->W, tu.px[1] = (float)r->H, tu.px[2] = (float)NEAR_MM, tu.px[3] = (float)hiz_block;
     tu.n[0] = (int)F.ntest, tu.n[1] = (int)T->hiz_levels, tu.n[2] = (int)T->lv[0][1], tu.n[3] = (int)T->lv[0][2];
     for (int l = 0; l < 16; l++) tu.lv[l][0] = (int)T->lv[l][0], tu.lv[l][1] = (int)T->lv[l][1], tu.lv[l][2] = (int)T->lv[l][2], tu.lv[l][3] = 0;
     SDL_GPUStorageBufferReadWriteBinding gw = {.buffer = T->gates, .cycle = false};

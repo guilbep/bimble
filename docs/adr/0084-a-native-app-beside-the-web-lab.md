@@ -168,8 +168,16 @@ the open model), `ui/slog.c` (the session log), `ui/nset.c` (the app's own setti
     texels it covers) and the commands are gated on the GPU, the visible drawn in pass 2 of the same frame; no depth
     pre-pass, no sorting. **Down to groups of elements** (`occlusion_groups`, on; `occlusion_group`, elements a group):
     the id buffer gives the elements seen (`seen.comp`, read back); a loaded leaf's elements in groups are drawn in pass 1
-    when one was seen, else tested on the group's box. Tiles not loaded and proxies keep the tile's box. Tiles are loaded
-    only when their box is found visible.
+    when one was seen, else tested on the group's box (its elements' boxes; the leaf's elements kept in space order,
+    Morton order of their centres, so that a group is compact). Tiles not loaded and proxies keep the tile's box. Tiles
+    are loaded only when their box is found visible. **Measured where the triangles go** (`BIMBLE_TILES_SURPLUS`):
+    every surplus triangle is in a pass 2 group whose box passed while none of its elements shows, or in a pass 1 group
+    hidden since; smaller groups draw near the need (18 buildings, outside: need 0.68 M, group 1 1.26 M, group 8 3.92 M,
+    group 32 5.15 M) but each group is a command, and a command costs about 1 us of CPU here: group 2 by default (the
+    owner's project's A/B). What is left of the surplus is boxes passing the test while their element is hidden
+    (elements touching a visible facade, slabs spanning a floor): a finer depth pyramid (`hiz_block` 1 or 2 pixels a
+    texel instead of 4) changed nothing (3.91 against 3.92 M); a tighter test (a few points of the element, an oriented
+    box) is the next step, not a finer pyramid.
 15. **The truth test** (`--truth`): each 3D frame drawn without occlusion (and without back-face culling) then as set,
     the id and depth buffers compared; an element is missing when one of its pixels shows something farther as set.
     Another element at the same depth winning a pixel is a coplanar tie (the order of the passes decides), counted apart.
@@ -192,12 +200,16 @@ Synthetic tables in `ccore/results/native/nui2.md`; the owner's project's in the
 `renderer_path=tiles`: on the owner's project the tile path's moving and still frames beat the parts path's at p95;
 the parts path draws nothing of a view file opened as it is. `draw_visible` (occlusion) on: it removes about half of
 the triangles there, and the truth test finds 0 element missing on his data (inside and outside cameras) and on
-the synthetic sets. `occlusion_groups` on, `occlusion_group` 32: on the 18 buildings 32 has the lowest moving and
-still p95 of 8 / 16 / 32 / 64 (fewer commands, a few more triangles). `still_px` 1: on the owner's project the still
+the synthetic sets. `occlusion_groups` on, `occlusion_group` 2: on the owner's project groups of 2 / 8 / 32 give moving
+p95 17.5 / 17.9 / 18.4 ms and still medians 12.8 / 16.5 / 15.2 ms (the 18 buildings: 14.1 / 13.1 / 13.3 ms moving p95,
+1.1 / 2.5 / 3.7 M triangles). `hiz_block` 4 (1 and 2 measured equal). `still_px` 1: on the owner's project the still
 frame's triangles fall by about a third with it. `error_px` 1: 2 changed the triangles by under 5 % there (the cost is
 the leaves, not the proxies). `moving_fps` 60 (the owner's target) when the settings file does not hold it.
-`cull_back` off (decision 16). `section_clip_planes` on. `frames_in_flight` 2: 18 buildings, moving p95 13.4 to
-12.4 ms, still p95 14.4 to 11.6 ms. A key the user set in his settings file wins (one key, shared with the web lab).
+`cull_back` off (decision 16). `section_clip_planes` on. `frames_in_flight` 2: on the owner's project moving
+16.6/22.4 to 12.0/17.9 ms (median/p95), still 19.0/27.9 to 16.5/25.5 ms; 18 buildings, moving p95 13.4 to 12.4 ms.
+**The owner's 60 fps line** (p95 16.7 ms moving and still, input to frame under 33 ms, 0 missing): with the defaults
+input to frame max 23-27 ms and 0 missing (356 frames, inside and outside) are met; moving p95 17.5 ms and still p95
+24 ms (frames while tiles arrive included) are not yet. A key the user set in his settings file wins (one key, shared with the web lab).
 
 ### What is left (NUI2)
 
