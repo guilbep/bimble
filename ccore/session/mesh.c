@@ -1237,11 +1237,13 @@ int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
         jw_key(&w, "triangles"), jw_u64(&w, (uint64_t)tot[0]);
         { /* SHELL1: the cross-link pass: 0 none, 1 computing, 2 ready, -1 failed; its numbers */
             uint64_t xe, xel, xpk;
+            uint32_t xg;
             double xms;
-            cc_xshell_stats(s, &xe, &xel, &xms, &xpk);
+            cc_xshell_stats(s, &xe, &xel, &xms, &xpk, &xg);
             jw_key(&w, "xshell"), jw_obj_begin(&w);
             jw_key(&w, "elements"), jw_u64(&w, xel);
             jw_key(&w, "exterior"), jw_u64(&w, xe);
+            jw_key(&w, "groups"), jw_u64(&w, xg);
             jw_key(&w, "ms"), jw_f64(&w, xms);
             jw_key(&w, "peak"), jw_u64(&w, xpk);
             jw_key(&w, "state"), jw_i64(&w, xstate);

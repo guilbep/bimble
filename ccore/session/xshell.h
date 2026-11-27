@@ -26,7 +26,8 @@ typedef struct cc_xshell cc_xshell;
 int cc_xshell_poll(cc_session *s);
 /* Link `l`'s marks, one byte per entry of its pyramid's element list (1 exterior), NULL when not ready. */
 const uint8_t *cc_xshell_marks(cc_session *s, const struct cc_link *l, uint32_t *n);
-/* Numbers for the tools: elements and their triangles marked, the pass's time (ms), its buffers. */
-void cc_xshell_stats(cc_session *s, uint64_t *exterior, uint64_t *elements, double *ms, uint64_t *peak);
+/* Numbers for the tools: elements marked of those listed, the pass's time (ms), its buffers, the overlapping groups of links
+ * classified apart (0: read from its file). */
+void cc_xshell_stats(cc_session *s, uint64_t *exterior, uint64_t *elements, double *ms, uint64_t *peak, uint32_t *groups);
 void cc_xshell_free(cc_session *s);
 #endif

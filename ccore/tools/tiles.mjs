@@ -266,7 +266,7 @@ async function shellReport(H, pys, bounds) {
     if (!xs || xs.state !== 1) break;
     await sleep(100);
   }
-  log(`cross-link pass: state ${xs?.state}, ${fmt(xs?.exterior ?? 0)} of ${fmt(xs?.elements ?? 0)} elements exterior, ${fmt(xs?.ms ?? 0)} ms (waited ${fmt(performance.now() - t0x)} ms), buffers ${MB(xs?.peak ?? 0)}`);
+  log(`cross-link pass: state ${xs?.state}, ${xs?.groups} groups of overlapping links, ${fmt(xs?.exterior ?? 0)} of ${fmt(xs?.elements ?? 0)} elements exterior, ${fmt(xs?.ms ?? 0)} ms (waited ${fmt(performance.now() - t0x)} ms), buffers ${MB(xs?.peak ?? 0)}`);
   const rows = [];
   for (const cam of cams) {
     const base = `tiles_frame=1&eye=${cam.eye.join(",")}&at=${cam.at.join(",")}&fov=60&w=1920&h=1080&err=1&leaf_bytes=1`;
@@ -548,7 +548,7 @@ function mdShell(rs) {
       }
     }
     const xs = r.shell.xshell;
-    if (xs) L.push(`cross-link pass: state ${xs.state} (2 ready), ${fmt(xs.exterior)} of ${fmt(xs.elements)} elements exterior, ${fmt(xs.ms)} ms, buffers ${MB(xs.peak)}`, "");
+    if (xs) L.push(`cross-link pass: state ${xs.state} (2 ready), ${xs.groups} groups of overlapping links, ${fmt(xs.exterior)} of ${fmt(xs.elements)} elements exterior, ${fmt(xs.ms)} ms, buffers ${MB(xs.peak)}`, "");
     L.push("| camera | off | off + occ | own shells | own + occ | cross-link | cross + occ | bytes off / own / cross | links shelled (cross) | seen | missing (cross) | missing (cross + occ) |", "|---|---|---|---|---|---|---|---|---|---|---|---|");
     for (const x of r.shell.rows) L.push(`| ${x.name} | ${fmt(x.off.triangles)} | ${fmt(x.offOcc.triangles)} | ${fmt(x.on.triangles)} | ${fmt(x.onOcc.triangles)} | ${fmt(x.x.triangles)} | ${fmt(x.xOcc.triangles)} | ${MB(x.off.bytes)} / ${MB(x.on.bytes)} / ${MB(x.x.bytes)} | ${x.on.shellLinks} (${x.x.xLinks}) | ${x.seen !== undefined ? fmt(x.seen) : "-"} | ${x.missing ?? "-"} | ${x.missingOcc ?? "-"} |`);
     const ml = r.shell.rows.flatMap((x) => (x.missingList ?? []).map((m) => ({ ...m, cam: x.name })));

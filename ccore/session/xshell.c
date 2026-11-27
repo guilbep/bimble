@@ -28,6 +28,7 @@ typedef struct {
     int cancel, finished, rc;
     double ms;
     uint64_t ext, el, peak;
+    uint32_t groups; /* the overlapping groups classified (a group of one: its own shell) */
 } XJob;
 
 struct cc_xshell {
@@ -39,6 +40,7 @@ struct cc_xshell {
     uint8_t **marks;
     double ms;
     uint64_t ext, el, peak;
+    uint32_t groups;
 };
 
 static void job_free(XJob *j) {
@@ -83,29 +85,76 @@ static void job_run(void *arg) {
         q->c = j->in[i].c, q->s = j->in[i].s;
         memcpy(q->o, j->in[i].o, sizeof q->o);
     }
-    if (!rc) rc = cc_shell_start_parts(&sh, parts, j->n, &j->o, &e);
-    while (!rc && !cc_atomic_load(&j->cancel)) {
-        int st = cc_shell_step(sh, 8000000, &e);
-        if (st < 0) rc = -1;
-        if (st != 0) break;
+    /* the links in groups that overlap (their world boxes, grown by 1 m, chained): a link far from the others (another site,
+     * a georeference kilometres away) would make every view's pixel metres wide; it cannot hide them either. A group of
+     * one link: its own shell (element flag 4, the same classification). */
+    uint32_t *grp = calloc((size_t)j->n + 1, sizeof *grp), *sel = calloc((size_t)j->n + 1, sizeof *sel);
+    double (*wb)[6] = calloc((size_t)j->n + 1, sizeof *wb);
+    cc_shell_part *gp = calloc((size_t)j->n + 1, sizeof *gp);
+    if (!rc && (!grp || !sel || !wb || !gp)) rc = -1;
+    for (uint32_t i = 0; !rc && i < j->n; i++) {
+        cc_tile r;
+        cc_tiles_get(&parts[i].toc, 0, &r);
+        for (int k = 0; k < 3; k++) wb[i][k] = 1e300, wb[i][3 + k] = -1e300;
+        for (int c = 0; c < 8; c++) {
+            double p[3] = {c & 1 ? r.box[3] : r.box[0], c & 2 ? r.box[4] : r.box[1], c & 4 ? r.box[5] : r.box[2]};
+            double w3[3] = {parts[i].c * p[0] - parts[i].s * p[1] + parts[i].o[0], parts[i].s * p[0] + parts[i].c * p[1] + parts[i].o[1], p[2] + parts[i].o[2]};
+            for (int k = 0; k < 3; k++) wb[i][k] = w3[k] < wb[i][k] ? w3[k] : wb[i][k], wb[i][3 + k] = w3[k] > wb[i][3 + k] ? w3[k] : wb[i][3 + k];
+        }
+        grp[i] = i;
     }
-    if (!rc && cc_atomic_load(&j->cancel)) rc = 1;
-    if (!rc) {
-        cc_shell_stats st;
-        cc_shell_get_stats(sh, &st);
-        j->peak = st.peak_bytes;
-        for (uint32_t i = 0; !rc && i < j->n; i++) {
-            const uint8_t *ext = cc_shell_exterior_of(sh, i);
-            uint32_t nl = parts[i].toc.nlist;
-            j->marks[i] = malloc((size_t)nl + 1);
-            if (!j->marks[i]) { rc = -1; break; }
-            for (uint32_t k = 0; k < nl; k++) {
-                uint32_t r = cc_tiles_list(&parts[i].toc, k);
-                j->marks[i][k] = r < vf[i].nelements ? (uint8_t)(ext[r] != 0) : 0;
-                j->ext += j->marks[i][k], j->el++;
+    for (int changed = 1; !rc && changed;) { /* the least index of each chain of overlaps (n is small: links) */
+        changed = 0;
+        for (uint32_t a = 0; a < j->n; a++)
+            for (uint32_t b2 = a + 1; b2 < j->n; b2++) {
+                int meet = 1;
+                for (int k = 0; k < 3; k++) meet &= wb[a][k] - 1000 <= wb[b2][3 + k] && wb[b2][k] - 1000 <= wb[a][3 + k];
+                if (meet && grp[a] != grp[b2]) {
+                    uint32_t lo = grp[a] < grp[b2] ? grp[a] : grp[b2];
+                    grp[a] = grp[b2] = lo, changed = 1;
+                }
+            }
+    }
+    for (uint32_t i = 0; !rc && i < j->n; i++) {
+        j->marks[i] = malloc((size_t)parts[i].toc.nlist + 1);
+        if (!j->marks[i]) rc = -1;
+    }
+    for (uint32_t g = 0; !rc && g < j->n; g++) {
+        uint32_t ns = 0;
+        for (uint32_t i = 0; i < j->n; i++)
+            if (grp[i] == g) sel[ns] = i, gp[ns++] = parts[i];
+        if (!ns) continue;
+        j->groups++;
+        if (ns == 1) { /* alone: its own shell */
+            for (uint32_t k = 0; k < parts[sel[0]].toc.nlist; k++)
+                j->marks[sel[0]][k] = (cc_tiles_el_flags(&parts[sel[0]].toc, k) & CC_TILES_EL_EXTERIOR) != 0;
+            continue;
+        }
+        rc = cc_shell_start_parts(&sh, gp, ns, &j->o, &e);
+        while (!rc && !cc_atomic_load(&j->cancel)) {
+            int st = cc_shell_step(sh, 8000000, &e);
+            if (st < 0) rc = -1;
+            if (st != 0) break;
+        }
+        if (!rc && cc_atomic_load(&j->cancel)) rc = 1;
+        if (!rc) {
+            cc_shell_stats st;
+            cc_shell_get_stats(sh, &st);
+            if (st.peak_bytes > j->peak) j->peak = st.peak_bytes;
+            for (uint32_t q = 0; q < ns; q++) {
+                uint32_t i = sel[q];
+                const uint8_t *ext = cc_shell_exterior_of(sh, q);
+                for (uint32_t k = 0; k < parts[i].toc.nlist; k++) {
+                    uint32_t r = cc_tiles_list(&parts[i].toc, k);
+                    j->marks[i][k] = r < vf[i].nelements ? (uint8_t)(ext[r] != 0) : 0;
+                }
             }
         }
+        cc_shell_free(sh), sh = NULL;
     }
+    for (uint32_t i = 0; !rc && i < j->n; i++)
+        for (uint32_t k = 0; k < parts[i].toc.nlist; k++) j->ext += j->marks[i][k], j->el++;
+    free(grp), free(sel), free(wb), free(gp);
     if (!rc && j->file[0]) { /* kept: "XSH1", u32 1, the key (64), u32 n, per link u32 nlist and its bytes (padded to 4) */
         Buf b;
         buf_init(&b);
@@ -173,7 +222,7 @@ static uint32_t inputs(cc_session *s, const cc_shell_opts *o, XIn **out, char ke
     Buf kb;
     buf_init(&kb);
     char t[256];
-    snprintf(t, sizeof t, "shell %u %u %u;", o->views, o->res, o->tol_mm);
+    snprintf(t, sizeof t, "xshell 2 %u %u %u;", o->views, o->res, o->tol_mm); /* 2: by overlapping groups */
     buf_puts(&kb, t);
     for (size_t i = 0; i < s->nlinks; i++) {
         cc_link *l = &s->links[i];
@@ -250,7 +299,7 @@ static void take(cc_xshell *x, XJob *j) { /* a finished job's result moves to th
     }
     x->n = j->n;
     for (uint32_t i = 0; i < j->n; i++) x->uid[i] = j->in[i].uid, x->nlist[i] = j->in[i].nlist;
-    x->ms = j->ms, x->ext = j->ext, x->el = j->el, x->peak = j->peak;
+    x->ms = j->ms, x->ext = j->ext, x->el = j->el, x->peak = j->peak, x->groups = j->groups;
     x->state = 2;
 }
 
@@ -319,9 +368,9 @@ const uint8_t *cc_xshell_marks(cc_session *s, const struct cc_link *l, uint32_t 
     return NULL;
 }
 
-void cc_xshell_stats(cc_session *s, uint64_t *exterior, uint64_t *elements, double *ms, uint64_t *peak) {
+void cc_xshell_stats(cc_session *s, uint64_t *exterior, uint64_t *elements, double *ms, uint64_t *peak, uint32_t *groups) {
     cc_xshell *x = s->xshell;
-    *exterior = x ? x->ext : 0, *elements = x ? x->el : 0, *ms = x ? x->ms : 0, *peak = x ? x->peak : 0;
+    *exterior = x ? x->ext : 0, *elements = x ? x->el : 0, *ms = x ? x->ms : 0, *peak = x ? x->peak : 0, *groups = x ? x->groups : 0;
 }
 
 void cc_xshell_free(cc_session *s) {
