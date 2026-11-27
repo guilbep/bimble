@@ -77,9 +77,9 @@ static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v;
 static float rdf(const uint8_t *p) { float v; memcpy(&v, p, 4); return v; }
 
 /* ---- GPU tiles ---- */
-typedef struct { float c[3], r; uint32_t first, n, elem; } GElem;          /* a merged element: its sphere, its indices, its number */
+typedef struct { float c[3], r; uint32_t first, n, elem; float lo[3], hi[3]; } GElem; /* a merged element: its sphere, its indices, its number, its box */
 typedef struct { uint32_t first, n, firstf, copy0, ncopy, nmir; uint8_t closed; } GShape; /* firstf: reversed indices (~0 none) */
-typedef struct { float c[3], r; uint32_t plc, elem; } GCopy;
+typedef struct { float c[3], r; uint32_t plc, elem; float lo[3], hi[3]; } GCopy;
 /* Tiles live in shared PAGES (one draw covers every tile of a page): per page a buffer of merged vertices (V), indices
  * (I, every tile's), shapes' vertices (SV), placements (PL), proxies' u16 positions (P, two vertices a unit) and the
  * proxies' table (TT: box, placement, colour); a tile holds one range of each in one page. Pages grow (the first small:
@@ -397,6 +397,7 @@ nv_gtile *nv_gtile_proxy(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile
 }
 
 static int cmp_u32(const void *a, const void *b) { uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b; return x < y ? -1 : x > y; }
+static int cmp_u64(const void *a, const void *b) { uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b; return x < y ? -1 : x > y; }
 static int cmp_used(const void *a, const void *b) { uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b; return x < y ? -1 : x > y; }
 
 nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile, const uint8_t *p, size_t n, char *err, size_t errn) {
@@ -415,6 +416,7 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
     uint8_t *closed_b = calloc(nb + 1, 1);
     struct { float m[12]; uint32_t elem, b; int mir, closed; } *E = calloc(nel + 1, sizeof *E);
     nv_vec wv = {0}, wi = {0}, sv = {0}, si = {0}, plc = {0};
+    uint64_t *ord = NULL;
     int rc = -1;
     if (!g || !bm || !uses || !shape_of || !mirn || !closed_b || !E) { snprintf(err, errn, "out of memory"); goto done; }
     g->kind = 1, g->page = -1;
@@ -448,13 +450,49 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
         if (E[i].mir) mirn[b]++;
         if (E[i].closed) closed_b[b] = 1;
     }
+    /* the elements in space order (Morton order of their boxes' centres in the tile's box): the groups of occlusion_group
+     * consecutive elements are then compact, and their box tests tight (in list order a group of 32 spans the tile) */
+    ord = malloc((nel + 1) * 8);
+    if (!ord) { snprintf(err, errn, "out of memory"); goto done; }
+    {
+        float tl[3], ts3[3];
+        for (int d = 0; d < 3; d++) tl[d] = x.box[d], ts3[d] = x.box[3 + d] - x.box[d] > 1 ? x.box[3 + d] - x.box[d] : 1;
+        for (uint64_t i = 0; i < nel; i++) {
+            const cc_mesh *me = &bm[E[i].b];
+            float lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0};
+            for (uint32_t k = 0; k < me->nv; k++)
+                for (int d = 0; d < 3; d++) {
+                    float v = me->pos[k][d];
+                    if (!k || v < lo[d]) lo[d] = v;
+                    if (!k || v > hi[d]) hi[d] = v;
+                }
+            float c[3] = {(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2};
+            const float *m = E[i].m;
+            uint64_t key = 0;
+            uint32_t q[3];
+            /* the centre back in the link frame (the tile's box is there): R^T (p - off) */
+            float wx = m[0] * c[0] + m[3] * c[1] + m[6] * c[2] + m[9] - (float)ts->off[0], wy = m[1] * c[0] + m[4] * c[1] + m[7] * c[2] + m[10] - (float)ts->off[1],
+                  wz = m[2] * c[0] + m[5] * c[1] + m[8] * c[2] + m[11] - (float)ts->off[2];
+            float lp[3] = {(float)(ts->c * wx + ts->s * wy), (float)(-ts->s * wx + ts->c * wy), wz};
+            for (int d = 0; d < 3; d++) {
+                float f = (lp[d] - tl[d]) / ts3[d];
+                q[d] = f <= 0 ? 0 : f >= 1 ? 1023 : (uint32_t)(f * 1023);
+            }
+            for (int bit = 9; bit >= 0; bit--)
+                for (int d = 0; d < 3; d++) key = key << 1 | ((q[d] >> bit) & 1);
+            ord[i] = key << 32 | (uint64_t)i;
+        }
+        qsort(ord, nel, 8, cmp_u64);
+        for (uint64_t i = 0; i < nel; i++) ord[i] &= 0xFFFFFFFFull;
+    }
     /* merged: elements whose block is used fewer than 4 times, placed here; closed ones first (their own draw) */
     uint32_t nm = 0;
     for (uint64_t i = 0; i < nel; i++) nm += uses[E[i].b] < 4;
     g->el = calloc(nm + 1, sizeof *g->el);
     if (!g->el) { snprintf(err, errn, "out of memory"); goto done; }
     for (int grp = 0; grp < 2; grp++)
-        for (uint64_t i = 0; i < nel; i++) {
+        for (uint64_t o = 0; o < nel; o++) {
+            uint64_t i = ord[o];
             if (uses[E[i].b] >= 4 || E[i].closed != (grp == 0)) continue;
             const cc_mesh *me = &bm[E[i].b];
             uint32_t vb = (uint32_t)wv.n;
@@ -481,6 +519,7 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
             float r2 = 0;
             for (int d = 0; d < 3; d++) ge->c[d] = me->nv ? (lo[d] + hi[d]) / 2 : 0, r2 += me->nv ? (hi[d] - lo[d]) * (hi[d] - lo[d]) / 4 : 0;
             ge->r = sqrtf(r2), ge->first = (uint32_t)(wi.n - me->ni), ge->n = me->ni, ge->elem = E[i].elem;
+            for (int d = 0; d < 3; d++) ge->lo[d] = me->nv ? lo[d] : 0, ge->hi[d] = me->nv ? hi[d] : 0;
             if (grp == 0) g->nclosed++;
             g->tris += me->ni / 3;
         }
@@ -516,7 +555,8 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
         uint32_t *fill = calloc(ns + 1, 4), *fillm = calloc(ns + 1, 4);
         if (!fill || !fillm) { free(fill), free(fillm); snprintf(err, errn, "out of memory"); goto done; }
         float lo0[3], hi0[3];
-        for (uint64_t i = 0; i < nel; i++) {
+        for (uint64_t o = 0; o < nel; o++) {
+            uint64_t i = ord[o];
             uint32_t sidx = shape_of[E[i].b];
             if (sidx == UINT32_MAX) continue;
             GShape *sh = &g->sh[sidx];
@@ -543,6 +583,11 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
             for (int d = 0; d < 3; d++) cp->c[d] = m[d] * lc[0] + m[3 + d] * lc[1] + m[6 + d] * lc[2] + m[9 + d];
             float sc = fmaxf(fmaxf(sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]), sqrtf(m[3] * m[3] + m[4] * m[4] + m[5] * m[5])), sqrtf(m[6] * m[6] + m[7] * m[7] + m[8] * m[8]));
             cp->r = sqrtf(r2) * sc;
+            for (int d = 0; d < 3; d++) { /* the copy's box: its shape's box placed (the corners' extent along each axis) */
+                float e0 = me->nv ? (hi0[0] - lo0[0]) / 2 : 0, e1 = me->nv ? (hi0[1] - lo0[1]) / 2 : 0, e2 = me->nv ? (hi0[2] - lo0[2]) / 2 : 0;
+                float ex = fabsf(m[d]) * e0 + fabsf(m[3 + d]) * e1 + fabsf(m[6 + d]) * e2;
+                cp->lo[d] = cp->c[d] - ex, cp->hi[d] = cp->c[d] + ex;
+            }
             g->tris += me->ni / 3;
         }
         free(fill), free(fillm);
@@ -560,7 +605,7 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
     (void)cmp_u32;
 done:
     nv_vec_free(&wv), nv_vec_free(&wi), nv_vec_free(&sv), nv_vec_free(&si), nv_vec_free(&plc);
-    free(uses), free(shape_of), free(mirn), free(closed_b), free(E);
+    free(uses), free(shape_of), free(mirn), free(closed_b), free(E), free(ord);
     arena_free(&a);
     if (rc) { nv_gtile_free(dev, g); return NULL; }
     return g;
@@ -918,10 +963,10 @@ static uint32_t group_test(float lo[3], float hi[3]) {
     te->g[0] = g, te->g[1] = 0, te->g[2] = 1, te->g[3] = 0;
     return g;
 }
-static void grow_sphere(float lo[3], float hi[3], const float c[3], float r) {
-    for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], c[d] - r - 1), hi[d] = fmaxf(hi[d], c[d] + r + 1);
+static void grow_box(float lo[3], float hi[3], const float a[3], const float b[3]) { /* an element's box, 1 mm wider (f32 slack) */
+    for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], a[d] - 1), hi[d] = fmaxf(hi[d], b[d] + 1);
 }
-static uint32_t CLN = 32; /* occlusion_group: elements a group (the A/B: 8, 16, 32, 64) */
+static uint32_t CLN = 8; /* occlusion_group: elements a group (the A/B: 1, 2, 4, 8, 16, 32, 64) */
 void nv_tiles_group_size(uint32_t n) { CLN = n < 1 ? 1 : n > 256 ? 256 : n; }
 static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *cut) {
     int back = T->o.cull_back && !T->o.reference, pgi = g->page;
@@ -936,7 +981,7 @@ static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut 
             for (uint32_t i = c0; i < c1; i++) {
                 if (small(cut, g->el[i].c, g->el[i].r)) continue;
                 any = 1, seen |= seen_last(g->el[i].elem, fr);
-                grow_sphere(lo, hi, g->el[i].c, g->el[i].r);
+                grow_box(lo, hi, g->el[i].lo, g->el[i].hi);
             }
             if (!any) continue;
             grec_add(cur_slot, g, c0, c1, -1, seen ? 1 : 2, 0);
@@ -993,7 +1038,7 @@ static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut 
                     if (small(cut, g->cp[k].c, g->cp[k].r)) continue;
                     F.inst[F.ninst++] = g->off[B_PL] + g->cp[k].plc;
                     seen |= seen_last(g->cp[k].elem, fr);
-                    grow_sphere(lo, hi, g->cp[k].c, g->cp[k].r);
+                    grow_box(lo, hi, g->cp[k].lo, g->cp[k].hi);
                 }
                 uint32_t kept = F.ninst - i0;
                 if (!kept) continue;
