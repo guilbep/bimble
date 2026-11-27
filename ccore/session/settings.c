@@ -17,7 +17,7 @@ void cc_settings_default(cc_settings *s) { /* settings.rs:43-58 */
     s->moving_fps = 30;
     s->moving_proxies = 1;
     s->gpu_cull = 0;
-    s->draw_visible = 1; /* VIS1 */
+    s->draw_visible = 0; /* VIS1: off until it is exact on a real project of links (ADR 0078 amendment 7) */
     strcpy(s->edge_mode, "screen"), s->cull_back = 0, s->still_px = 0, s->refill_offscreen = 1; /* VIS1 */
     strcpy(s->theme, "grey");    /* ui_theme::THEMES[0] */
     strcpy(s->ui_font, "roboto"); /* UiFont::Roboto */
@@ -637,7 +637,7 @@ static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
         /* VIS1: the 3D view's optimisations, each once set from its default or already in the text (sorted) */
         if (k == 1 && (v->cull_back || c->has_vis1[1])) m[nm++] = (cc_settings_member){"cull_back", v->cull_back ? "true" : "false", v->cull_back ? 4u : 5u};
         /* VIS1: draw_visible, once set off or already in the text (sorted: after coordinates) */
-        if (k == 1 && (!v->draw_visible || c->has_draw_visible)) m[nm++] = (cc_settings_member){"draw_visible", v->draw_visible ? "true" : "false", v->draw_visible ? 4u : 5u};
+        if (k == 1 && (v->draw_visible || c->has_draw_visible)) m[nm++] = (cc_settings_member){"draw_visible", v->draw_visible ? "true" : "false", v->draw_visible ? 4u : 5u};
         if (k == 1 && (strcmp(v->edge_mode, "screen") || c->has_vis1[0])) m[nm++] = (cc_settings_member){"edge_mode", ej, strlen(ej)};
         if (k == 6 && (!v->refill_offscreen || c->has_vis1[3])) m[nm++] = (cc_settings_member){"refill_offscreen", v->refill_offscreen ? "true" : "false", v->refill_offscreen ? 4u : 5u};
         /* GPU1: the lab's renderer, once set or already in the text (sorted: after recent) */

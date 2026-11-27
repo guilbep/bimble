@@ -9,7 +9,7 @@
 //     camera); the picture with culling equals the one without (no pixel differs by more than 40 levels; at all: printed);
 //   - culling is used (a pyramid of this camera) and leaves triangles out: far and close cameras submit fewer triangles;
 //   - the moving frame's pyramid serves the first still frame after a stop (no frame without culling once settled);
-//   - the setting off (Settings, "Draw only what can be seen") leaves nothing out;
+//   - the setting (Settings, "Draw only what can be seen": off by default) on culls, off leaves nothing out;
 //   - the performance panel's Record gives the three numbers (drawn, left out, the triangles of what can be seen).
 // Fails on the code before VIS1: no bench.idCount, nothing left out.
 import { mkdtempSync, rmSync } from "node:fs";
@@ -91,17 +91,19 @@ async function main() {
   // the setting off from the Settings dialog (File › Settings): nothing left out; on again
   const toggle = () => d.ev(`(async () => { const raf = () => new Promise((r) => requestAnimationFrame(r)); if (!document.querySelector('[data-bb=settings-draw-visible]')) { document.querySelector('[data-bb=quickbar-file]').click(); await raf(); await raf(); document.querySelector('[data-bb=file-menu-settings]').click(); for (let i = 0; i < 20 && !document.querySelector('[data-bb=settings-draw-visible]'); i++) await raf(); }
     const c = document.querySelector('[data-bb=settings-draw-visible]'); if (!c) return null; c.click(); for (let i = 0; i < 10; i++) await raf(); return c.checked; })()`);
+  const onNow = await toggle();
+  check("Settings: Draw only what can be seen, off by default, turned on", onNow === true, String(onNow));
+  const r1 = await d.ev(`(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r)); delete g.visible; b.snap(0, 0); for (let i = 0; i < 4; i++) { await raf(); b.frame(0, false); } return { used: g.vis ? g.vis.used : null, hidden: g.vis ? g.vis.hiddenTris : null, on: g.vis ? g.vis.on : null }; })()`);
+  check("setting on: culling used, triangles left out", r1.on === true && r1.used === true && r1.hidden > 0, JSON.stringify(r1));
   const offNow = await toggle();
-  check("Settings: Draw only what can be seen, on by default, turned off", offNow === false, String(offNow));
+  check("Settings: turned off again", offNow === false, String(offNow));
   const r0 = await d.ev(`(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r)); b.snap(0, 0); for (let i = 0; i < 4; i++) { await raf(); b.frame(0, false); } return { used: g.vis ? g.vis.used : null, hidden: g.vis ? g.vis.hiddenTris : null, on: g.vis ? g.vis.on : null }; })()`);
   check("setting off: nothing left out", r0.used === false && r0.hidden === 0 && r0.on === false, JSON.stringify(r0));
-  const onNow = await toggle();
-  check("Settings: turned on again", onNow === true, String(onNow));
   await d.ev(`(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); return 0; })()`);
   await d.gesture(["sleep 300"]);
 
   // the panel's numbers, behind Record
-  const rep = await d.ev(`(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r)); b.snap(0, 0); for (let i = 0; i < 4; i++) { await raf(); b.frame(0, false); } window.__bbPerf.record(); return window.__bbPerf.report(false, null); })()`);
+  const rep = await d.ev(`(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r)); g.visible = true; b.snap(0, 0); for (let i = 0; i < 4; i++) { await raf(); b.frame(0, false); } window.__bbPerf.record(); return window.__bbPerf.report(false, null); })()`);
   const seen = /drawn ([\d,]+) triangles; ([\d,]+) belong to the ([\d,]+) elements you can see/.exec(rep), hid = /left out as hidden behind the last picture: ([\d,]+) triangles/.exec(rep);
   check("the report: drawn, left out as hidden, and the triangles of what can be seen", !!seen && !!hid && Number(hid[1].replace(/,/g, "")) > 0, `${seen?.[0]} | ${hid?.[0]}`);
   console.log(`lab_visible: ${passed} passed, ${failed} failed (LAB_GPU=${LAB_GPU}, ${d.gpu?.renderer})`);

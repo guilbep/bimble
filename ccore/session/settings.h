@@ -41,7 +41,7 @@ typedef struct {
     int moving_proxies;   /* true */
     int gpu_cull;         /* false */
     /* VIS1 (ADR 0078 amendment 7): the lab's 3D view leaves out what the last picture hides ("Draw only what can be
-     * seen", true). Not one of Rust's fields: not in to_json, written to the file only once set (as renderer). */
+     * seen", false: exact on the synthetic sweep, not yet on a real project of links). Not one of Rust's fields: not in to_json, written to the file only once set (as renderer). */
     int draw_visible;
     /* VIS1 (the owner: every optimisation a setting, a good default and an exact value): the 3D view's edges
      * ("screen": found on screen, "lines": every element's edge lines, "none"); back faces culled (false: a shape

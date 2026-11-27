@@ -1537,8 +1537,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const multiDraw = gl.getExtension("WEBGL_multi_draw"); // VIS1: the ranges that may be seen in one call
   // VIS1: the depth pyramid of the last picture (gl/hiz.ts) and its key: what it is valid for
   const hiz = (() => { try { return tgt ? hizBuilder(gl) : null; } catch (e) { console.warn("hiz:", e); return null; } })();
-  const visibleOn = () => stats.visible !== false && (userSettings.value?.values.draw_visible ?? true); // (the setting; a bench hook)
-  const visKeyOf = (key: string, box: unknown) => `${key}|${canvas.width}x${canvas.height}|${visGen}|${listsGen}|${JSON.stringify(box)}|${state.value.links ?? 0}`;
+  // (the setting, off by default until exact on a real project of links; the bench hook `visible` overrides it either way)
+  const visibleOn = () => stats.visible !== undefined ? stats.visible : (userSettings.value?.values.draw_visible ?? false);
+  // (detailGen: a link's detail loaded or released, element boxes placed: the pyramid and the masks made before are stale)
+  const visKeyOf = (key: string, box: unknown) => `${key}|${canvas.width}x${canvas.height}|${visGen}|${listsGen}|${JSON.stringify(box)}|${state.value.links ?? 0}|${detailGen}`;
   /** Edges found on screen: in 3D (not in a plan, where the drawing's lines stay), with the target, unless a bench hook asks the line pass. */
   const screenEdgesNow = () => !!tgt && !plan && stats.lineEdges !== true && opt().edge_mode === "screen" && pressed("edges", true) && !stats.noEdges;
   /** VIS1: the 3D view's optimisations as stored (the owner: each a setting with a good default and an exact value). */
@@ -1852,7 +1854,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** LNK3D: per element its box in its model's own frame; the GPU bytes of the element ids. */
   let lboxes = new Float32Array(0), elBytes = 0;
   /** LNK3D: link elements [a, b) placed by x: their scene boxes from their own. */
-  const placeLinkBoxes = (a: number, b: number, x: ModelXf) => { for (let e = a; e < b; e++) xfBox(x, lboxes, 6 * e, boxes, 6 * e); };
+  const placeLinkBoxes = (a: number, b: number, x: ModelXf) => { detailGen++; for (let e = a; e < b; e++) xfBox(x, lboxes, 6 * e, boxes, 6 * e); };
+  /** VIS1: bumped when a link's detail comes or goes, or element boxes are placed (part of the visible set's key). */
+  let detailGen = 0;
   let meshBytes = 0, listBytes = 0; // 3D1: the model's GPU bytes (stats.gpuBytes)
   // ---- LNK3D (D): a model's slot: its ranges in the mesh, its GPU buffers (null: released), its draw lists
   // (kept in the page: a release frees the GPU's copy only), when it was last needed and its GPU bytes ----
@@ -1900,6 +1904,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   /** Uploads slot x's mesh (and its lists, when made) into new buffers (SIZE2: from its heavy arrays; false: dropped). */
   const loadSlot = (x: Slot): boolean => {
+    detailGen++; // VIS1
     const m = mesh, P = partOf(x.k);
     if (!m || !P) return false;
     if (!x.gl) x.gl = makeModelGl();
@@ -2009,6 +2014,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const gpuNow = () => slots.reduce((n, x) => n + x.bytes, 0) + 4 * STATE_TEX_W * stateRows + prxBytes + [...linkPrx.values()].reduce((n, x) => n + x.bytes, 0);
   /** Frees slot x's GPU buffers (its proxies, when it has some, stand for it). */
   const releaseSlot = (x: Slot) => {
+    detailGen++; // VIS1
     if (!x.gl) return;
     freeModelGl(x.gl);
     x.gl = null, x.bytes = 0, x.listsOnGpu = false;
@@ -2542,6 +2548,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     stats.listsBuilt = (stats.listsBuilt ?? 0) + 1;
     elDb = new Int32Array(m.ids.length).fill(-1);
     dbs.forEach((d, i) => { for (const e of d.items) elDb[e] = i; });
+    // VIS1: each batch's box from its items' boxes as they are now (a link's batches are kept from its first list,
+    // made before its boxes were placed: the frustum's test then left out elements on screen)
+    for (const d of dbs) {
+      const bx = d.b.box;
+      bx.set([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+      for (const e of d.items) for (let a = 0; a < 3; a++) bx[a] = Math.min(bx[a]!, boxes[6 * e + a]!), bx[3 + a] = Math.max(bx[3 + a]!, boxes[6 * e + 3 + a]!);
+    }
     applyVisibility();
   };
   /** The box that cuts now: the drag's preview, else the session's box when it is on. */

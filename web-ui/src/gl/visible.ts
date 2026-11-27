@@ -14,8 +14,9 @@ export interface VisBatch { b: { n: number; box: Float32Array; cum: Uint32Array 
 export function maskBatch(p: Pyramid, d: VisBatch, boxes: Float32Array, shown: Uint8Array, tris: (i: number) => number): { items: number; tris: number } {
   const n = d.b.n, mask = d.vmask && d.vmask.length === n ? d.vmask : new Uint8Array(n);
   let items = 0, t = 0;
-  if (boxHidden(p, d.b.box, 0)) { mask.fill(0); items = n; for (let i = 0; i < n; i++) t += tris(i); }
-  else for (let i = 0; i < n; i++) {
+  // (each item by its own box: a batch's box is kept from when its list was made, and on a project of links it was found
+  // stale against its items' boxes: a whole batch left out while its elements showed)
+  for (let i = 0; i < n; i++) {
     const e = d.items[i]!;
     const on = shown[e]! > 0 && !boxHidden(p, boxes, 6 * e);
     mask[i] = on ? 1 : 0;
