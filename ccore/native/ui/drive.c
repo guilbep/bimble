@@ -15,6 +15,9 @@
  *   eye <link name> on|off                          a link's eye
  *   shot <file.png> | report <file.txt>             the window's picture / the Performance report
  *   copy_report                                     Performance › Copy (the clipboard, and a file: its path checked)
+ *   box_handle <face> <dx> <dy> <ms>                a drag of the section box's handle on that face (0 -x .. 5 +z), found where it is
+ *                                                   drawn, by (dx, dy) logical px
+ *   expect_box_moved <face> <mm>                    that face moved by at least mm since the last box_handle
  *   expect_selected <GlobalId> | expect_link <name> | expect_none
  *   expect_measure <mm> <tol> | expect_hidden <n> | expect_parts <n> | expect_text <key> <text>
  *   quit
@@ -39,6 +42,8 @@ static int fails;
 static double step_t0 = -1, last_ev, press_x, press_y, cur_x, cur_y;
 static int frames_left, held;
 static double t_first_input;
+static double box_before[2];
+static nv_camera cam_before;
 
 static void outpath(App *a, char *o, size_t n, const char *name) {
     if (name[0] == '/') snprintf(o, n, "%s", name);
@@ -90,7 +95,7 @@ int drive_setup(App *a) {
     outpath(a, pth, sizeof pth, "memory.csv");
     a->mlog = fopen(pth, "w");
     if (!a->flog || !a->ilog || !a->mlog) { fprintf(stderr, "bimble: cannot write in %s\n", a->out_dir ? a->out_dir : "."); return -1; }
-    fprintf(a->flog, "t_ms,kind,frame_ms,ui_ms,triangles,draws\n");
+    fprintf(a->flog, "t_ms,kind,frame_ms,ui_ms,triangles,draws,tiles,logic_ms,acquire_ms,uibuild_ms,rec3d_ms,recui_ms,gpu_ms,missing\n");
     fprintf(a->ilog, "t_ms,what,app_ms,frame_ms\n");
     fprintf(a->mlog, "t_ms,rss_mb,gpu_mb\n");
     if (a->preset) {
@@ -196,6 +201,37 @@ static int run_step(App *a, Step *s, double now) {
                 else press_x = tx, press_y = ty;
                 return 1;
             }
+        }
+        return 0;
+    }
+    if (!strcmp(op, "box_handle")) { /* box_handle <face 0..5> <dx px> <dy px> <ms>: a held drag of that face's handle, found where it is drawn */
+        int f = 0;
+        float dx = 0, dy = 0;
+        sscanf(arg, "%d %f %f %lf", &f, &dx, &dy, &ms);
+        if (f < 0 || f > 5) f = 0;
+        double m[3] = {(a->box_min[0] + a->box_max[0]) / 2, (a->box_min[1] + a->box_max[1]) / 2, (a->box_min[2] + a->box_max[2]) / 2}, q[2];
+        m[f / 2] = f % 2 ? a->box_max[f / 2] : a->box_min[f / 2];
+        if (step_t0 == now) {
+            if (!a->box_on || !nv_cam_project(&a->cam, m, a->vw, a->vh, q)) { expect(a, 0, "box_handle: no section box, or its handle behind the eye"); return 1; }
+            box_before[0] = a->box_min[f / 2], box_before[1] = a->box_max[f / 2];
+            x = a->vx + (float)q[0], y = a->vy + (float)q[1];
+            if (q[0] < 0 || q[1] < 0 || q[0] >= a->vw || q[1] >= a->vh) {
+                char what[160]; snprintf(what, sizeof what, "box_handle: the handle of face %d is off the view (%.0f, %.0f)", f, q[0], q[1]);
+                expect(a, 0, what);
+                return 1;
+            }
+            push_mouse(a, SDL_EVENT_MOUSE_MOTION, x, y, 0, 0);
+            held = 1, press_x = x, press_y = y;
+            push_mouse(a, SDL_EVENT_MOUSE_BUTTON_DOWN, x, y, 0, SDL_BUTTON_LEFT);
+            last_ev = now;
+            return 0;
+        }
+        if (now - last_ev >= 1000.0 / 60) {
+            double k = ms > 0 ? (now - step_t0) / ms : 1;
+            if (k > 1) k = 1;
+            push_mouse(a, SDL_EVENT_MOUSE_MOTION, (float)(press_x + dx * a->scale * k), (float)(press_y + dy * a->scale * k), 0, 0);
+            last_ev = now;
+            if (k >= 1) { push_mouse(a, SDL_EVENT_MOUSE_BUTTON_UP, (float)(press_x + dx * a->scale), (float)(press_y + dy * a->scale), 0, SDL_BUTTON_LEFT), held = 0; return 1; }
         }
         return 0;
     }
@@ -315,6 +351,37 @@ static int run_step(App *a, Step *s, double now) {
         expect(a, a->selected && !strcmp(a->sel_link, arg), what);
         return 1;
     }
+    if (!strcmp(op, "expect_box_moved")) { /* expect_box_moved <face> <at least mm>: that face moved since the last box_handle */
+        int f = 0;
+        double mm = 1;
+        sscanf(arg, "%d %lf", &f, &mm);
+        if (f < 0 || f > 5) f = 0;
+        double now_v = f % 2 ? a->box_max[f / 2] : a->box_min[f / 2], was = box_before[f % 2];
+        snprintf(what, sizeof what, "the section box's face %d moved by at least %.0f mm (from %.1f to %.1f: %.1f mm; box on %d)", f, mm, was, now_v, fabs(now_v - was), a->box_on);
+        expect(a, a->box_on && fabs(now_v - was) >= mm, what);
+        return 1;
+    }
+    if (!strcmp(op, "click_cube")) { /* a click on the view cube's centre (its face toward the eye) */
+        cam_before = a->cam;
+        x = a->vx + a->vw - 60 * a->scale, y = a->vy + 60 * a->scale;
+        push_mouse(a, SDL_EVENT_MOUSE_MOTION, x, y, 0, 0);
+        push_mouse(a, SDL_EVENT_MOUSE_BUTTON_DOWN, x, y, 0, SDL_BUTTON_LEFT);
+        push_mouse(a, SDL_EVENT_MOUSE_BUTTON_UP, x, y, 0, SDL_BUTTON_LEFT);
+        return 1;
+    }
+    if (!strcmp(op, "expect_view_changed")) {
+        int ch = fabs(a->cam.yaw - cam_before.yaw) > 1e-6 || fabs(a->cam.pitch - cam_before.pitch) > 1e-6 || a->cam.ortho != cam_before.ortho;
+        snprintf(what, sizeof what, "the view cube turned the view (yaw %.3f -> %.3f, pitch %.3f -> %.3f)", cam_before.yaw, a->cam.yaw, cam_before.pitch, a->cam.pitch);
+        expect(a, ch, what);
+        return 1;
+    }
+    if (!strcmp(op, "expect_box")) { /* expect_box on|off */
+        int want = !strcmp(arg, "on");
+        snprintf(what, sizeof what, "the section box %s (got %s; min %.0f %.0f %.0f max %.0f %.0f %.0f)", arg, a->box_on ? "on" : "off", a->box_min[0], a->box_min[1], a->box_min[2],
+                 a->box_max[0], a->box_max[1], a->box_max[2]);
+        expect(a, a->box_on == want, what);
+        return 1;
+    }
     if (!strcmp(op, "expect_none")) { expect(a, !a->selected, "nothing selected"); return 1; }
     if (!strcmp(op, "expect_measure")) {
         double mm = 0, tol = 1;
@@ -341,7 +408,7 @@ static int run_step(App *a, Step *s, double now) {
     }
     if (!strcmp(op, "expect_parts")) {
         int want = atoi(arg), det = 0;
-        for (int i = 0; i < a->nlinks; i++) det += a->links_s[i].detail != NULL;
+        for (int i = 0; i < a->nlinks; i++) det += a->links_s[i].detail != NULL || (a->links_s[i].ts && nv_tileset_resident(a->links_s[i].ts) > 0);
         snprintf(what, sizeof what, "%d links drawn in detail (got %d of %d)", want, det, a->nlinks);
         expect(a, det == want, what);
         return 1;
@@ -365,6 +432,10 @@ static int run_step(App *a, Step *s, double now) {
         return 1;
     }
     if (!strcmp(op, "quit")) { a->quit = 1; return 1; }
+    if (!strcmp(op, "crash") && getenv("BIMBLE_TEST_CRASH")) { /* the crash handler's test (native_app_test, symbolize.sh): a fault on purpose */
+        volatile int *volatile nowhere = NULL;
+        return *nowhere;
+    }
     snprintf(what, sizeof what, "unknown step \"%s\"", op);
     expect(a, 0, what);
     return 1;
@@ -388,8 +459,9 @@ void drive_frame(App *a, double now, int drew3d) {
     if (a->rec_until && now >= a->rec_until) a->rec_until = 0, a->rec_done = 1;
     if (!a->flog) return;
     nv_render_stats st = nv_render_get_stats(a->r);
-    fprintf(a->flog, "%.1f,%s,%.3f,%.3f,%llu,%u\n", now - a->t_start, drew3d ? (a->moving ? "moving" : "still") : "ui", drew3d ? a->frame_ms : a->gpu_ms,
-            a->ui_ms, (unsigned long long)st.tris, st.draws);
+    fprintf(a->flog, "%.1f,%s,%.3f,%.3f,%llu,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d\n", now - a->t_start, drew3d ? (a->moving ? "moving" : "still") : "ui",
+            drew3d ? a->frame_ms : a->gpu_ms, a->ui_ms, (unsigned long long)st.tris, st.draws, st.tiles, a->st_logic, a->st_acquire, a->st_ui, a->st_rec3d,
+            a->st_recui, a->st_gpu, a->truth_missing);
     if (now >= a->next_mem) {
         uint64_t peak = 0, rss = app_rss(&peak);
         fprintf(a->mlog, "%.0f,%.1f,%.1f\n", now - a->t_start, rss / 1e6, st.gpu_bytes / 1e6);
@@ -429,6 +501,7 @@ static void pct(double *v, int n, double *med, double *p95, double *mx) {
 void drive_finish(App *a) {
     if (!a->flog) return;
     if (a->sdl_asserts) expect(a, 0, "no SDL assertion during the run (see stderr)");
+    { Buf rb; buf_init(&rb); perf_report(a, &rb); buf_free(&rb); } /* the settings' line, as the report says it */
     fclose(a->flog), fclose(a->ilog), fclose(a->mlog);
     a->flog = a->ilog = a->mlog = NULL;
     char p[1200];
@@ -436,15 +509,33 @@ void drive_finish(App *a) {
            *ap = malloc(sizeof(double) * 200000);
     int nm = 0, ns = 0, ni = 0;
     if (!mv || !st || !in || !ap) { free(mv), free(st), free(in), free(ap); return; }
+    /* NUI2: the moving frames' stages, triangles and tiles; the still frames' triangles; the truth test's missing ids */
+    enum { NSTAGE = 6 };
+    double *stg[NSTAGE], *tri_m = malloc(sizeof(double) * 200000), *tri_s = malloc(sizeof(double) * 200000), *til = malloc(sizeof(double) * 200000);
+    for (int k = 0; k < NSTAGE; k++) stg[k] = malloc(sizeof(double) * 200000);
+    long miss_total = 0;
+    int miss_frames = 0, truth_frames = 0, nst = 0;
     outpath(a, p, sizeof p, "frames.csv");
     FILE *f = fopen(p, "r");
     char line[400];
     while (f && fgets(line, sizeof line, f)) {
         double t, fm;
         char kind[16];
-        if (sscanf(line, "%lf,%15[^,],%lf", &t, kind, &fm) != 3) continue;
-        if (!strcmp(kind, "moving") && nm < 200000) mv[nm++] = fm;
-        if (!strcmp(kind, "still") && ns < 200000) st[ns++] = fm;
+        double um, tr, dr, ti, sv[NSTAGE];
+        int miss = -1;
+        if (sscanf(line, "%lf,%15[^,],%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%d", &t, kind, &fm, &um, &tr, &dr, &ti, &sv[0], &sv[1], &sv[2], &sv[3], &sv[4], &sv[5],
+                   &miss) < 3) continue;
+        if (!strcmp(kind, "moving") && nm < 200000) {
+            for (int k = 0; k < NSTAGE && stg[k]; k++) stg[k][nm] = sv[k];
+            if (tri_m) tri_m[nm] = tr;
+            if (til) til[nm] = ti;
+            mv[nm++] = fm, nst = nm;
+        }
+        if (!strcmp(kind, "still") && ns < 200000) {
+            if (tri_s) tri_s[ns] = tr;
+            st[ns++] = fm;
+        }
+        if (miss >= 0) truth_frames++, miss_total += miss, miss_frames += miss > 0;
     }
     if (f) fclose(f);
     outpath(a, p, sizeof p, "inputs.csv");
@@ -477,10 +568,30 @@ void drive_finish(App *a) {
         fprintf(f, "| memory peak / now | %.0f / %.0f MB |\n| GPU | %.0f MB |\n", peak / 1e6, rss / 1e6, rs.gpu_bytes / 1e6);
         fprintf(f, "| triangles / draws (last frame) | %llu / %u |\n| links drawn | %d |\n| /proc/loadavg | %s |\n", (unsigned long long)rs.tris, rs.draws, a->nlinks, load);
         fprintf(f, "| expectations failed | %d |\n| SDL assertions | %u |\n", fails, a->sdl_asserts);
+        { /* NUI2 */
+            double m5, p5, x5, m6, p6, x6, m7, p7, x7, sm[NSTAGE], sp[NSTAGE], sx[NSTAGE];
+            pct(tri_m, tri_m ? nm : 0, &m5, &p5, &x5), pct(tri_s, tri_s ? ns : 0, &m6, &p6, &x6), pct(til, til ? nm : 0, &m7, &p7, &x7);
+            for (int k = 0; k < NSTAGE; k++) pct(stg[k], stg[k] ? nst : 0, &sm[k], &sp[k], &sx[k]);
+            double gmax = 0;
+            outpath(a, p, sizeof p, "memory.csv");
+            FILE *mf = fopen(p, "r");
+            while (mf && fgets(line, sizeof line, mf)) {
+                double t, r, g;
+                if (sscanf(line, "%lf,%lf,%lf", &t, &r, &g) == 3 && g > gmax) gmax = g;
+            }
+            if (mf) fclose(mf);
+            fprintf(f, "| triangles moving / still (median) | %.0f / %.0f |\n| tiles drawn moving (median) | %.0f |\n| GPU peak | %.0f MB |\n", m5, m6, m7, gmax);
+            fprintf(f, "| moving frame by stage, median ms: logic / acquire / UI build / 3D record / UI record / GPU | %.2f / %.2f / %.2f / %.2f / %.2f / %.2f |\n", sm[0], sm[1], sm[2], sm[3],
+                    sm[4], sm[5]);
+            fprintf(f, "| truth test: frames, with ids missing, ids missing | %d / %d / %ld |\n", truth_frames, miss_frames, miss_total);
+            fprintf(f, "| settings | %s |\n", a->settings_line);
+            if (truth_frames && miss_total) expect(a, 0, "the truth test: no element missing with occlusion");
+        }
         fclose(f);
     }
     fprintf(stderr, "drive: summary: first %.0f ms, complete %.0f ms, moving %.1f/%.1f ms, still %.1f/%.1f ms, input->frame %.1f/%.1f/%.1f ms, app %.1f/%.1f/%.1f ms, peak %.0f MB, %d failed\n",
             a->t_first_picture ? a->t_first_picture - a->t_start : -1.0, a->t_complete ? a->t_complete - a->t_start : -1.0, m1, p1, m2, p2, m3, p3, x3, m4, p4, x4,
             peak / 1e6, fails);
-    free(mv), free(st), free(in), free(ap);
+    free(mv), free(st), free(in), free(ap), free(tri_m), free(tri_s), free(til);
+    for (int k = 0; k < NSTAGE; k++) free(stg[k]);
 }

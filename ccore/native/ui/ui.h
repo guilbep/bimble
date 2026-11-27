@@ -78,6 +78,9 @@ typedef struct {
     int has_box;
     uint64_t tris;
     double t_ready, t_proxy, t_detail, load_ms;
+    nv_tileset *ts;      /* NUI2: drawn by tiles (its cache's section TILE); NULL: as parts */
+    char (*ids)[22];     /* its elements' GlobalIds (tiles: no part holds them) */
+    int tiles_inflight;
 } SLink;
 
 typedef struct App App;
@@ -224,6 +227,19 @@ struct App {
     int resize_i, resize_wait;
     uint32_t resize_w, resize_h; /* the virtual swapchain's next size (applied a frame after the window's) */
     char notice_path[1200];      /* the last report saved (Performance) */
+    /* NUI2: the last frame's time by stage (ms): the app's logic (core, loader results, the walk), the swapchain's
+     * wait, the UI's build, the 3D frame's recording (CPU), the UI's recording, the GPU (submit -> fence) */
+    double st_logic, st_acquire, st_ui, st_rec3d, st_recui, st_gpu;
+    unsigned bench_skip;
+    /* NUI2: the tile path (renderer_path=tiles), its options, the tile jobs on their way */
+    int use_tiles;
+    nv_tiles_opts topts;
+    int tile_jobs;
+    uint64_t tri_live;           /* the moving budget's triangles for the walker (0: none) */
+    double tiles_checked;
+    int truth;                   /* --truth: each 3D frame drawn with and without occlusion, the id buffers compared */
+    char settings_line[600];     /* the optimisations in force (the report's line, for the summary) */
+    int truth_missing;           /* the truth test: element ids missing from this frame with occlusion (-1: not tested) */
 };
 
 /* core.c */
@@ -321,6 +337,8 @@ void nset_load(App *a);
 const char *nset_get(const char *key);
 double nset_num(const char *key, double dflt);
 void nset_set(const char *key, const char *json, int run);
+/* compare.c */
+int compare_main(int argc, char **argv);
 /* app.c */
 void app_fit(App *a);
 double app_now(void);

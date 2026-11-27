@@ -213,8 +213,80 @@ quit
     `${sdir} ${slog.split("\n").length} lines`);
   check("session log: frames.csv, report.txt and the copied report's file", existsSync(join(sdir, "frames.csv")) && existsSync(join(sdir, "report.txt")) && /drive: copy_report: .*report-.*\.txt/.test(r5.err),
     (r5.err.match(/drive: copy_report: .*/) ?? [""])[0].slice(0, 200));
+  // the same sizes with no session log (the offscreen default) and with a folder it cannot write: no crash, no assertion
+  // (a fault of the logging path at exit, found by ASan before 25d96e7, is what these guard)
+  const ro = join(tmp, "readonly");
+  mkdirSync(ro), execFileSync("chmod", ["0500", ro]);
+  for (const [name, envx] of [["resize-nolog", {}], ["resize-rolog", { BIMBLE_LOG_DIR: join(ro, "sessions") }]]) {
+    const rr = run(name, "wait complete\nframes 25\nreport report.txt\nquit\n", fixture, ["--resize-script", "1280x720,1600x900,640x400,373x198,1920x1080,800x600,1280x720"], envx);
+    check(`${name}: exits 0, no signal, no SDL assertion`, rr.code === 0 && !rr.signal && !/SDL assertion/.test(rr.err), `${rr.code} ${rr.signal ?? ""} ${rr.err.trim().split("\n").slice(-2).join(" | ")}`);
+  }
+  execFileSync("chmod", ["0700", ro]);
   const small = spawnSync(BIN, ["--offscreen", "--size", "373x198", "--quit-after", "2", "--config-dir", conf, fixture], { env, encoding: "utf8", timeout: 60000 });
   check("--size 373x198 works (a window smaller than the panels)", small.status === 0, `${small.status} ${(small.stderr ?? "").trim().split("\n").slice(-1)}`);
+
+  // ---- 3c. NUI2: the pointer tools at scale 1 and 2, after resizes, the view offset by the panels: the section box's
+  // handles dragged (found where they are drawn: the owner could not size the box; every press was refused), Box to
+  // selection, a pick, Measure, the view cube ----
+  const pointer = `
+wait complete
+frames 3
+action section_box
+frames 5
+expect_box on
+box_handle 5 0 -60 400
+frames 5
+expect_box_moved 5 100
+box_handle 1 80 0 400
+frames 5
+expect_box_moved 1 100
+action section_box
+frames 3
+click_world 9000 5000 5780
+frames 3
+expect_selected ${TOP}
+action box_to_selection
+frames 3
+expect_box on
+key escape
+frames 2
+action measure
+frames 2
+click_world -100 -100 5780
+frames 2
+click_world 18100 -100 5780
+frames 3
+expect_measure 18300 1.5
+key escape
+frames 2
+click_cube
+frames 3
+expect_view_changed
+quit
+`;
+  for (const [name, extra] of [["pointer-s1", ["--scale", "1"]], ["pointer-s2", ["--scale", "2", "--size", "900x560"]], ["pointer-resized", ["--resize-script", "1280x720,1600x900,1100x700"]]]) {
+    const rp = run(name, pointer, fixture, extra);
+    check(`${name}: exits 0, no signal`, rp.code === 0 && !rp.signal, `${rp.code} ${rp.signal ?? ""} ${rp.err.trim().split("\n").slice(-2).join(" | ")}`);
+    expectations(name, rp);
+  }
+  const rpl = run("pointer-links", `
+open :new
+wait 300
+link_folder ${join(tmp, "links")}
+wait complete
+frames 3
+action fit
+frames 3
+action section_box
+frames 5
+expect_box on
+box_handle 5 0 -60 400
+frames 5
+expect_box_moved 5 50
+quit
+`, null, ["--scale", "2", "--size", "900x560"], { BIMBLE_LINK_CACHE_MIN: "0" });
+  check("pointer-links: exits 0", rpl.code === 0 && !rpl.signal, `${rpl.code} ${rpl.signal ?? ""}`);
+  expectations("pointer-links", rpl);
 
   // ---- 4. malformed files: the core's error, never a crash ----
   const bad = join(tmp, "bad");

@@ -317,16 +317,62 @@ static void settings_dialog(App *a) {
  * The cull pass (frustum and screen-size cut of every element on the GPU) is how this renderer draws: no
  * setting, always on (the lab's gpu_cull is WebGPU's culling of copies, not this). ---- */
 #define LINK_GPU_OFF 65536
+/* NUI2: an optimisation's value: the session's settings when they know the key (the web lab's: VIS1 adds draw_visible,
+ * still_px, cull_back), else the app's own (native.json, a run's --set), else the default */
+static double opt_num(App *a, const char *key, double dflt) {
+    const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL, *x = v ? jr_get(v, key) : NULL;
+    double run = nset_num(key, NAN);
+    const char *nv = nset_get(key);
+    if (!isnan(run) && nv) return run; /* a run's --set or the app's own file first: the A/B runs set any key */
+    if (x && x->type == JR_NUM) return x->num;
+    if (x && x->type == JR_BOOL) return x->b;
+    return dflt;
+}
+static int opt_str_is(const char *key, const char *val, int dflt) {
+    const char *v = nset_get(key);
+    if (!v) return dflt;
+    size_t n = strlen(val);
+    return v[0] == '"' && !strncmp(v + 1, val, n) && v[n + 1] == '"';
+}
+/* the defaults (ADR 0084 amendment, NUI2: from the A/B tables) */
+#define D_ERROR_PX 1.0
+#define D_STILL_PX 0.0
+#define D_CULL_BACK 0
+#define D_OCCLUSION 1
+#define D_TILES 0
 void optimisations_apply(App *a) {
     const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL;
-    a->moving_fps = (int)jnum(v, "moving_fps", 30);
+    a->moving_fps = (int)opt_num(a, "moving_fps", 30);
     a->adaptive = a->moving_fps > 0;
     a->hlod = !v || !jr_get(v, "moving_proxies") || jb(v, "moving_proxies");
+    if (nset_get("moving_proxies")) a->hlod = nset_num("moving_proxies", 1) != 0;
     nv_render_set_hlod(a->r, a->hlod, 0);
     const char *g = getenv("BIMBLE_LINK_GPU_MB"); /* a run's own */
-    double mb = g && *g ? atof(g) : jnum(v, "link_gpu_mb", 768);
+    double mb = g && *g ? atof(g) : opt_num(a, "link_gpu_mb", 768);
     a->gpu_budget = mb >= LINK_GPU_OFF ? 0 : (uint64_t)(mb * 1048576.0);
+    int tiles = opt_str_is("renderer_path", "tiles", D_TILES); /* parts until the tiles win everywhere (the ticket's rule) */
+    if (tiles != a->use_tiles) a->use_tiles = tiles, a->links_synced = -1;
+    a->topts.occlusion = opt_num(a, "draw_visible", D_OCCLUSION) != 0;
+    a->topts.error_px = opt_num(a, "error_px", D_ERROR_PX);
+    a->topts.lod = opt_num(a, "lod", 1) != 0 && a->topts.error_px > 0;
+    a->topts.cull_back = opt_num(a, "cull_back", D_CULL_BACK) != 0;
+    a->topts.budget = a->gpu_budget;
+    a->still_cut = (float)opt_num(a, "still_px", D_STILL_PX);
+    if (a->still_cut < 0) a->still_cut = 0;
     a->dirty = 1;
+}
+
+/* a setting changed from the panel: the session's when it knows the key, else the app's own */
+static void set_opt(App *a, const char *key, const char *json) {
+    char b[200];
+    snprintf(b, sizeof b, "{\"%s\":%s}", key, json);
+    Buf o;
+    buf_init(&o);
+    int st = core_call(a, "action", "set_settings", b, &o);
+    buf_free(&o);
+    if (st == CC_OK) core_query(a, "settings", NULL, &a->settings);
+    nset_set(key, json, 0);
+    optimisations_apply(a);
 }
 
 void optimisations_ui(App *a) {
@@ -365,16 +411,39 @@ void optimisations_ui(App *a) {
     }
     bool ed = nv_render_edges(a->r) != NV_EDGES_NONE;
     if (igCheckbox(T(a, "native.edgesScreen"), &ed)) tool_run_action(a, "edges");
+    /* NUI2: the tile path's */
+    bool tl = a->use_tiles;
+    if (igCheckbox(T(a, "native.opt.tiles"), &tl)) set_opt(a, "renderer_path", tl ? "\"tiles\"" : "\"parts\"");
+    if (a->use_tiles) {
+        bool oc = a->topts.occlusion, lod = a->topts.lod, cb = a->topts.cull_back;
+        if (igCheckbox(T(a, "native.opt.occlusion"), &oc)) set_opt(a, "draw_visible", oc ? "true" : "false");
+        if (igCheckbox(T(a, "native.opt.lod"), &lod)) set_opt(a, "lod", lod ? "true" : "false");
+        if (igCheckbox(T(a, "native.opt.cullBack"), &cb)) set_opt(a, "cull_back", cb ? "true" : "false");
+        float e = (float)a->topts.error_px, m = a->still_cut;
+        igSetNextItemWidth(200 * s);
+        igSliderFloat(T(a, "native.opt.errorPx"), &e, 0, 8, "%.1f px", 0);
+        if (igIsItemDeactivatedAfterEdit()) { char q[32]; snprintf(q, sizeof q, "%.2f", e); set_opt(a, "error_px", q); }
+        igSetNextItemWidth(200 * s);
+        igSliderFloat(T(a, "native.opt.stillPx"), &m, 0, 8, "%.1f px", 0);
+        if (igIsItemDeactivatedAfterEdit()) { char q[32]; snprintf(q, sizeof q, "%.2f", m); set_opt(a, "still_px", q); }
+    }
     igTextColored(col4(C_STONE), "%s", T(a, "native.cullAlways"));
 }
 
 static void optimisations_report(App *a, Buf *b) {
-    char t[400];
+    char t[900];
     snprintf(t, sizeof t, "optimisations: moving budget (moving_fps) %s; far parts as proxies (moving_proxies) %s; links' GPU budget (link_gpu_mb) %s; edges (action edges) %s; cull pass on the GPU (no setting) on\n",
              a->moving_fps > 0 ? (snprintf(t + 300, 40, "%d fps", a->moving_fps), t + 300) : "off", a->hlod ? "on" : "off",
              a->gpu_budget ? (snprintf(t + 340, 40, "%llu MB", (unsigned long long)(a->gpu_budget >> 20)), t + 340) : "off (no limit)",
              nv_render_edges(a->r) == NV_EDGES_SCREEN ? "screen" : nv_render_edges(a->r) == NV_EDGES_LINES ? "lines" : "off");
+    t[strcspn(t, "\n")] = 0;
+    size_t k = strlen(t);
+    if (a->use_tiles)
+        snprintf(t + k, sizeof t - k, "; tiles (renderer_path) on: occlusion (draw_visible) %s, error (error_px) %.2g px, levels of detail (lod) %s, small elements (still_px) %.2g px, back faces (cull_back) %s\n",
+                 a->topts.occlusion ? "on" : "off", a->topts.error_px, a->topts.lod ? "on" : "off", a->still_cut, a->topts.cull_back ? "culled" : "drawn");
+    else snprintf(t + k, sizeof t - k, "; tiles (renderer_path) off: parts\n");
     buf_puts(b, t);
+    snprintf(a->settings_line, sizeof a->settings_line, "%.*s", (int)strcspn(t + 15, "\n"), t + 15);
 }
 
 /* ---- Performance (perf.ts perfReport's shape) ---- */
@@ -435,6 +504,10 @@ void perf_report(App *a, Buf *b) {
         snprintf(t, sizeof t, "links (%d):\n", a->nlinks), buf_puts(b, t);
         for (int k = 0; k < a->nlinks; k++) {
             const SLink *L = &a->links_s[k];
+            if (L->ts && nv_tileset_toc(L->ts)->ntiles)
+                snprintf(t, sizeof t, "  link %d: %u elements, %llu triangles, %s, detail loaded by tiles (%u of %u tiles on the GPU, %.1f MB)\n", k + 1, L->nelem,
+                         (unsigned long long)L->tris, L->visible ? "shown" : "hidden", nv_tileset_resident(L->ts), nv_tileset_toc(L->ts)->ntiles, nv_tileset_gpu_bytes(L->ts) / 1048576.0);
+            else
             snprintf(t, sizeof t, "  link %d: %u elements, %llu triangles, %s%s (%.1f MB)\n", k + 1, L->nelem, (unsigned long long)L->tris, L->visible ? "shown" : "hidden",
                      L->detail ? ", detail loaded" : L->proxy ? ", proxies only" : "", (L->detail ? nv_part_gpu_bytes(L->detail) : L->proxy ? nv_part_gpu_bytes(L->proxy) : 0) / 1048576.0);
             buf_puts(b, t);
@@ -504,9 +577,11 @@ void perf_save_as(App *a) {
     free(save_text);
     save_text = strdup(buf_cstr(&b));
     buf_free(&b);
-    const char *home = getenv("HOME");
-    char def[1100];
-    snprintf(def, sizeof def, "%s/bimble-performance-report.txt", home ? home : ".");
+    const char *docs = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS), *home = getenv("HOME"); /* the session's folder, else Documents, never the home's root */
+    char def[1300];
+    if (slog_dir()[0]) snprintf(def, sizeof def, "%s/bimble-performance-report.txt", slog_dir());
+    else if (docs) snprintf(def, sizeof def, "%sbimble-performance-report.txt", docs);
+    else snprintf(def, sizeof def, "%s/bimble-performance-report.txt", home ? home : ".");
     static const SDL_DialogFileFilter flt[] = {{"Text", "txt"}};
     SDL_SetAtomicInt(&save_done, 0);
     SDL_ShowSaveFileDialog(save_cb, NULL, a->win, flt, 1, def);

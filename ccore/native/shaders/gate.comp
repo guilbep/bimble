@@ -1,0 +1,16 @@
+#version 450
+// NUI2: the frame's commands copied into the buffer pass 2 draws from, each instance count zeroed when its gate is
+// shut (its tile, or every tile its stand-in covers, found hidden).
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) readonly buffer A { uint a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer G { uint gidx[]; };
+layout(std430, set = 0, binding = 2) readonly buffer Gt { uint gate[]; };
+layout(std430, set = 1, binding = 0) buffer B { uint b[]; };
+layout(set = 2, binding = 0) uniform U { uvec4 n; }; // x: first command, y: commands
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= n.y) return;
+    uint c = n.x + i;
+    for (uint k = 0u; k < 5u; k++) b[c * 5u + k] = a[c * 5u + k];
+    if (gate[gidx[c]] == 0u) b[c * 5u + 1u] = 0u;
+}

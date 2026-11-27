@@ -2,7 +2,8 @@
  * proxies at once (its cache's HLOD: the first picture) then its detail (decoded by the loader, one
  * link per thread at a time, the largest on screen first), placed as the session places it. Every
  * read of the session holds its lock (loader.h). */
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
+#include <malloc.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +27,10 @@ void scene_reset(App *a) {
     for (int i = 0; i < a->nlinks; i++) {
         if (a->links_s[i].proxy) nv_render_remove(a->r, a->links_s[i].proxy);
         if (a->links_s[i].detail) nv_render_remove(a->r, a->links_s[i].detail);
+        if (a->links_s[i].ts) nv_render_remove_tileset(a->r, a->links_s[i].ts), nv_tileset_unref(a->dev, a->links_s[i].ts);
+        free(a->links_s[i].ids);
     }
+    a->tile_jobs = 0;
     memset(a->links_s, 0, sizeof a->links_s);
     a->nlinks = 0;
     if (a->model_part) nv_render_remove(a->r, a->model_part), a->model_part = NULL;
@@ -74,6 +78,41 @@ static void model_part(App *a) {
     a->ids_dirty = 1, a->dirty = 1;
 }
 
+/* NUI2: a link drawn by tiles: its cache read in place holds a section TILE */
+static int can_tile(const cc_link *l) {
+    const cc_viewfile *v = l->vf;
+    return v && v->has_tiles && v->lazy && v->base && v->tiles_off <= v->base_len && v->tiles_len >= 48 && v->tiles_len <= v->base_len - v->tiles_off;
+}
+/* its tile set (under the session's lock): the table of contents and occluders copied, its elements' ids and colours */
+static void tile_slot(App *a, SLink *L, const cc_link *l) {
+    const cc_viewfile *v = l->vf;
+    const uint8_t *sec = v->base + v->tiles_off;
+    uint32_t toc, nocc;
+    memcpy(&toc, sec + 24, 4), memcpy(&nocc, sec + 20, 4);
+    if (toc < 48 || toc > v->tiles_len || (uint64_t)nocc * 36 > v->tiles_len - toc) { slog("link %s: its section TILE is damaged (the table's size)", L->name); return; }
+    const cc_scene *rows = cc_link_rows(l);
+    uint32_t nE = (uint32_t)rows->nelements;
+    char err[256];
+    uint32_t lc = L->colour >= 0 ? nv_link_colour(L->colour) : 0;
+    nv_tileset *ts = nv_tileset_new(sec, toc, nE, nocc ? (const void *)(sec + toc) : NULL, nocc, L->elem0, L->c, L->s, L->off, lc, err, sizeof err);
+    if (!ts) { slog("link %s: drawn as parts: %s", L->name, err); return; }
+    uint32_t *col = malloc((nE + 1ull) * 4);
+    L->ids = malloc((nE + 1ull) * 22);
+    if (!col || !L->ids) { free(col), free(L->ids), L->ids = NULL; nv_tileset_unref(a->dev, ts); return; }
+    for (uint32_t i = 0; i < nE; i++) {
+        cc_link_id(l, i, L->ids[i]);
+        int cat = (int)rows->elements[i].category < 8 ? (int)rows->elements[i].category : 7;
+        col[i] = L->colour >= 0 ? nv_link_colour(L->colour) : nv_category_colour(cat);
+    }
+    nv_render_add_colours(a->r, L->elem0, nE, col);
+    free(col);
+    nv_tileset_set_shown(ts, L->visible);
+    nv_render_add_tileset(a->r, ts);
+    L->ts = ts, L->proxy_state = 2, L->detail_state = 2;
+    a->ids_dirty = 1, a->dirty = 1, a->vis_dirty = 1;
+    slog("link %s: drawn by tiles (%u tiles, %u elements, %u occluder triangles)", L->name, nv_tileset_toc(ts)->ntiles, nE, nocc);
+}
+
 /* The link slot of uid (-1 none). */
 static int slot_of(App *a, uint32_t uid) {
     for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].uid == uid) return i;
@@ -84,6 +123,9 @@ static void slot_drop(App *a, int i) {
     nv_loader_cancel(a->loader, L->uid);
     if (L->proxy) nv_render_remove(a->r, L->proxy);
     if (L->detail) nv_render_remove(a->r, L->detail);
+    if (L->ts) nv_render_remove_tileset(a->r, L->ts), nv_tileset_unref(a->dev, L->ts); /* a job of it still running holds its own reference */
+    a->tile_jobs -= L->tiles_inflight;
+    free(L->ids);
     memmove(&a->links_s[i], &a->links_s[i + 1], (size_t)(a->nlinks - i - 1) * sizeof *a->links_s);
     a->nlinks--;
     a->ids_dirty = 1, a->dirty = 1;
@@ -138,7 +180,7 @@ static void links_sync(App *a) {
         if (i >= 0) {
             SLink *L = &a->links_s[i];
             int same = L->ident == id && L->c == c && L->s == sn && !memcmp(L->off, off, sizeof off) && L->colour == l->colour &&
-                       L->proxies_gen == l->proxies_gen;
+                       L->proxies_gen == l->proxies_gen && (L->ts != NULL) == (a->use_tiles && can_tile(l));
             L->visible = l->visible;
             if (same) continue;
             slot_drop(a, i);
@@ -162,11 +204,12 @@ static void links_sync(App *a) {
             memcpy(L->lo, lo, sizeof lo), memcpy(L->hi, hi, sizeof hi), L->has_box = 1;
         }
         L->t_ready = app_now();
+        if (a->use_tiles && can_tile(l)) tile_slot(a, L, l);
     }
     nv_ses_unwr(a->loader);
     for (int i = 0; i < a->nlinks; i++) {
         SLink *L = &a->links_s[i];
-        if (!L->proxy_state && !L->detail_state) submit(a, L, NV_JOB_PROXIES); /* the proxies first: small, at once */
+        if (!L->ts && !L->proxy_state && !L->detail_state) submit(a, L, NV_JOB_PROXIES); /* the proxies first: small, at once */
     }
 }
 
@@ -202,6 +245,19 @@ void scene_tick(App *a) {
     for (nv_job *j; (j = nv_loader_take(a->loader));) {
         int i = slot_of(a, j->uid);
         SLink *L = i >= 0 ? &a->links_s[i] : NULL;
+        if (j->kind == NV_JOB_TILE) { /* a tile: into its set when the set is still drawn */
+            if (L && L->ts == j->ts) {
+                L->tiles_inflight--, a->tile_jobs--;
+                if (j->gt || !j->cancelled) {
+                    if (!j->gt && j->err[0]) slog("link %s: tile %u: %s", L->name, j->tile, j->err);
+                    nv_tileset_attach(a->r, j->ts, j->tile, j->gt), j->gt = NULL;
+                } else nv_tileset_queued(j->ts, j->tile, 0);
+                a->dirty = 1;
+            }
+            a->load_ms_total += j->ms;
+            nv_job_free(a->dev, j);
+            continue;
+        }
         if (L && j->tag != (int)L->gen) L = NULL; /* an older load of that link */
         a->load_ms_total += j->ms;
         if (j->peak_bytes > a->load_peak_bytes) a->load_peak_bytes = j->peak_bytes;
@@ -227,6 +283,30 @@ void scene_tick(App *a) {
             } else if (j->err[0] && !j->cancelled) snprintf(a->notice, sizeof a->notice, "%s: %s", L->name, j->err), a->notice_t = app_now();
         }
         nv_job_free(a->dev, j);
+    }
+    /* NUI2: the tiles the last frame wanted (seen, not loaded), nearest first; two a loader thread on their way */
+    if (a->use_tiles) {
+        nv_tile_want w[64];
+        int room = 2 * 4 - a->tile_jobs;
+        uint32_t nw = room > 0 ? nv_render_tiles_want(a->r, w, (uint32_t)room < 64 ? (uint32_t)room : 64) : 0;
+        for (uint32_t k = 0; k < nw; k++) {
+            SLink *L = NULL;
+            for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].ts == w[k].ts) L = &a->links_s[i];
+            if (!L) continue;
+            nv_job *j = calloc(1, sizeof *j);
+            if (!j) break;
+            j->kind = NV_JOB_TILE, j->ses = a->ses, j->uid = L->uid, j->ident = L->ident, j->ts = w[k].ts, j->tile = w[k].tile, j->tag = (int)L->gen;
+            nv_tileset_ref(j->ts);
+            nv_tileset_queued(j->ts, j->tile, 1);
+            L->tiles_inflight++, a->tile_jobs++;
+            nv_loader_submit(a->loader, j);
+        }
+        if (nw) a->dirty = 1;
+        /* a link whose cache gets its section TILE later (its indexing job): drawn by tiles once it is there */
+        if (app_now() - a->tiles_checked > 1000) {
+            a->tiles_checked = app_now();
+            for (int i = 0; i < a->nlinks; i++) if (!a->links_s[i].ts) a->links_synced = -1;
+        }
     }
     /* the next detail: the largest on screen first, once every link's proxies are in (or failed) */
     int proxies_pending = 0;
@@ -261,13 +341,19 @@ void scene_tick(App *a) {
     /* the visibility of each part: its link's eye */
     for (int i = 0; i < a->nlinks; i++) {
         SLink *L = &a->links_s[i];
+        if (L->ts) nv_tileset_set_shown(L->ts, L->visible);
         if (L->proxy && nv_part_shown(L->proxy) != L->visible) nv_part_set_shown(L->proxy, L->visible), a->dirty = 1;
         if (L->detail && nv_part_shown(L->detail) != L->visible) nv_part_set_shown(L->detail, L->visible), a->dirty = 1;
     }
     if (!a->fitted && (a->model_part || a->nlinks)) {
         int any = a->model_part != NULL;
-        for (int i = 0; i < a->nlinks; i++) any |= a->links_s[i].proxy || a->links_s[i].detail;
+        for (int i = 0; i < a->nlinks; i++) any |= a->links_s[i].proxy || a->links_s[i].detail || a->links_s[i].ts;
         if (any) app_fit(a), a->fitted = 1;
+    }
+    { /* NUI2: the links' conversions done: the heap they grew given back (RSS 1.39 GB at exit after a cache rebuild) */
+        static int was_busy;
+        if (was_busy && !a->links_busy) malloc_trim(0), slog("links converted: memory given back (RSS %.0f MB)", app_rss(NULL) / 1048576.0);
+        was_busy = a->links_busy;
     }
     if (a->ids_dirty) scene_ids(a);
     if (a->vis_dirty) a->vis_dirty = 0, core_visibility(a);
@@ -275,7 +361,8 @@ void scene_tick(App *a) {
 
 /* 1 when every ready link is drawn in detail (or failed) and nothing is converting. */
 int scene_complete(App *a) {
-    if (nv_loader_busy(a->loader)) return 0;
+    if (nv_loader_busy(a->loader) || a->tile_jobs > 0) return 0;
+    if (a->use_tiles && nv_render_get_stats(a->r).wanted > 0) return 0;
     for (int i = 0; i < a->nlinks; i++) {
         const SLink *L = &a->links_s[i];
         if (L->visible && L->detail_state != 2 && L->detail_state != 3 && L->detail_state != 4) return 0;
@@ -296,7 +383,8 @@ int scene_box(App *a, double lo[3], double hi[3]) {
         const SLink *L = &a->links_s[i];
         if (!L->visible) continue;
         const nv_part *p = L->detail ? L->detail : L->proxy;
-        if (p) {
+        if (L->ts) nv_tileset_box(L->ts, b[n], b[n] + 3), n += b[n][0] <= b[n][3];
+        else if (p) {
             const nv_scene *s = nv_part_scene(p);
             if (s->bmin[0] <= s->bmax[0]) memcpy(b[n], s->bmin, 24), memcpy(b[n] + 3, s->bmax, 24), n++;
         } else if (L->has_box) memcpy(b[n], L->lo, 24), memcpy(b[n] + 3, L->hi, 24), n++;
@@ -331,6 +419,7 @@ void scene_ids(App *a) {
     free(a->id_slot), a->id_slot = NULL, a->id_cap = 0;
     size_t total = 0;
     for (uint32_t k = 0; k < nv_render_nparts(a->r); k++) total += nv_part_scene(nv_render_part(a->r, k))->nelements;
+    for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].ids) total += a->links_s[i].nelem;
     size_t cap = 64;
     while (cap < 2 * total + 2) cap *= 2;
     a->id_slot = calloc(cap, sizeof *a->id_slot);
@@ -343,6 +432,18 @@ void scene_ids(App *a) {
             for (size_t h = id_hash(ids[e]) & (cap - 1);; h = (h + 1) & (cap - 1))
                 if (!a->id_slot[h]) { a->id_slot[h] = s->elem0 + e + 1; break; }
     }
+    for (int i = 0; i < a->nlinks; i++) {
+        const SLink *L = &a->links_s[i];
+        for (uint32_t e = 0; L->ids && e < L->nelem; e++)
+            for (size_t h = id_hash(L->ids[e]) & (cap - 1);; h = (h + 1) & (cap - 1))
+                if (!a->id_slot[h]) { a->id_slot[h] = L->elem0 + e + 1; break; }
+    }
+}
+/* a tile link's element (global e): its slot, its id */
+static const SLink *tile_link_of(App *a, uint32_t e) {
+    for (int i = 0; i < a->nlinks; i++)
+        if (a->links_s[i].ids && e >= a->links_s[i].elem0 && e < a->links_s[i].elem0 + a->links_s[i].nelem) return &a->links_s[i];
+    return NULL;
 }
 /* The global element of a GlobalId (+1; 0 none). Several parts may hold one id (a link of the same
  * file twice): the first. */
@@ -350,6 +451,11 @@ uint32_t scene_find(App *a, const char *id, size_t n) {
     if (n != 22 || !a->id_cap) return 0;
     for (size_t h = id_hash(id) & (a->id_cap - 1); a->id_slot[h]; h = (h + 1) & (a->id_cap - 1)) {
         uint32_t e = a->id_slot[h] - 1, loc;
+        const SLink *TL = tile_link_of(a, e);
+        if (TL) {
+            if (!memcmp(TL->ids[e - TL->elem0], id, 22)) return e + 1;
+            continue;
+        }
         nv_part *p = nv_render_part_of(a->r, e, &loc);
         if (p && !memcmp(((const char(*)[22])nv_part_scene(p)->ids.p)[loc], id, 22)) return e + 1;
     }
@@ -358,6 +464,12 @@ uint32_t scene_find(App *a, const char *id, size_t n) {
 /* The id and link of a global element: 1 found (`link` "" for the open model's). */
 int scene_elem(App *a, uint32_t elem, char id[23], char *link, size_t nlink) {
     uint32_t loc;
+    const SLink *TL = tile_link_of(a, elem);
+    if (TL) {
+        memcpy(id, TL->ids[elem - TL->elem0], 22), id[22] = 0;
+        snprintf(link, nlink, "%s", TL->name);
+        return 1;
+    }
     nv_part *p = nv_render_part_of(a->r, elem, &loc);
     if (!p) return 0;
     memcpy(id, ((const char(*)[22])nv_part_scene(p)->ids.p)[loc], 22), id[22] = 0;

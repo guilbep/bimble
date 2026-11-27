@@ -202,10 +202,25 @@ static void on_signal(int sig) {
     raise(sig);
 }
 
+static char build_id[48];
 static int exe_base(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size;
-    if (!info->dlpi_name || !info->dlpi_name[0]) { /* the executable */
+    if (!info->dlpi_name || !info->dlpi_name[0]) { /* the executable: its base and its GNU build id (native/symbolize.sh) */
         *(uintptr_t *)data = (uintptr_t)info->dlpi_addr;
+        for (int i = 0; i < info->dlpi_phnum; i++) {
+            const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+            if (ph->p_type != PT_NOTE) continue;
+            const uint8_t *p = (const uint8_t *)(info->dlpi_addr + ph->p_vaddr), *end = p + ph->p_memsz;
+            while (p + 12 <= end) {
+                uint32_t nn, dn, ty;
+                memcpy(&nn, p, 4), memcpy(&dn, p + 4, 4), memcpy(&ty, p + 8, 4);
+                const uint8_t *name = p + 12, *desc = name + ((nn + 3) & ~3u);
+                if (desc + dn > end) break;
+                if (ty == 3 && nn == 4 && !memcmp(name, "GNU", 4))
+                    for (uint32_t k = 0; k < dn && k < 20; k++) snprintf(build_id + 2 * k, 3, "%02x", desc[k]);
+                p = desc + ((dn + 3) & ~3u);
+            }
+        }
         return 1;
     }
     return 0;
@@ -242,13 +257,15 @@ int slog_open(App *a) {
     sigemptyset(&sa.sa_mask);
     int sigs[] = {SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE};
     for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++) sigaction(sigs[i], &sa, NULL);
-    if (f_frames) out(f_frames, "t_s,frames,frames_3d,frame_ms_median,frame_ms_p95,frame_ms_max,input_ms_median,input_ms_max,triangles,draws,tiles,gpu_mb,rss_mb,state\n", 132);
-    if (f_inputs) out(f_inputs, "t_s,what,app_ms,frame_ms\n", 25);
+    static const char FH[] = "t_s,frames,frames_3d,frame_ms_median,frame_ms_p95,frame_ms_max,input_ms_median,input_ms_max,triangles,draws,tiles,gpu_mb,rss_mb,state\n",
+                      IH[] = "t_s,what,app_ms,frame_ms\n";
+    if (f_frames) out(f_frames, FH, sizeof FH - 1); /* the header's newline (it was cut: the first row glued to it) */
+    if (f_inputs) out(f_inputs, IH, sizeof IH - 1);
     uintptr_t eb = 0;
     dl_iterate_phdr(exe_base, &eb);
     int sv = SDL_GetVersion();
-    slog("bimble %s (native), pid %d, executable base 0x%lx (crash addresses are relative to it); SDL %d.%d.%d (%s)", CC_RELEASE_VERSION, (int)getpid(),
-         (unsigned long)eb, SDL_VERSIONNUM_MAJOR(sv), SDL_VERSIONNUM_MINOR(sv), SDL_VERSIONNUM_MICRO(sv), SDL_GetRevision());
+    slog("bimble %s (native), build id %s, pid %d, executable base 0x%lx (crash addresses are relative to it: native/symbolize.sh); SDL %d.%d.%d (%s)",
+         CC_RELEASE_VERSION, build_id[0] ? build_id : "none", (int)getpid(), (unsigned long)eb, SDL_VERSIONNUM_MAJOR(sv), SDL_VERSIONNUM_MINOR(sv), SDL_VERSIONNUM_MICRO(sv), SDL_GetRevision());
     slog("this log stays on this machine (%s); it names the files opened", dir);
     sec_t0 = app_now(), next_report = sec_t0 + 10000;
     return 1;

@@ -20,7 +20,7 @@
 struct cc_session;
 typedef struct nv_loader nv_loader;
 
-enum { NV_JOB_PROXIES = 1, NV_JOB_DETAIL = 2 };
+enum { NV_JOB_PROXIES = 1, NV_JOB_DETAIL = 2, NV_JOB_TILE = 3 }; /* NUI2: a tile of a link's pyramid */
 
 typedef struct nv_job {
     /* in */
@@ -33,6 +33,10 @@ typedef struct nv_job {
     nv_load_opts lo;     /* its placement and colour */
     int with_proxies;    /* DETAIL: its cache's proxies too (far cells drawn as proxies) */
     int tag;             /* the caller's */
+    nv_tileset *ts;      /* TILE: its set (a reference held by the job) and tile */
+    uint32_t tile;
+    nv_gtile *gt;        /* TILE out: its content on the GPU (NULL: err) */
+    uint64_t bytes_in;   /* TILE: the answer's bytes */
     /* out */
     nv_part *part;       /* NULL: none (err, or nothing to draw: err empty) */
     char err[256];

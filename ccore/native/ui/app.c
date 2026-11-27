@@ -77,17 +77,19 @@ static int in_view(App *a, float x, float y) { return x >= a->vx && y >= a->vy &
 
 static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
     if (a->screen_kind != SCR_MAIN || a->show != SHOW_VIEW) {
-        if (ev->type == SDL_EVENT_KEY_DOWN && !ev->key.repeat) input_start(a, ev, "key"), core_key(a, ev->key.key, ev->key.mod, igGetIO_Nil()->WantTextInput), a->dirty = 1;
+        if (ev->type == SDL_EVENT_KEY_DOWN && !ev->key.repeat) input_start(a, ev, SDL_GetKeyName(ev->key.key)), core_key(a, ev->key.key, ev->key.mod, igGetIO_Nil()->WantTextInput), a->dirty = 1;
         return;
     }
     switch (ev->type) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
         float x = ev->button.x, y = ev->button.y;
+        if (getenv("BIMBLE_DEBUG_TOOLS")) fprintf(stderr, "press at %.0f %.0f: ui %d, in view %d, box %d, measure %d\n", x, y, ui_wants_mouse, in_view(a, x, y), a->box_on, a->measure_on);
         if (ui_wants_mouse || !in_view(a, x, y)) break;
         a->ctx_menu = 0;
         if (view_cube(a, NULL, x, y, 1)) { input_start(a, ev, "view cube"); break; }
         if (a->box_on && ev->button.button == SDL_BUTTON_LEFT && !a->measure_on && tool_box_input(a, "box_press", x, y)) {
             a->box_drag = 1; /* a handle of the section box is held: no orbit */
+            slog("section box: a handle held at (%.0f, %.0f) px in the view", x - a->vx, y - a->vy);
             input_start(a, ev, "box handle");
             break;
         }
@@ -97,7 +99,12 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
         break;
     }
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (a->box_drag) { tool_box_input(a, "box_release", ev->button.x, ev->button.y); a->box_drag = 0; a->vis_dirty = 1; break; }
+        if (a->box_drag) {
+            tool_box_input(a, "box_release", ev->button.x, ev->button.y);
+            a->box_drag = 0, a->vis_dirty = 1;
+            slog("section box: released, min (%.0f, %.0f, %.0f) max (%.0f, %.0f, %.0f) mm", a->box_min[0], a->box_min[1], a->box_min[2], a->box_max[0], a->box_max[1], a->box_max[2]);
+            break;
+        }
         if (a->drag == 1 && !a->drag_moved) {
             input_start(a, ev, a->measure_on ? "measure click" : "pick");
             if (a->measure_on) tool_measure_input(a, ev->button.x, ev->button.y, 1);
@@ -143,7 +150,9 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
     }
     case SDL_EVENT_KEY_DOWN: /* the key table, data/keys.json (keys.ts KEYS) */
         if (!ev->key.repeat) {
-            input_start(a, ev, "key");
+            char kw[48];
+            snprintf(kw, sizeof kw, "key %s%s", (ev->key.mod & SDL_KMOD_CTRL) ? "Ctrl " : "", SDL_GetKeyName(ev->key.key)); /* which key (the session log's slow inputs) */
+            input_start(a, ev, kw);
             core_key(a, ev->key.key, ev->key.mod, igGetIO_Nil()->WantTextInput);
         }
         a->dirty = 1;
@@ -260,6 +269,55 @@ static void app_resize_step(App *a) {
     a->resize_w = w, a->resize_h = h, a->resize_wait = 2;
 }
 
+/* ---- NUI2's truth test: the frame's id target drawn without occlusion (0) and with it (1), read back; an element in the
+ * first and not in the second is missing (occlusion dropped something visible) ---- */
+static SDL_GPUTransferBuffer *truth_tb[2];
+static uint32_t truth_cap;
+static void truth_grab(App *a, SDL_GPUCommandBuffer *cmd, int which) {
+    uint32_t w = a->vpw, h = a->vph, need = w * h * 4;
+    if (!need) return;
+    if (truth_cap < need) {
+        for (int k = 0; k < 2; k++) {
+            if (truth_tb[k]) SDL_ReleaseGPUTransferBuffer(a->dev, truth_tb[k]);
+            SDL_GPUTransferBufferCreateInfo tci = {.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = need};
+            truth_tb[k] = SDL_CreateGPUTransferBuffer(a->dev, &tci);
+        }
+        truth_cap = need;
+    }
+    if (!truth_tb[which]) return;
+    SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
+    SDL_GPUTextureRegion src = {.texture = nv_render_ids(a->r), .w = w, .h = h, .d = 1};
+    SDL_GPUTextureTransferInfo dst = {.transfer_buffer = truth_tb[which]};
+    SDL_DownloadFromGPUTexture(cp, &src, &dst);
+    SDL_EndGPUCopyPass(cp);
+}
+static int truth_compare(App *a) {
+    uint32_t n = a->vpw * a->vph, ne = a->next_elem + 1;
+    if (!truth_tb[0] || !truth_tb[1] || !n) return -1;
+    const uint32_t *x = SDL_MapGPUTransferBuffer(a->dev, truth_tb[0], false);
+    uint8_t *seen = calloc(ne, 1);
+    if (!x || !seen) { if (x) SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]); free(seen); return -1; }
+    for (uint32_t i = 0; i < n; i++) if (x[i] > NV_ELEM0 && x[i] < ne) seen[x[i]] |= 1;
+    SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]);
+    const uint32_t *y = SDL_MapGPUTransferBuffer(a->dev, truth_tb[1], false);
+    if (!y) { free(seen); return -1; }
+    for (uint32_t i = 0; i < n; i++) if (y[i] > NV_ELEM0 && y[i] < ne) seen[y[i]] |= 2;
+    SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[1]);
+    int missing = 0;
+    for (uint32_t e = 0; e < ne; e++) missing += seen[e] == 1;
+    if (missing) {
+        static int said;
+        if (said++ < 10) {
+            char id[23] = "", link[256] = "";
+            for (uint32_t e = 0; e < ne; e++)
+                if (seen[e] == 1) { scene_elem(a, e - 1, id, link, sizeof link); break; }
+            fprintf(stderr, "bimble: truth: %d elements missing with occlusion at frame %llu (first: %s)\n", missing, (unsigned long long)a->frames, id);
+        }
+    }
+    free(seen);
+    return missing;
+}
+
 /* ---- one frame: the 3D (when dirty), then the UI over the whole window, one command buffer ---- */
 static void frame(App *a) {
     double t0 = app_now();
@@ -273,6 +331,8 @@ static void frame(App *a) {
     /* NUI2: the target of THIS frame first (the swapchain's texture: on Wayland with fractional scaling or a tiling
      * compositor its size differs from SDL_GetWindowSizeInPixels and changes a frame after the resize event); every
      * size below (the picture, ImGui's display and framebuffer scale, the 3D view's targets) comes from it */
+    double t_logic = app_now();
+    a->st_logic = t_logic - t0;
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(a->dev);
     if (!cmd) { fprintf(stderr, "bimble: no command buffer: %s\n", SDL_GetError()); slog("no command buffer: %s", SDL_GetError()); a->quit = 1; return; }
     SDL_GPUTexture *sw = NULL;
@@ -293,6 +353,8 @@ static void frame(App *a) {
         sw_w = a->swap_w ? a->swap_w : a->pw, sw_h = a->swap_h ? a->swap_h : a->ph;
     }
     if (app_target(a, sw_w, sw_h) != 0) { SDL_SubmitGPUCommandBuffer(cmd); a->quit = 1; return; }
+    double t_acq = app_now();
+    a->st_acquire = t_acq - t_logic;
     float s = a->scale, W = (float)a->lw, H = (float)a->lh;
     float top = 178 * s, bottom = 32 * s, left = 296 * s, right = 0; /* LeftPanel.vue: Properties under the navigator */
     a->vx = left, a->vy = top + 38 * s, a->vw = W - left - right, a->vh = H - top - bottom - 38 * s;
@@ -352,17 +414,39 @@ static void frame(App *a) {
     dialogs(a);
     if (a->moving && app_now() - a->last_move > 150) a->moving = 0, a->dirty = 1; /* still: the whole picture again */
     double t_ui = app_now();
+    a->st_ui = t_ui - t_acq;
     a->ui_ms = t_ui - t0;
     a->t_ui_done = t_ui;
     int drew3d = 0, pick = a->pick_pending;
     if ((a->dirty || pick) && a->show == SHOW_VIEW && a->screen_kind == SCR_MAIN && a->r) {
-        nv_render_set_cut(a->r, a->moving && a->adaptive && a->moving_fps > 0 ? a->cut_live : a->still_cut);
+        int mv = a->moving && a->adaptive && a->moving_fps > 0;
+        float cut = mv ? (a->cut_live > a->still_cut ? a->cut_live : a->still_cut) : a->still_cut;
+        nv_render_set_cut(a->r, cut);
+        nv_render_set_skip(a->r, a->bench_skip);
+        nv_tiles_opts to = a->topts;
+        to.tri_budget = mv ? a->tri_live : 0;
+        if (a->truth && a->use_tiles) { /* the truth test: the same frame without occlusion first, its ids kept */
+            to.reference = 1;
+            nv_render_tiles_opts(a->r, &to);
+            nv_render_record(a->r, cmd, &a->cam, 0, 0, 0);
+            truth_grab(a, cmd, 0);
+            to.reference = 0;
+        }
+        nv_render_tiles_opts(a->r, &to);
         nv_render_record(a->r, cmd, &a->cam, pick, a->pick_x, a->pick_y);
+        if (a->truth && a->use_tiles) truth_grab(a, cmd, 1);
         drew3d = 1, a->dirty = 0;
     }
+    double t_rec = app_now();
+    a->st_rec3d = t_rec - t_ui;
     ImVec4 bgc = col4(C_CREAM);
     float clear[4] = {bgc.x, bgc.y, bgc.z, 1};
-    nui_backend_render(cmd, a->screen, 1, clear);
+    if (a->bench_skip & NV_SKIP_UI) { igRender(); /* the UI built, not drawn: the picture is the 3D view's, blitted */
+        SDL_GPUBlitInfo vb = {.source = {.texture = nv_render_color(a->r), .w = a->vpw, .h = a->vph}, .destination = {.texture = a->screen, .w = a->pw, .h = a->ph}, .load_op = SDL_GPU_LOADOP_DONT_CARE, .filter = SDL_GPU_FILTER_NEAREST};
+        if (nv_render_color(a->r) && a->vpw && a->vph) SDL_BlitGPUTexture(cmd, &vb);
+    } else nui_backend_render(cmd, a->screen, 1, clear);
+    double t_recui = app_now();
+    a->st_recui = t_recui - t_rec;
     if (sw) { /* the picture and the swapchain have one size (app_target) */
         SDL_GPUBlitInfo bi = {.source = {.texture = a->screen, .w = a->pw, .h = a->ph}, .destination = {.texture = sw, .w = sw_w, .h = sw_h},
                               .load_op = SDL_GPU_LOADOP_DONT_CARE, .filter = SDL_GPU_FILTER_NEAREST};
@@ -371,6 +455,7 @@ static void frame(App *a) {
     SDL_GPUFence *f = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
     if (f) SDL_WaitForGPUFences(a->dev, true, &f, 1), SDL_ReleaseGPUFence(a->dev, f);
     double t1 = app_now();
+    a->st_gpu = t1 - t_recui;
     a->gpu_ms = t1 - t_ui;
     a->frame_ms = drew3d ? t1 - t_ui : 0;
     if (drew3d) {
@@ -388,6 +473,13 @@ static void frame(App *a) {
     if (drew3d) {
         uint32_t picked = 0;
         nv_render_collect(a->r, pick ? &picked : NULL);
+        a->truth_missing = a->truth && a->use_tiles ? truth_compare(a) : -1;
+        if (a->moving && a->adaptive && a->moving_fps > 0 && a->use_tiles) { /* the moving budget's triangles (the walker's) */
+            double target = 1000.0 / a->moving_fps;
+            uint64_t drawn = nv_render_get_stats(a->r).tris;
+            if (a->frame_ms > target * 0.6) a->tri_live = drawn * 7 / 10 > 500000 ? drawn * 7 / 10 : 500000;
+            else if (a->frame_ms < target * 0.25 && a->tri_live) a->tri_live = a->tri_live * 3 / 2 > drawn * 4 ? 0 : a->tri_live * 3 / 2;
+        } else if (!a->moving) a->tri_live = 0;
         if (pick) a->pick_pending = 0, core_select(a, picked > NV_ELEM0 ? picked : 0);
         /* the first picture: something drawn, or nothing left to draw (an empty model) */
         if (!a->t_first_picture && (nv_render_nparts(a->r) > 0 || scene_complete(a))) a->t_first_picture = t1;
@@ -458,6 +550,8 @@ static void no_gpu(const char *what, const char *file) {
 }
 
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) /* --compare: this binary again per settings set, the summaries side by side (compare.c) */
+        if (!strcmp(argv[i], "--compare")) return compare_main(argc, argv);
     static App app;
     App *a = &app;
     a->t_start = app_now();
@@ -465,7 +559,7 @@ int main(int argc, char **argv) {
     a->ro = (nv_render_opts){.edges = NV_EDGES_SCREEN, .hlod = 1, .hlod_px = 1};
     a->hlod = 1;
     a->moving_cut = 2, a->still_cut = 0, a->adaptive = 1, a->moving_fps = 30, a->gpu_budget = (uint64_t)768 << 20;
-    a->draw_key = -1, a->links_synced = -1;
+    a->draw_key = -1, a->links_synced = -1, a->truth_missing = -1;
     const char *model = NULL, *shot = NULL, *link_folder = NULL, *conf = NULL;
     int loaders = 2, dark = 0, lang = -1;
     for (int i = 1; i < argc; i++) {
@@ -474,6 +568,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(x, "--last-log")) return slog_last();
         else if (!strcmp(x, "--resize-script") && v) a->resize_script = (char *)v, i++;
         else if (!strcmp(x, "--set") && v) i++; /* after the settings are read (below) */
+        else if (!strcmp(x, "--truth")) a->truth = 1;
+        else if (!strcmp(x, "--compare") && v) i++; /* compare.c */
         else if (!strcmp(x, "--size") && v) { if (sscanf(v, "%ux%u", &a->lw, &a->lh) != 2) usage(); i++; }
         else if (!strcmp(x, "--scale") && v) a->scale = (float)atof(v), i++;
         else if (!strcmp(x, "--offscreen")) a->offscreen = 1;
@@ -538,6 +634,7 @@ int main(int argc, char **argv) {
     }
     if (data_load(a) != 0) { fprintf(stderr, "bimble: the shell's data is not in this build\n"); return 1; }
     nset_load(a); /* the native app's own settings (native.json), then the run's --set */
+    a->bench_skip = 0;
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "--set") && i + 1 < argc) {
             char k[40] = "", v[64] = "";
@@ -548,6 +645,7 @@ int main(int argc, char **argv) {
                 nset_set(k, j, 1);
             }
         }
+    a->bench_skip = (unsigned)nset_num("bench_skip", 0);
     { /* the local session log: on in a window unless session_log is false; offscreen only when BIMBLE_LOG_DIR is set */
         const char *ld = getenv("BIMBLE_LOG_DIR");
         a->session_log = (int)nset_num("session_log", a->offscreen ? (ld && *ld) : 1);
@@ -577,6 +675,8 @@ int main(int argc, char **argv) {
                 slog("mailbox refused too: %s (the default present mode)", SDL_GetError());
         }
         SDL_SetGPUAllowedFramesInFlight(a->dev, 2);
+        slog("present: %s (vsync: the swapchain's acquire waits for the display; the acquire is its own stage in frames.csv)",
+             SDL_WindowSupportsGPUPresentMode(a->dev, a->win, SDL_GPU_PRESENTMODE_VSYNC) ? "vsync" : "the driver's default");
     }
     a->screen = NULL; /* app_target makes it at the first frame's size */
     char err[256];

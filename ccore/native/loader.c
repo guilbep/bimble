@@ -194,8 +194,51 @@ static uint64_t scene_bytes(const nv_scene *sc) {
     return b;
 }
 
+/* NUI2: one tile of a link's pyramid: its bytes taken under the session's read lock (a proxy's TPX1 copied from the
+ * mapped cache; a leaf's TLF1 gathered from its elements' blocks), made into GPU buffers out of it. */
+static void run_tile(nv_loader *L, nv_job *j) {
+    Src x;
+    memset(&x, 0, sizeof x);
+    x.L = L, x.j = j;
+    Buf b;
+    buf_init(&b);
+    cc_tile t;
+    const cc_tiles_toc *toc = nv_tileset_toc(j->ts);
+    cc_tiles_get(toc, j->tile, &t);
+    int kind = 0;
+    pthread_rwlock_rdlock(&L->ses);
+    find(&x);
+    const cc_viewfile *vf = x.k ? x.k->vf : NULL;
+    if (!vf || !vf->has_tiles || !vf->lazy || !vf->base || vf->tiles_off > vf->base_len || vf->tiles_len > vf->base_len - vf->tiles_off) {
+        if (!x.gone) snprintf(j->err, sizeof j->err, "tiles: the link's cache has none");
+    } else if (t.flags & CC_TILE_PROXY) {
+        uint64_t at = (uint64_t)toc->blob_at + t.off;
+        if (at > vf->tiles_len || t.len > vf->tiles_len - at) snprintf(j->err, sizeof j->err, "tiles: a proxy out of the section");
+        else buf_append(&b, (const char *)vf->base + vf->tiles_off + at, t.len), kind = 2;
+    } else if (t.flags & CC_TILE_LEAF) {
+        cc_tiles_src src = {NULL, vf};
+        cc_error e;
+        if (cc_tiles_leaf_answer(&src, toc, j->tile, &b, &e)) snprintf(j->err, sizeof j->err, "%s", e.msg);
+        else kind = 1;
+    } else snprintf(j->err, sizeof j->err, "tiles: tile %u has no content", j->tile);
+    pthread_rwlock_unlock(&L->ses);
+    if (x.gone) j->cancelled = 1, kind = 0;
+    if (b.oom) kind = 0, snprintf(j->err, sizeof j->err, "out of memory");
+    j->bytes_in = b.len;
+    if (kind == 1) j->gt = nv_gtile_leaf(L->dev, j->ts, j->tile, (const uint8_t *)b.p, b.len, j->err, sizeof j->err);
+    else if (kind == 2) j->gt = nv_gtile_proxy(L->dev, j->ts, j->tile, (const uint8_t *)b.p, b.len, j->err, sizeof j->err);
+    j->peak_bytes = b.cap;
+    buf_free(&b);
+}
+
 static void run(nv_loader *L, nv_job *j) {
     double t0 = nv_now_ms();
+    if (j->kind == NV_JOB_TILE) {
+        if (!job_cancelled(L, j)) run_tile(L, j);
+        else j->cancelled = 1;
+        j->ms = nv_now_ms() - t0;
+        return;
+    }
     Src x;
     memset(&x, 0, sizeof x);
     x.L = L, x.j = j;
@@ -298,6 +341,8 @@ nv_loader *nv_loader_new(SDL_GPUDevice *dev, int threads) {
 void nv_job_free(SDL_GPUDevice *dev, nv_job *j) {
     if (!j) return;
     if (j->part) nv_part_free(dev, j->part);
+    if (j->gt) nv_gtile_free(dev, j->gt);
+    if (j->ts) nv_tileset_unref(dev, j->ts);
     free(j);
 }
 

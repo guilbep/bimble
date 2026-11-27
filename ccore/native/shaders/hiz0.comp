@@ -1,0 +1,17 @@
+#version 450
+// NUI2: the depth pyramid's level 0: each texel the farthest depth (reverse Z: the smallest) of its 4 x 4 pixels.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D depth;
+layout(set = 1, binding = 0, r32f) uniform writeonly image2D hiz;
+layout(set = 2, binding = 0) uniform U { ivec4 a; ivec4 b; }; // a: W, H, level 0's w, h
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    if (t.x >= a.z || t.y >= a.w) return;
+    float m = 3.0e38;
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 4; x++) {
+            ivec2 p = t * 4 + ivec2(x, y);
+            if (p.x < a.x && p.y < a.y) m = min(m, texelFetch(depth, p, 0).r);
+        }
+    imageStore(hiz, t, vec4(m));
+}

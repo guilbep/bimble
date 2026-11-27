@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "render.h"
+#include "render_int.h"
 
 /* SPIR-V, compiled by glslc at build time (native/build.sh), embedded. */
 static const uint32_t SPV_FACE_WORLD[] =
@@ -41,53 +42,9 @@ static const uint32_t SPV_SCREEN_EDGES[] =
     ;
 
 const char *const NV_EDGES_NAME[3] = {"none", "lines", "screen"};
-#define NEAR_MM 10.0
 static const float EDGE_SRGB[3] = {26 / 255.f, 26 / 255.f, 28 / 255.f};
 static const uint8_t SELECTION_SRGB[3] = {215, 172, 182}; /* glviewport.ts SELECTION_SRGB */
-#define MAX_PARTS 1024
 
-struct nv_part {
-    nv_scene sc; /* moved in: counts, ids, colours, cells (the geometry is on the GPU) */
-    SDL_GPUBuffer *wv, *wi, *we, *sv, *si, *se, *plc, *visible, *items, *hidden, *fcmd, *ecmd, *counters;
-    SDL_GPUBuffer *pv, *pi, *pe, *pfcmd, *pecmd;
-    SDL_GPUTransferBuffer *up; /* per frame: the hidden cells and the proxies' commands */
-    uint32_t up_size;
-    uint32_t nw, nshape, ncmd, nitems, ncells;
-    uint64_t gpu_bytes;
-    uint32_t *hidden_cpu;
-    SDL_GPUIndexedIndirectDrawCommand *pf_cpu;
-    SDL_GPUIndirectDrawCommand *pe_cpu;
-    uint32_t npcmd;
-    int shown, use_hlod;
-};
-
-struct nv_render {
-    SDL_GPUDevice *dev;
-    int edges, hlod;
-    float cut_px, hlod_px, crease;
-    float bg[3];
-    uint32_t W, H;
-    SDL_GPUGraphicsPipeline *face_w, *face_i, *edge_w, *edge_i, *screen;
-    SDL_GPUComputePipeline *cull, *reset;
-    SDL_GPUBuffer *colour; /* the colour table: palette slots 0..7, then every element */
-    uint32_t colour_cap;   /* entries in the GPU buffer */
-    uint32_t ncolour;      /* entries used */
-    uint32_t *colour_base, *colour_cpu;
-    int colour_dirty;
-    SDL_GPUTexture *color, *ids, *depth;
-    SDL_GPUSampler *nearest;
-    SDL_GPUTransferBuffer *rb; /* read-back: 16 bytes of counters per part, then the picked pixel */
-    uint32_t rb_parts;
-    uint64_t gpu_bytes; /* the renderer's own (targets, colour table) */
-    nv_part **parts;
-    uint32_t nparts, cparts;
-    /* the last frame */
-    uint32_t draws, commands, proxies_drawn;
-    uint64_t tris;
-    int readback, picking;
-    uint32_t rb_count; /* parts read back */
-    float clip_min[4], clip_max[4];
-};
 typedef struct nv_render R;
 typedef struct nv_part P;
 
@@ -283,6 +240,7 @@ static int targets(R *r, uint32_t w, uint32_t h) {
     r->depth = SDL_CreateGPUTexture(r->dev, &ci);
     if (!r->color || !r->ids || !r->depth) return -1;
     r->gpu_bytes += (uint64_t)w * h * 12;
+    if (nv_tiles_targets(r, w, h)) fprintf(stderr, "bimble: no depth pyramid (%s): tiles drawn without occlusion\n", SDL_GetError());
     return 0;
 }
 
@@ -590,7 +548,7 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
     /* per part: the HLOD walk (CPU), then reset and cull (GPU) */
     for (uint32_t k = 0; k < r->nparts; k++) {
         P *p = r->parts[k];
-        p->use_hlod = p->shown && p->ncells && (r->hlod || p->sc.proxies_only);
+        p->use_hlod = p->shown && p->ncells && (r->hlod || p->sc.proxies_only) && !(r->skip & NV_SKIP_WALK);
         if (!p->shown) continue;
         if (p->use_hlod) {
             hlod_walk(r, p, pl, eye, px_per, cam->ortho);
@@ -617,7 +575,7 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
                 SDL_EndGPUCopyPass(cp);
             } else p->npcmd = 0, p->use_hlod = 0;
         }
-        if (!p->nitems) continue;
+        if (!p->nitems || (r->skip & NV_SKIP_CULL)) continue;
         SDL_GPUStorageBufferReadWriteBinding rw[3] = {{.buffer = p->fcmd}, {.buffer = p->ecmd}, {.buffer = p->counters}};
         uint32_t rn[4] = {p->ncmd, p->ncmd, 0, 0};
         SDL_PushGPUComputeUniformData(cmd, 0, rn, sizeof rn);
@@ -639,6 +597,8 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
         SDL_DispatchGPUCompute(c2, (p->nitems + 63) / 64, 1, 1);
         SDL_EndGPUComputePass(c2);
     }
+    memcpy(r->last_vp, vp, sizeof r->last_vp);
+    int tiles = nv_tiles_prepare(r, cmd, vp, eye, pl, cam->ortho ? px_per : r->H / 2.0 / tan(NV_FOV_Y / 2), cam->ortho, r->cut_px);
     VUni vu;
     memcpy(vu.vp, vp, sizeof vp);
     vu.bias[0] = 1e-4f, vu.bias[1] = vu.bias[2] = vu.bias[3] = 0;
@@ -663,7 +623,7 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
                                         .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE};
     SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(cmd, ct, 2, &dt);
     SDL_GPUBuffer *st1[1] = {r->colour};
-    for (int pass = 0; pass < 2 && r->colour; pass++) { /* faces, then edges */
+    for (int pass = 0; pass < 2 && r->colour && !(r->skip & NV_SKIP_DRAW); pass++) { /* faces, then edges */
         int edges = pass == 1;
         if (edges && r->edges != NV_EDGES_LINES) break;
         for (uint32_t k = 0; k < r->nparts; k++) {
@@ -693,7 +653,7 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
                 }
                 r->draws++, r->commands += p->npcmd;
             }
-            if (p->nshape) { /* shapes, instanced */
+            if (p->nshape && !(r->skip & NV_SKIP_DRAW)) { /* shapes, instanced */
                 SDL_GPUBuffer *st3[3] = {r->colour, p->plc, p->visible};
                 SDL_BindGPUGraphicsPipeline(rp, edges ? r->edge_i : r->face_i);
                 SDL_BindGPUVertexStorageBuffers(rp, 0, st3, 3);
@@ -709,8 +669,23 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
             }
         }
     }
+    if (tiles && !(r->skip & NV_SKIP_DRAW)) nv_tiles_draw(r, cmd, rp, 1);
     SDL_EndGPURenderPass(rp);
-    if (r->edges == NV_EDGES_SCREEN) {
+    if (tiles && nv_tiles_has_pass2(r)) { /* occlusion: the depth pyramid, the tests, then what they found visible */
+        nv_tiles_occlusion(r, cmd);
+        SDL_GPUColorTargetInfo c2[2] = {
+            {.texture = r->color, .load_op = SDL_GPU_LOADOP_LOAD, .store_op = SDL_GPU_STOREOP_STORE},
+            {.texture = r->ids, .load_op = SDL_GPU_LOADOP_LOAD, .store_op = SDL_GPU_STOREOP_STORE},
+        };
+        SDL_GPUDepthStencilTargetInfo d2 = {.texture = r->depth, .load_op = SDL_GPU_LOADOP_LOAD, .store_op = SDL_GPU_STOREOP_STORE,
+                                            .stencil_load_op = SDL_GPU_LOADOP_DONT_CARE, .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE};
+        SDL_GPURenderPass *rp2 = SDL_BeginGPURenderPass(cmd, c2, 2, &d2);
+        SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof vu);
+        SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof fu);
+        if (!(r->skip & NV_SKIP_DRAW)) nv_tiles_draw(r, cmd, rp2, 2);
+        SDL_EndGPURenderPass(rp2);
+    }
+    if (r->edges == NV_EDGES_SCREEN && !(r->skip & NV_SKIP_EDGES)) {
         SDL_GPUColorTargetInfo c2 = {.texture = r->color, .load_op = SDL_GPU_LOADOP_LOAD, .store_op = SDL_GPU_STOREOP_STORE};
         SDL_GPURenderPass *sp = SDL_BeginGPURenderPass(cmd, &c2, 1, NULL);
         SDL_BindGPUGraphicsPipeline(sp, r->screen);
@@ -723,7 +698,7 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
         r->draws++;
     }
     /* read-back: each part's counters, the picked pixel */
-    r->readback = rb_room(r, r->nparts) == 0;
+    r->readback = !(r->skip & NV_SKIP_READBACK) && rb_room(r, r->nparts) == 0;
     r->picking = 0;
     r->rb_count = 0;
     if (r->readback) {
@@ -741,6 +716,7 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
             SDL_DownloadFromGPUTexture(cp, &src, &dst);
             r->picking = 1;
         }
+        if (tiles) nv_tiles_readback(r, cp);
         SDL_EndGPUCopyPass(cp);
     }
 }
@@ -761,6 +737,7 @@ void nv_render_collect(R *r, uint32_t *picked) {
         if (!p->shown || !p->use_hlod) continue;
         for (uint32_t c = 0; c < p->npcmd; c++) r->tris += p->pf_cpu[c].num_indices / 3;
     }
+    r->tris += nv_tiles_collect(r);
 }
 
 /* ---- the library's entry points ---- */
@@ -791,6 +768,7 @@ nv_render *nv_render_new(SDL_GPUDevice *dev, const nv_render_opts *o, char *err,
         return NULL;
     }
     for (uint32_t k = 0; k < NV_ELEM0; k++) r->colour_base[k] = r->colour_cpu[k] = nv_category_colour((int)k);
+    nv_tiles_init(r);
     return r;
 }
 
@@ -798,6 +776,7 @@ void nv_render_free(R *r) {
     if (!r) return;
     SDL_GPUDevice *d = r->dev;
     SDL_WaitForGPUIdle(d);
+    nv_tiles_release(r);
     for (uint32_t k = 0; k < r->nparts; k++) part_release(d, r->parts[k]);
     free(r->parts);
     if (r->colour) SDL_ReleaseGPUBuffer(d, r->colour);
@@ -821,6 +800,7 @@ int nv_render_targets(R *r, uint32_t w, uint32_t h) {
 }
 
 void nv_render_set_edges(R *r, int edges) { r->edges = edges; }
+void nv_render_set_skip(R *r, unsigned bits) { r->skip = bits; }
 int nv_render_edges(const R *r) { return r->edges; }
 void nv_render_set_cut(R *r, float px) { r->cut_px = px < 0 ? 0 : px; }
 void nv_render_set_hlod(R *r, int on, float px) { r->hlod = on, r->hlod_px = px > 0 ? px : r->hlod_px; }
@@ -830,18 +810,31 @@ void nv_render_set_state(R *r, uint32_t elem, int state) {
     if (elem >= r->ncolour) return;
     uint32_t c = state == 1 ? (SELECTION_SRGB[0] | (uint32_t)SELECTION_SRGB[1] << 8 | (uint32_t)SELECTION_SRGB[2] << 16 | 0xff000000u)
                : state == 2 ? 0u : r->colour_base[elem];
-    if (r->colour_cpu[elem] != c) r->colour_cpu[elem] = c, r->colour_dirty = 1;
+    if (r->colour_cpu[elem] != c) r->colour_cpu[elem] = c, r->colour_dirty = 1, r->state_gen++;
 }
 void nv_render_clear_states(R *r) {
     if (r->ncolour && memcmp(r->colour_cpu, r->colour_base, r->ncolour * 4ull))
-        memcpy(r->colour_cpu, r->colour_base, r->ncolour * 4ull), r->colour_dirty = 1;
+        memcpy(r->colour_cpu, r->colour_base, r->ncolour * 4ull), r->colour_dirty = 1, r->state_gen++;
 }
+
+int nv_render_add_colours(R *r, uint32_t elem0, uint32_t n, const uint32_t *colours) {
+    if (!n) return 0;
+    if (colour_room(r, elem0 + n)) return -1;
+    memcpy(r->colour_base + elem0, colours, n * 4ull);
+    memcpy(r->colour_cpu + elem0, colours, n * 4ull);
+    r->colour_dirty = 1, r->state_gen++;
+    return 0;
+}
+SDL_GPUTexture *nv_render_ids(const R *r) { return r->ids; }
 
 SDL_GPUTexture *nv_render_color(const R *r) { return r->color; }
 nv_render_stats nv_render_get_stats(const R *r) {
     uint64_t g = r->gpu_bytes;
     for (uint32_t k = 0; k < r->nparts; k++) g += r->parts[k]->gpu_bytes;
-    nv_render_stats s = {r->draws, r->commands, r->proxies_drawn, r->nparts, 0, r->tris, g, r->W, r->H};
+    g += r->tl.gpu_bytes;
+    nv_render_stats s = {r->draws, r->commands, r->proxies_drawn, r->nparts, r->tl.tiles_drawn, r->tris, 0, 0, 0, 0, r->tl.gpu_bytes, g, r->W, r->H};
+    for (uint32_t k = 0; k < r->tl.nsets; k++) s.tiles_resident += nv_tileset_resident(r->tl.sets[k]);
+    s.tests = r->tl.ntests, s.pass1 = r->tl.tiles_pass1, s.wanted = r->tl.budget_full ? 0 : r->tl.want_n, s.budget_full = r->tl.budget_full;
     return s;
 }
 

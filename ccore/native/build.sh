@@ -74,9 +74,9 @@ for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || exit 1; done
 find "$O/core" -name "*.o" ! -name "*.$hsig.o" -delete 2> /dev/null || true
 t2=$(ms)
 # 4. the app
-APP=(native/render.c native/scene_load.c native/loader.c native/ui/app.c native/ui/core.c native/ui/view3d.c native/ui/shell.c
+APP=(native/render.c native/tiles_gpu.c native/scene_load.c native/loader.c native/ui/app.c native/ui/core.c native/ui/view3d.c native/ui/shell.c
      native/ui/panels.c native/ui/home.c native/ui/tools.c native/ui/page_quantities.c native/ui/drive.c native/ui/theme.c
-     native/ui/icons.c native/ui/machine.c native/ui/slog.c native/ui/nset.c "$G/embed.c")
+     native/ui/icons.c native/ui/machine.c native/ui/slog.c native/ui/nset.c native/ui/compare.c "$G/embed.c")
 INC=(-I"$D"/cimgui -I"$D"/nanosvg/src -Inative -Inative/ui -I"$G/spv" $(pkg-config --cflags sdl3 freetype2))
 SDL_LIBS=$(pkg-config --libs sdl3)
 LINK_EXTRA=()
@@ -104,8 +104,17 @@ case $MODE in
     STDCXX=(-Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc)
     LINK_EXTRA=(-Wl,-z,relro,-z,now -Wl,--gc-sections)
     # -Werror on the app's own files (nanosvg's sign-compare is silenced at its include)
-    build_app_clang out/app/bimble -Werror
-    strip out/app/bimble ;;
+    LINK_EXTRA+=(-Wl,--build-id=sha1)
+    build_app_clang out/app/bimble -Werror -g
+    # NUI2: the debug information kept beside, named by build id (the session log prints it; native/symbolize.sh
+    # turns a crash's raw addresses into functions); the binary shipped is stripped and points to it
+    bid=$(readelf -n out/app/bimble | awk '/Build ID/ {print $3}')
+    mkdir -p out/app/debug
+    objcopy --only-keep-debug out/app/bimble "out/app/debug/$bid.debug"
+    cp "out/app/debug/$bid.debug" out/app/bimble.debug
+    strip out/app/bimble
+    objcopy --add-gnu-debuglink="out/app/debug/$bid.debug" out/app/bimble
+    ls -t out/app/debug/*.debug 2> /dev/null | tail -n +21 | xargs -r rm -f ;; # the last 20 builds' kept
   asan)
     build_app_clang out/app-asan/bimble ;;
   dev | watch)
