@@ -99,7 +99,7 @@ fail), collaboration, rebar, steel. See [ROADMAP.md](ROADMAP.md).
 - **Native Linux app (preview, ADR 0084):** the Linux archive also holds `bimble`, the same core
   with a native 3D view and the lab's ribbon in one window: `./bimble project.bimble` (no file: the
   Home screen). It needs SDL 3.4 or newer and a Vulkan driver; for large linked projects. Build it
-  from source with `make native` (SDL3, FreeType and glslc installed).
+  from source with `make native` (SDL3 and FreeType installed).
 - **Homebrew:** `brew tap guilbep/bimble https://github.com/guilbep/bimble && brew install
   bimble-ccore`.
 - **For agents:** `bimble-ccore mcp model.bimble` is an MCP server over stdio (`ccore/README.md`).
