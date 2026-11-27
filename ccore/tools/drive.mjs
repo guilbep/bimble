@@ -3,8 +3,9 @@
 //   node ccore/tools/drive.mjs [what] [options] [--preset orbit-zoom|open|walk-inside | --script FILE.json | --do '<steps>']
 // what (one):
 //   --model PATH          a model (.bimble, .ifc, .json) opened by the native host (a copy in the run's temp folder)
-//   --project PATH        a .bimble project of links: read where it is through a scratch folder of symbolic links
-//                         (any file the host writes lands in the scratch folder, never beside your files)
+//   --project PATH        a .bimble project of links: read where it is through a scratch folder of symbolic links;
+//                         the links' caches in --cache-dir (default ~/.cache/bimble-drive/project-cache, refused inside
+//                         the project's folder) with BIMBLE_LINK_CACHE_BESIDE=0: nothing is written beside your files
 //   --links N             N synthetic buildings (bench/buildings_synth.mjs) linked as a folder into a new project,
 //                         placed in rows; --storeys S (2). Kept in ~/.cache/bimble-drive/synth-N-S between runs
 //                         (--clean deletes it at the end)
@@ -219,6 +220,12 @@ export class Drive {
       // a scratch folder of symbolic links to every file beside the project: what the host writes (a cache, a
       // session) replaces a link in the scratch folder (written to a temp file, then renamed), never the original
       const src = dirname(resolve(o.project)), mirror = join(tmp, "project");
+      // a project's link caches go to a cache folder of the run's own (kept between runs: --cache-dir, default
+      // ~/.cache/bimble-drive/project-cache), never beside the user's files (BIMBLE_LINK_CACHE_BESIDE=0): the links
+      // of a project name their files by absolute path, and a cache found stale beside them was written there (27 Nov)
+      this.cacheDir = resolve(o.cacheDir ?? join(root, "project-cache"));
+      if (this.cacheDir === src || this.cacheDir.startsWith(src + "/")) throw new Error(`--cache-dir ${this.cacheDir} is inside the project's folder: refused (nothing is written beside your files)`);
+      mkdirSync(this.cacheDir, { recursive: true });
       mkdirSync(mirror);
       for (const f of readdirSync(src)) {
         const p = join(src, f);
@@ -242,7 +249,7 @@ export class Drive {
     if (!existsSync(bin)) throw new Error(`no ${bin}: ccore/build.sh native`);
     const hostHome = o.links ? synthDir : home;
     this.host = this.start("host", bin, [String(this.port), ...(what ? [what] : [])], { cwd: tmp, env: { ...process.env, BIMBLE_TOKEN: this.token, HOME: hostHome, BIMBLE_CONFIG_DIR: config,
-      BIMBLE_CACHE_DIR: o.links ? join(synthDir, "cache") : cache, BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_ORIGINS: `http://localhost:${this.vite},http://127.0.0.1:${this.vite}` } });
+      BIMBLE_CACHE_DIR: o.links ? join(synthDir, "cache") : this.cacheDir ?? cache, BIMBLE_LINK_CACHE_BESIDE: "0", BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_ORIGINS: `http://localhost:${this.vite},http://127.0.0.1:${this.vite}` } });
     await this.waitFor("the host", 600000, () => this.host.out.includes("listening") || (this.host.exitCode !== null && Promise.reject(new Error(this.host.out.slice(-600)))), 50);
     if (o.links) {
       const dir = join(synthDir, "links");
@@ -375,7 +382,17 @@ export class Drive {
   }
   async waitState(what) {
     const g = "window.__bbGl";
-    if (what === "ready") return this.waitFor("ready", 1800000, () => this.ev(`!!(${g}.firstFrameMs && (${this.nLinks} === 0 || (${g}.linkDetail && ${g}.linkDetail.length === ${this.nLinks} && ${g}.linkDetail.every((l) => l.detail))))`), 200);
+    // ready: drawn with every link's detail, or (a GPU budget across links: SIZE3's link_gpu_mb) with the links' detail
+    // unchanged for 3 s (those within the budget loaded, the others drawn as their proxies)
+    if (what === "ready") {
+      let last = "", since = Date.now();
+      return this.waitFor("ready", 1800000, async () => {
+        const r = await this.ev(`(() => { const g = ${g}; if (!g.firstFrameMs) return null; const d = g.linkDetail || []; return { all: ${this.nLinks} === 0 || (d.length === ${this.nLinks} && d.every((l) => l.detail)), key: d.map((l) => l.detail ? 1 : 0).join("") + "|" + d.length }; })()`);
+        if (!r) return false;
+        if (r.key !== last) last = r.key, since = Date.now();
+        return r.all || (r.key.endsWith(`|${this.nLinks}`) && Date.now() - since >= 3000);
+      }, 200);
+    }
     if (what === "first-picture") return this.waitFor("first picture", 600000, () => this.ev(`!!(${g}.proxyPreview || ${g}.firstFrameMs)`), 20);
     if (what === "complete") return this.waitFor("complete", 600000, () => this.ev(`${g}.fullFrameMs != null`), 50);
     if (what === "idle") {
