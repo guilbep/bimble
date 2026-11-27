@@ -19,7 +19,7 @@ and as an MCP server for agents (ADR 0067–0069, ADR 0072).
 <!-- status:begin -->
 <!-- Written by `node ccore/tools/status.mjs --write` from ccore/results/. Do not edit between the markers: `ci/run.sh unit` checks them. -->
 
-## Status (version `0.1.0-preview.5`)
+## Status (version `0.1.0-preview.6`)
 
 A preview. Each number is copied from a generated report under `ccore/results/`; the sources and
 the conditions of each number are listed under the list.
@@ -44,10 +44,10 @@ the conditions of each number are listed under the list.
   (Ctrl N: the browser keeps it). The Rust answers were dumped from a development build that
   reports `bimble 0.18.1`, not from v0.19.0.
   6 controls still shown are not served by the C core; the report lists them.
-- **Size** [3]: 71,609 lines of C; the viewer wasm 542,003 bytes (253,081 gzip, 54.2 % of
-  its 1,000,000-byte limit), the editor wasm 1,267,070 bytes (516,309 gzip), the native program
-  3,345,864 bytes (stripped), the Linux aarch64 release archive 2,814,488 bytes.
-  That archive was built on the dev machine with a stale `web/ccore/` copy inside (1,757,098 bytes
+- **Size** [3]: 72,338 lines of C; the viewer wasm 544,389 bytes (253,956 gzip, 54.4 % of
+  its 1,000,000-byte limit), the editor wasm 1,269,984 bytes (517,303 gzip), the native program
+  3,476,944 bytes (stripped), the Linux aarch64 release archive 2,944,573 bytes.
+  That archive was built on the dev machine with a stale `web/ccore/` copy inside (1,863,864 bytes
   before compression) that the CI archive does not have.
 - **Speed** [4]: Lighthouse performance (desktop / mobile, median of 3 runs): 80 / 75 for the
   current build served locally on the dev machine under load (load average 17.89 at the start);
