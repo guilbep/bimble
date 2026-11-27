@@ -572,14 +572,36 @@ void nv_tileset_attach(R *r, nv_tileset *ts, uint32_t tile, nv_gtile *g) {
     r->tl.gpu_bytes += g->bytes;
 }
 
+/* a tile released while a frame that draws it may still run (frames in flight): its ranges freed at the next collect */
+static nv_gtile **dead;
+static uint32_t ndead, cdead;
 static void drop_tile(R *r, nv_tileset *ts, uint32_t t) {
     nv_gtile *g = ts->g[t];
     if (!g) return;
     ts->bytes -= g->bytes, ts->resident--;
     r->tl.gpu_bytes -= g->bytes;
-    nv_gtile_free(r->dev, g); /* the GPU is done with it: every frame waits for its fence */
     ts->g[t] = NULL;
+    if (ndead == cdead) {
+        uint32_t c = cdead ? cdead * 2 : 256;
+        nv_gtile **n2 = realloc(dead, c * sizeof *n2);
+        if (!n2) { SDL_WaitForGPUIdle(r->dev), nv_gtile_free(r->dev, g); return; }
+        dead = n2, cdead = c;
+    }
+    dead[ndead++] = g;
 }
+static void bury(R *r) {
+    for (uint32_t i = 0; i < ndead; i++) nv_gtile_free(r->dev, dead[i]);
+    ndead = 0;
+}
+/* what a frame's collect needs, kept per slot (the next frame's prepare overwrites the frame state) */
+static struct Snap {
+    int read_vis, seen_planned;
+    uint64_t frame, tris1;
+    uint32_t tiles1, ngates, nmap, cg, cm;
+    uint64_t *gate_tris;
+    uint32_t *gate_tiles;
+    TMap *map;
+} snp[2];
 
 int nv_render_add_tileset(R *r, nv_tileset *ts) {
     nv_tiles_r *T = &r->tl;
@@ -694,7 +716,7 @@ void nv_tiles_release(R *r) {
     SDL_GPUComputePipeline *cp[] = {T->hiz0, T->hizn, T->test, T->gate, T->seen};
     for (int k = 0; k < 5; k++) if (cp[k]) SDL_ReleaseGPUComputePipeline(d, cp[k]);
     if (T->seen_buf) SDL_ReleaseGPUBuffer(d, T->seen_buf);
-    if (T->seen_down) SDL_ReleaseGPUTransferBuffer(d, T->seen_down);
+    for (int k = 0; k < 2; k++) if (T->seen_downs[k]) SDL_ReleaseGPUTransferBuffer(d, T->seen_downs[k]);
     free(seen_cpu), seen_cpu = NULL, nseen_cpu = 0;
     SDL_GPUBuffer *b[] = {T->cmd_a, T->cmd_b, T->gidx, T->gates, T->tests, T->vis, T->inst};
     for (int k = 0; k < 7; k++) if (b[k]) SDL_ReleaseGPUBuffer(d, b[k]);
@@ -706,7 +728,7 @@ void nv_tiles_release(R *r) {
         }
     memset(pg, 0, sizeof pg), npg = 0, pg_bytes = 0;
     if (T->up) SDL_ReleaseGPUTransferBuffer(d, T->up);
-    if (T->down) SDL_ReleaseGPUTransferBuffer(d, T->down);
+    for (int k = 0; k < 2; k++) if (T->downs[k]) SDL_ReleaseGPUTransferBuffer(d, T->downs[k]);
     memset(T, 0, sizeof *T);
 }
 
@@ -857,7 +879,8 @@ static uint64_t emit(nv_tiles_r *T, nv_tileset *ts, nv_gtile *g, int pass, uint3
  * group drawn in pass 1 when one of its elements was seen last frame (the id buffer: seen.comp), else tested on its own
  * box (its members' spheres) against pass 1's depth and drawn in pass 2 when visible. */
 #define CL 8
-static int seen_last(uint32_t e, uint64_t fr) { return e < nseen_cpu && seen_cpu[e] + 1ull == fr && fr > 1; }
+static uint64_t lastc; /* the frame last collected (serial: this one's previous; frames in flight: the one before) */
+static int seen_last(uint32_t e, uint64_t fr) { (void)fr; return e < nseen_cpu && lastc && seen_cpu[e] == (uint32_t)lastc; }
 static uint32_t group_test(float lo[3], float hi[3]) {
     uint32_t g = new_gate();
     GROW(F.test, F.ntest, F.ctest, 1);
@@ -1058,14 +1081,14 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
                 continue;
             }
             if (g) {
-                int pass = !occl || ts->vis[t] + 1 == fr ? 1 : 2;
+                int pass = !occl || (lastc && ts->vis[t] == lastc) ? 1 : 2;
                 uint64_t tr = emit(T, ts, g, pass, pass == 1 ? 0 : own, &cut);
                 if (pass == 1) F.tris1 += tr, F.tiles1++;
                 else F.gate_tris[own] += tr, F.gate_tiles[own]++;
                 continue;
             }
             /* not loaded: wanted (with occlusion: when its box was visible last frame), its nearest loaded ancestor's proxy stands in */
-            if (!ref && ts->st[t] == 0 && (!occl || (ts->tested[t] + 1 == fr && ts->vis[t] + 1 == fr)) && want_n < 256)
+            if (!ref && ts->st[t] == 0 && (!occl || (lastc && ts->tested[t] == lastc && ts->vis[t] == lastc)) && want_n < 256)
                 T->want[want_n++] = (nv_tile_want){ts, t, k};
             uint32_t a = t;
             cc_tile x;
@@ -1286,14 +1309,18 @@ void nv_tiles_seen(R *r, SDL_GPUCommandBuffer *cmd) {
     uint32_t need = r->ncolour * 4;
     if (!T->seen_buf || T->seen_cap < need) {
         if (T->seen_buf) SDL_ReleaseGPUBuffer(r->dev, T->seen_buf), r->gpu_bytes -= T->seen_cap;
-        if (T->seen_down) SDL_ReleaseGPUTransferBuffer(r->dev, T->seen_down);
         T->seen_cap = need + need / 2;
         SDL_GPUBufferCreateInfo ci = {.usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_WRITE | SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ, .size = T->seen_cap};
         T->seen_buf = SDL_CreateGPUBuffer(r->dev, &ci);
+        if (!T->seen_buf) { T->seen_cap = 0; return; }
+        r->gpu_bytes += T->seen_cap;
+    }
+    if (!T->seen_down || T->seen_down_caps[r->slot] < need) { /* this slot's read-back (the other may still be read) */
+        if (T->seen_down) SDL_ReleaseGPUTransferBuffer(r->dev, T->seen_down);
         SDL_GPUTransferBufferCreateInfo tci = {.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = T->seen_cap};
         T->seen_down = SDL_CreateGPUTransferBuffer(r->dev, &tci);
-        if (!T->seen_buf || !T->seen_down) { T->seen_cap = 0; return; }
-        r->gpu_bytes += T->seen_cap;
+        T->seen_down_caps[r->slot] = T->seen_down ? T->seen_cap : 0;
+        if (!T->seen_down) return;
     }
     uint32_t u[4] = {r->W, r->H, (uint32_t)T->frame, r->ncolour};
     SDL_GPUStorageBufferReadWriteBinding bw = {.buffer = T->seen_buf, .cycle = false};
@@ -1330,38 +1357,68 @@ void nv_tiles_readback(R *r, SDL_GPUCopyPass *cp) {
 }
 
 /* After the fence: the tiles seen (pass 1 next frame, loaded if missing), the triangles drawn. */
-uint64_t nv_tiles_collect(R *r) {
+void nv_tiles_snapshot(R *r, int slot) {
     nv_tiles_r *T = &r->tl;
-    uint64_t tris = F.tris1;
-    uint32_t tiles = F.tiles1;
-    if (T->read_vis) {
-        const uint32_t *g = SDL_MapGPUTransferBuffer(r->dev, T->down, false);
+    struct Snap *p = &snp[slot];
+    p->read_vis = T->read_vis, p->seen_planned = T->seen_planned, p->frame = T->frame, p->tris1 = F.tris1, p->tiles1 = F.tiles1;
+    p->ngates = 0, p->nmap = 0;
+    if (F.ngates > p->cg) {
+        uint64_t *a2 = realloc(p->gate_tris, F.ngates * 8ull);
+        if (a2) p->gate_tris = a2;
+        uint32_t *b2 = a2 ? realloc(p->gate_tiles, F.ngates * 4ull) : NULL;
+        if (!a2 || !b2) { p->read_vis = 0; return; }
+        p->gate_tiles = b2, p->cg = F.ngates;
+    }
+    if (T->nmap > p->cm) {
+        TMap *m2 = realloc(p->map, T->nmap * sizeof *m2);
+        if (!m2) { p->read_vis = 0; return; }
+        p->map = m2, p->cm = T->nmap;
+    }
+    if (F.ngates) memcpy(p->gate_tris, F.gate_tris, F.ngates * 8ull), memcpy(p->gate_tiles, F.gate_tiles, F.ngates * 4ull);
+    if (T->nmap) memcpy(p->map, T->map, T->nmap * sizeof *p->map);
+    p->ngates = F.ngates, p->nmap = T->nmap;
+}
+
+static struct Snap *last_collected;
+/* After slot's fence: the tiles seen (pass 1 next, loaded if missing), the triangles drawn; tiles released since freed. */
+uint64_t nv_tiles_collect(R *r, int slot) {
+    nv_tiles_r *T = &r->tl;
+    struct Snap *p = &snp[slot];
+    last_collected = p, lastc = p->frame;
+    uint64_t tris = p->tris1;
+    uint32_t tiles = p->tiles1;
+    if (p->read_vis && T->downs[slot]) {
+        const uint32_t *g = SDL_MapGPUTransferBuffer(r->dev, T->downs[slot], false);
         if (g) {
-            for (uint32_t k = 1; k < F.ngates; k++)
-                if (g[k]) tris += F.gate_tris[k], tiles += F.gate_tiles[k];
-            for (uint32_t i = 0; i < T->nmap; i++) {
-                TMap *m = &T->map[i];
-                m->ts->tested[m->tile] = T->frame;
-                if (g[m->gate]) m->ts->vis[m->tile] = T->frame;
+            for (uint32_t k = 1; k < p->ngates; k++)
+                if (g[k]) tris += p->gate_tris[k], tiles += p->gate_tiles[k];
+            for (uint32_t i = 0; i < p->nmap; i++) {
+                TMap *m = &p->map[i];
+                int live = 0; /* a set removed since (its slot freed): skipped */
+                for (uint32_t si = 0; si < T->nsets && !live; si++) live = T->sets[si] == m->ts;
+                if (!live || m->tile >= m->ts->nT) continue;
+                m->ts->tested[m->tile] = p->frame;
+                if (g[m->gate]) m->ts->vis[m->tile] = p->frame;
             }
-            SDL_UnmapGPUTransferBuffer(r->dev, T->down);
+            SDL_UnmapGPUTransferBuffer(r->dev, T->downs[slot]);
         }
     } else if (!T->o.reference)
         for (uint32_t si = 0; si < T->nsets; si++) { /* no test: every selected tile counts as seen */
             nv_tileset *ts = T->sets[si];
-            for (uint32_t k = 0; k < ts->nsel; k++) ts->tested[ts->sel[k]] = ts->vis[ts->sel[k]] = T->frame;
+            for (uint32_t k = 0; k < ts->nsel; k++) ts->tested[ts->sel[k]] = ts->vis[ts->sel[k]] = p->frame;
         }
-    if (T->seen_planned) { /* the elements seen: the next frame's pass 1 */
-        const uint32_t *sv = SDL_MapGPUTransferBuffer(r->dev, T->seen_down, false);
+    if (p->seen_planned && T->seen_downs[slot]) { /* the elements seen: the next frames' pass 1 */
+        const uint32_t *sv = SDL_MapGPUTransferBuffer(r->dev, T->seen_downs[slot], false);
         if (sv) {
             if (nseen_cpu < r->ncolour) {
                 uint32_t *n2 = realloc(seen_cpu, r->ncolour * 4ull);
                 if (n2) memset(n2 + nseen_cpu, 0, (r->ncolour - nseen_cpu) * 4ull), seen_cpu = n2, nseen_cpu = r->ncolour;
             }
             if (seen_cpu) memcpy(seen_cpu, sv, (nseen_cpu < r->ncolour ? nseen_cpu : r->ncolour) * 4ull);
-            SDL_UnmapGPUTransferBuffer(r->dev, T->seen_down);
+            SDL_UnmapGPUTransferBuffer(r->dev, T->seen_downs[slot]);
         }
     }
+    bury(r);
     T->tiles_drawn = tiles;
     static int dbg = -1;
     if (dbg < 0) dbg = getenv("BIMBLE_TILES_DEBUG") != NULL;
@@ -1369,7 +1426,7 @@ uint64_t nv_tiles_collect(R *r) {
         uint32_t sel = 0, res = 0;
         for (uint32_t si = 0; si < T->nsets; si++) sel += T->sets[si]->nsel, res += T->sets[si]->resident;
         fprintf(stderr, "tiles: prepare %.2f ms (walk %.2f), draws %.2f ms; frame %llu: %u sets, %u selected, %u resident, %u tests, %u pass 1, %u drawn, %llu tris, %u gates, %u commands, want %u, read %d\n",
-                T->ms_prepare, T->ms_walk, T->ms_draw, (unsigned long long)T->frame, T->nsets, sel, res, T->ntests, F.tiles1, tiles, (unsigned long long)tris, F.ngates, F.ncmd, T->want_n, T->read_vis);
+                T->ms_prepare, T->ms_walk, T->ms_draw, (unsigned long long)p->frame, T->nsets, sel, res, T->ntests, p->tiles1, tiles, (unsigned long long)tris, p->ngates, F.ncmd, T->want_n, p->read_vis);
     }
     return tris;
 }
@@ -1379,11 +1436,15 @@ uint32_t nv_render_tiles_want(R *r, nv_tile_want *out, uint32_t cap) {
     uint32_t n = 0;
     T->budget_full = 0;
     /* with occlusion the wanted list is rebuilt from this frame's answers (a tile seen now, not loaded) */
-    if (T->o.occlusion && !T->o.reference && T->read_vis) {
+    struct Snap *p = last_collected;
+    if (T->o.occlusion && !T->o.reference && p && p->read_vis) {
         T->want_n = 0;
-        for (uint32_t i = 0; i < T->nmap && T->want_n < 256; i++) {
-            TMap *m = &T->map[i];
-            if (!m->ts->g[m->tile] && m->ts->st[m->tile] == 0 && m->ts->vis[m->tile] == T->frame) T->want[T->want_n++] = (nv_tile_want){m->ts, m->tile, i};
+        for (uint32_t i = 0; i < p->nmap && T->want_n < 256; i++) {
+            TMap *m = &p->map[i];
+            int live = 0;
+            for (uint32_t si = 0; si < T->nsets && !live; si++) live = T->sets[si] == m->ts;
+            if (!live) continue;
+            if (!m->ts->g[m->tile] && m->ts->st[m->tile] == 0 && m->ts->vis[m->tile] == p->frame) T->want[T->want_n++] = (nv_tile_want){m->ts, m->tile, i};
         }
         for (uint32_t si = 0; si < T->nsets && T->want_n < 256; si++)
             if (T->sets[si]->shown && T->sets[si]->nT && !T->sets[si]->g[0] && T->sets[si]->st[0] == 0)

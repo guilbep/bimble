@@ -269,6 +269,8 @@ static void app_resize_step(App *a) {
     a->resize_w = w, a->resize_h = h, a->resize_wait = 2;
 }
 
+static void frame_done(App *a, Pend *p, double t1);
+
 /* ---- NUI2's truth test: the frame's id target drawn without occlusion (0) and with it (1), read back; an element in the
  * first and not in the second is missing (occlusion dropped something visible) ---- */
 static SDL_GPUTransferBuffer *truth_tb[2], *truth_db[2]; /* ids, depths */
@@ -476,45 +478,76 @@ static void frame(App *a) {
                               .load_op = SDL_GPU_LOADOP_DONT_CARE, .filter = SDL_GPU_FILTER_NEAREST};
         SDL_BlitGPUTexture(cmd, &bi);
     }
-    SDL_GPUFence *f = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
-    if (f) SDL_WaitForGPUFences(a->dev, true, &f, 1), SDL_ReleaseGPUFence(a->dev, f);
-    double t1 = app_now();
-    a->st_gpu = t1 - t_recui;
-    a->gpu_ms = t1 - t_ui;
-    a->frame_ms = drew3d ? t1 - t_ui : 0;
+    /* NUI2, frames in flight (frames_in_flight, 2 by default): this frame was recorded while the GPU drew the previous one;
+     * the previous one is finished here (its fence: its read-backs, the pick, the numbers), then this one submitted and
+     * finished at the next frame. 1: each frame waits for its own fence (the truth test always: it compares this frame). */
+    if (a->pend.f) {
+        SDL_WaitForGPUFences(a->dev, true, &a->pend.f, 1), SDL_ReleaseGPUFence(a->dev, a->pend.f), a->pend.f = NULL;
+        frame_done(a, &a->pend, app_now());
+    }
+    Pend cur = {SDL_SubmitGPUCommandBufferAndAcquireFence(cmd), drew3d, pick && drew3d, a->moving, t_ui, t_recui, a->input_t, "", a->pick_add};
+    if (pick && drew3d) a->pick_pending = 0, a->pick_add = 0; /* the pick is this frame's (answered when it is done) */
+    snprintf(cur.input_what, sizeof cur.input_what, "%s", a->input_what);
+    a->input_t = 0;
+    if (a->in_flight > 1 && !a->truth && cur.f && !a->quit) a->pend = cur;
+    else {
+        if (cur.f) SDL_WaitForGPUFences(a->dev, true, &cur.f, 1), SDL_ReleaseGPUFence(a->dev, cur.f);
+        cur.f = NULL;
+        frame_done(a, &cur, app_now());
+    }
+    if (a->offscreen && a->resize_script && a->frames % 3 == 2) app_resize_step(a);
+    a->frames++;
+}
+
+/* A frame's fence passed: its numbers, the moving budget, its read-backs (the pick), the logs. */
+static void frame_done(App *a, Pend *p, double t1) {
+    int drew3d = p->drew3d, pick = p->pick;
+    a->st_gpu = t1 - p->t_recui;
+    a->gpu_ms = t1 - p->t_ui;
+    a->frame_ms = drew3d ? t1 - p->t_ui : 0;
+    static double last3d_done;
+    a->interval_ms = drew3d && last3d_done ? t1 - last3d_done : 0; /* the time between two 3D frames shown (the rate) */
+    if (drew3d) last3d_done = t1;
     if (drew3d) {
         a->last3d_ms = a->frame_ms;
-        if (a->moving) a->ring_move[a->nmove++ % 2048] = (float)a->frame_ms;
+        if (p->moving) a->ring_move[a->nmove++ % 2048] = (float)a->frame_ms;
         else a->ring_still[a->nstill++ % 2048] = (float)a->frame_ms;
     }
     /* the moving budget (the page's idea, ADR 0078): while moving, the screen-size cut grows until a
-     * frame fits in ~16 ms, and shrinks back when there is room; still frames are always whole */
-    if (drew3d && a->moving && a->adaptive && a->moving_fps > 0) { /* the target: settings moving_fps (30: 33 ms) */
+     * frame fits, and shrinks back when there is room; still frames are always whole. The rate with frames in flight. */
+    double cost = a->frame_ms; /* the frame's own time (with frames in flight it includes the next frame's recording: the safe side);
+                                * not the interval between frames, which waits for the input */
+    if (drew3d && p->moving && a->adaptive && a->moving_fps > 0) {
         double target = 1000.0 / a->moving_fps;
-        if (a->frame_ms > target * 0.75 && a->cut_live < 16) a->cut_live = a->cut_live < 1 ? 1 : a->cut_live * 1.5f; /* NUI2: 0.6 -> 0.75 and 0.25 -> 0.45: nearer the target, more detail while moving */
-        else if (a->frame_ms < target * 0.45 && a->cut_live > a->moving_cut) a->cut_live = a->cut_live / 1.5f < a->moving_cut ? a->moving_cut : a->cut_live / 1.5f;
+        if (cost > target * 0.75 && a->cut_live < 16) a->cut_live = a->cut_live < 1 ? 1 : a->cut_live * 1.5f; /* NUI2: 0.6 -> 0.75 and 0.25 -> 0.45: nearer the target, more detail while moving */
+        else if (cost < target * 0.45 && a->cut_live > a->moving_cut) a->cut_live = a->cut_live / 1.5f < a->moving_cut ? a->moving_cut : a->cut_live / 1.5f;
     }
     if (drew3d) {
         uint32_t picked = 0;
         nv_render_collect(a->r, pick ? &picked : NULL);
         a->truth_missing = a->truth && a->use_tiles ? truth_compare(a) : -1;
-        if (a->moving && a->adaptive && a->moving_fps > 0 && a->use_tiles) { /* the moving budget's triangles (the walker's) */
+        if (p->moving && a->adaptive && a->moving_fps > 0 && a->use_tiles) { /* the moving budget's triangles (the walker's) */
             double target = 1000.0 / a->moving_fps;
             uint64_t drawn = nv_render_get_stats(a->r).tris;
-            if (a->frame_ms > target * 0.6) a->tri_live = drawn * 7 / 10 > 500000 ? drawn * 7 / 10 : 500000;
-            else if (a->frame_ms < target * 0.25 && a->tri_live) a->tri_live = a->tri_live * 3 / 2 > drawn * 4 ? 0 : a->tri_live * 3 / 2;
+            if (cost > target * 0.75) a->tri_live = drawn * 7 / 10 > 500000 ? drawn * 7 / 10 : 500000;
+            else if (cost < target * 0.45 && a->tri_live) a->tri_live = a->tri_live * 3 / 2 > drawn * 4 ? 0 : a->tri_live * 3 / 2;
         } else if (!a->moving) a->tri_live = 0;
         if (pick) {
-            a->pick_pending = 0;
-            if (a->pick_add) { if (picked > NV_ELEM0) core_select_add(a, picked); } /* Ctrl-click (on nothing: the selection kept) */
+            if (p->pick_add) { if (picked > NV_ELEM0) core_select_add(a, picked); } /* Ctrl-click (on nothing: the selection kept) */
             else core_select(a, picked > NV_ELEM0 ? picked : 0);
-            a->pick_add = 0;
         }
         /* the first picture: something drawn, or nothing left to draw (an empty model) */
-        if (!a->t_first_picture && (nv_render_nparts(a->r) > 0 || scene_complete(a))) a->t_first_picture = t1;
+        if (!a->t_first_picture && (nv_render_nparts(a->r) > 0 || nv_render_get_stats(a->r).tiles > 0 || scene_complete(a))) a->t_first_picture = t1; /* NUI2: a tile drawn counts */
     }
     if (a->screen_kind == SCR_MAIN && !a->t_complete && a->t_first_picture && scene_complete(a)) a->t_complete = t1;
-    if (a->input_t) app_input_done(a, t1);
+    if (p->input_t) {
+        double keep = a->input_t;
+        char kw[48];
+        snprintf(kw, sizeof kw, "%s", a->input_what);
+        a->input_t = p->input_t, snprintf(a->input_what, sizeof a->input_what, "%s", p->input_what);
+        app_input_done(a, t1);
+        a->input_t = keep, snprintf(a->input_what, sizeof a->input_what, "%s", kw);
+    }
     drive_frame(a, t1, drew3d);
     slog_frame(a, t1, drew3d, drew3d ? a->frame_ms : a->gpu_ms);
     { /* the notices (warnings, errors) and the first picture and completion, in the session log */
@@ -525,11 +558,17 @@ static void frame(App *a) {
         if (a->t_complete && a->t_complete != complete_logged)
             complete_logged = a->t_complete, slog("complete %.0f ms after the open: %d links, GPU %.0f MB", a->t_complete - a->t_open, a->nlinks, nv_render_get_stats(a->r).gpu_bytes / 1048576.0);
     }
-    if (a->offscreen && a->resize_script && a->frames % 3 == 2) app_resize_step(a);
-    a->frames++;
+}
+
+/* the frame in flight finished (before a shot, a script's expectation, the exit) */
+void app_finish_frame(App *a) {
+    if (!a->pend.f) return;
+    SDL_WaitForGPUFences(a->dev, true, &a->pend.f, 1), SDL_ReleaseGPUFence(a->dev, a->pend.f), a->pend.f = NULL;
+    frame_done(a, &a->pend, app_now());
 }
 
 void app_shot(App *a, const char *path) {
+    app_finish_frame(a);
     uint32_t bytes = a->pw * a->ph * 4;
     SDL_GPUTransferBufferCreateInfo tci = {.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = bytes};
     SDL_GPUTransferBuffer *tb = SDL_CreateGPUTransferBuffer(a->dev, &tci);
@@ -711,6 +750,7 @@ int main(int argc, char **argv) {
             }
         }
     a->bench_skip = (unsigned)nset_num("bench_skip", 0);
+    a->in_flight = (int)nset_num("frames_in_flight", 2) > 1 ? 2 : 1; /* NUI2 */
     { /* the local session log: on in a window unless session_log is false; offscreen only when BIMBLE_LOG_DIR is set */
         const char *ld = getenv("BIMBLE_LOG_DIR");
         a->session_log = (int)nset_num("session_log", a->offscreen ? (ld && *ld) : 1);
@@ -809,6 +849,7 @@ int main(int argc, char **argv) {
         }
     }
     if (shot) frame(a), frame(a), app_shot(a, shot);
+    app_finish_frame(a);
     drive_finish(a);
     uint64_t peak = 0, rss = app_rss(&peak);
     fprintf(stderr, "bimble: first picture %.0f ms, complete %.0f ms, %llu frames, memory %.0f MB (peak %.0f MB)\n",

@@ -96,7 +96,7 @@ int drive_setup(App *a) {
     outpath(a, pth, sizeof pth, "memory.csv");
     a->mlog = fopen(pth, "w");
     if (!a->flog || !a->ilog || !a->mlog) { fprintf(stderr, "bimble: cannot write in %s\n", a->out_dir ? a->out_dir : "."); return -1; }
-    fprintf(a->flog, "t_ms,kind,frame_ms,ui_ms,triangles,draws,tiles,logic_ms,acquire_ms,uibuild_ms,rec3d_ms,recui_ms,gpu_ms,missing,ties,missing_small\n");
+    fprintf(a->flog, "t_ms,kind,frame_ms,ui_ms,triangles,draws,tiles,logic_ms,acquire_ms,uibuild_ms,rec3d_ms,recui_ms,gpu_ms,missing,ties,missing_small,interval_ms\n");
     fprintf(a->ilog, "t_ms,what,app_ms,frame_ms\n");
     fprintf(a->mlog, "t_ms,rss_mb,gpu_mb\n");
     if (a->preset) {
@@ -489,9 +489,9 @@ void drive_frame(App *a, double now, int drew3d) {
     if (a->rec_until && now >= a->rec_until) a->rec_until = 0, a->rec_done = 1;
     if (!a->flog) return;
     nv_render_stats st = nv_render_get_stats(a->r);
-    fprintf(a->flog, "%.1f,%s,%.3f,%.3f,%llu,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d\n", now - a->t_start, drew3d ? (a->moving ? "moving" : "still") : "ui",
+    fprintf(a->flog, "%.1f,%s,%.3f,%.3f,%llu,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%.3f\n", now - a->t_start, drew3d ? (a->moving ? "moving" : "still") : "ui",
             drew3d ? a->frame_ms : a->gpu_ms, a->ui_ms, (unsigned long long)st.tris, st.draws, st.tiles, a->st_logic, a->st_acquire, a->st_ui, a->st_rec3d,
-            a->st_recui, a->st_gpu, a->truth_missing, a->truth_missing >= 0 ? a->truth_ties : -1, a->truth_missing >= 0 ? a->truth_small : -1);
+            a->st_recui, a->st_gpu, a->truth_missing, a->truth_missing >= 0 ? a->truth_ties : -1, a->truth_missing >= 0 ? a->truth_small : -1, drew3d ? a->interval_ms : 0.0);
     if (now >= a->next_mem) {
         uint64_t peak = 0, rss = app_rss(&peak);
         fprintf(a->mlog, "%.0f,%.1f,%.1f\n", now - a->t_start, rss / 1e6, st.gpu_bytes / 1e6);
@@ -544,6 +544,8 @@ void drive_finish(App *a) {
     double *stg[NSTAGE], *tri_m = malloc(sizeof(double) * 200000), *tri_s = malloc(sizeof(double) * 200000), *til = malloc(sizeof(double) * 200000);
     for (int k = 0; k < NSTAGE; k++) stg[k] = malloc(sizeof(double) * 200000);
     long miss_total = 0, ties_total = 0, small_total = 0;
+    double *ivl = malloc(sizeof(double) * 200000);
+    int niv = 0;
     int miss_frames = 0, truth_frames = 0, nst = 0;
     outpath(a, p, sizeof p, "frames.csv");
     FILE *f = fopen(p, "r");
@@ -553,8 +555,10 @@ void drive_finish(App *a) {
         char kind[16];
         double um, tr, dr, ti, sv[NSTAGE];
         int miss = -1, tie = -1, smallm = -1;
-        if (sscanf(line, "%lf,%15[^,],%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%d,%d,%d", &t, kind, &fm, &um, &tr, &dr, &ti, &sv[0], &sv[1], &sv[2], &sv[3], &sv[4], &sv[5],
-                   &miss, &tie, &smallm) < 3) continue;
+        double iv = 0;
+        if (sscanf(line, "%lf,%15[^,],%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%d,%d,%d,%lf", &t, kind, &fm, &um, &tr, &dr, &ti, &sv[0], &sv[1], &sv[2], &sv[3], &sv[4], &sv[5],
+                   &miss, &tie, &smallm, &iv) < 3) continue;
+        if (!strcmp(kind, "moving") && iv > 0 && iv < 1000 && niv < 200000 && ivl) ivl[niv++] = iv;
         if (tie > 0) ties_total += tie;
         if (smallm > 0) small_total += smallm;
         if (!strcmp(kind, "moving") && nm < 200000) {
@@ -612,6 +616,9 @@ void drive_finish(App *a) {
                 if (sscanf(line, "%lf,%lf,%lf", &t, &r, &g) == 3 && g > gmax) gmax = g;
             }
             if (mf) fclose(mf);
+            double m8, p8, x8;
+            pct(ivl, ivl ? niv : 0, &m8, &p8, &x8);
+            fprintf(f, "| moving: time between two frames shown, median / p95 (the rate; frames in flight %d) | %.1f / %.1f ms (n %d) |\n", a->in_flight, m8, p8, niv);
             fprintf(f, "| triangles moving / still (median) | %.0f / %.0f |\n| tiles drawn moving (median) | %.0f |\n| GPU peak | %.0f MB |\n", m5, m6, m7, gmax);
             fprintf(f, "| moving frame by stage, median ms: logic / acquire / UI build / 3D record / UI record / GPU | %.2f / %.2f / %.2f / %.2f / %.2f / %.2f |\n", sm[0], sm[1], sm[2], sm[3],
                     sm[4], sm[5]);
@@ -624,6 +631,6 @@ void drive_finish(App *a) {
     fprintf(stderr, "drive: summary: first %.0f ms, complete %.0f ms, moving %.1f/%.1f ms, still %.1f/%.1f ms, input->frame %.1f/%.1f/%.1f ms, app %.1f/%.1f/%.1f ms, peak %.0f MB, %d failed\n",
             a->t_first_picture ? a->t_first_picture - a->t_start : -1.0, a->t_complete ? a->t_complete - a->t_start : -1.0, m1, p1, m2, p2, m3, p3, x3, m4, p4, x4,
             peak / 1e6, fails);
-    free(mv), free(st), free(in), free(ap), free(tri_m), free(tri_s), free(til);
+    free(mv), free(st), free(in), free(ap), free(tri_m), free(tri_s), free(til), free(ivl);
     for (int k = 0; k < NSTAGE; k++) free(stg[k]);
 }

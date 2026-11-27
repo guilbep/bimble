@@ -94,6 +94,8 @@ typedef struct {
 } Step;
 
 typedef struct { double t; double ms; char what[48]; } InputTime;
+/* NUI2: a frame submitted, finished at the next frame (frames in flight) */
+typedef struct { SDL_GPUFence *f; int drew3d, pick, moving; double t_ui, t_recui, input_t; char input_what[48]; int pick_add; } Pend;
 
 struct App {
     /* the process */
@@ -246,6 +248,9 @@ struct App {
     uint32_t model_elem0, model_nE;
     uint64_t tri_live;           /* the moving budget's triangles for the walker (0: none) */
     double tiles_checked;
+    Pend pend;
+    int in_flight;               /* frames_in_flight: 2 (the next frame recorded while the GPU draws this one) or 1 */
+    double interval_ms;          /* the time between the last two 3D frames done */
     int truth;                   /* --truth: each 3D frame drawn with and without occlusion, the id buffers compared */
     char settings_line[600];     /* the optimisations in force (the report's line, for the summary) */
     int truth_missing, truth_ties, truth_small; /* truth_small: of the missing, those with 8 pixels or fewer (edge-on slivers) */           /* the truth test: element ids missing from this frame with occlusion (-1: not tested) */
@@ -332,6 +337,7 @@ void drive_frame(App *a, double now, int drew3d);
 void drive_finish(App *a);
 void app_shot(App *a, const char *path);
 void app_input_done(App *a, double now);
+void app_finish_frame(App *a);
 /* slog.c: the local session log */
 int slog_open(App *a);
 void slog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

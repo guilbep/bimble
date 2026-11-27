@@ -599,6 +599,11 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
         SDL_EndGPUComputePass(c2);
     }
     memcpy(r->last_vp, vp, sizeof r->last_vp);
+    int ref = r->tl.o.reference;
+    if (!ref) r->slot ^= 1; /* this frame's slot (the reference frame of the truth test shares the next one's) */
+    r->rb = r->rbs[r->slot], r->rb_parts = r->rbs_parts[r->slot];
+    r->tl.down = r->tl.downs[r->slot], r->tl.down_cap = r->tl.down_caps[r->slot];
+    r->tl.seen_down = r->tl.seen_downs[r->slot];
     double tp0 = nv_now_ms();
     int tiles = nv_tiles_prepare(r, cmd, vp, eye, pl, cam->ortho ? px_per : r->H / 2.0 / tan(NV_FOV_Y / 2), cam->ortho, r->cut_px);
     r->tl.ms_prepare = nv_now_ms() - tp0;
@@ -728,17 +733,27 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
         if (tiles) nv_tiles_readback(r, cp);
         SDL_EndGPUCopyPass(cp);
     }
+    r->rbs[r->slot] = r->rb, r->rbs_parts[r->slot] = r->rb_parts;
+    r->tl.downs[r->slot] = r->tl.down, r->tl.down_caps[r->slot] = r->tl.down_cap, r->tl.seen_downs[r->slot] = r->tl.seen_down;
+    if (!ref) {
+        r->snap[r->slot].readback = r->readback, r->snap[r->slot].picking = r->picking, r->snap[r->slot].rb_count = r->rb_count;
+        nv_tiles_snapshot(r, r->slot);
+        if (r->npend < 2) r->pend[r->npend++] = r->slot;
+    }
 }
 
 void nv_render_collect(R *r, uint32_t *picked) {
     if (picked) *picked = 0;
     r->tris = 0;
-    if (r->readback) {
-        uint32_t *m = SDL_MapGPUTransferBuffer(r->dev, r->rb, false);
+    if (!r->npend) return;
+    int s = r->pend[0]; /* the oldest frame recorded */
+    r->pend[0] = r->pend[1], r->npend--;
+    if (r->snap[s].readback && r->rbs[s]) {
+        uint32_t *m = SDL_MapGPUTransferBuffer(r->dev, r->rbs[s], false);
         if (m) {
-            for (uint32_t k = 0; k < r->rb_count; k++) r->tris += m[16 + 4 * k + 1];
-            if (r->picking && picked) *picked = m[0];
-            SDL_UnmapGPUTransferBuffer(r->dev, r->rb);
+            for (uint32_t k = 0; k < r->snap[s].rb_count; k++) r->tris += m[16 + 4 * k + 1];
+            if (r->snap[s].picking && picked) *picked = m[0];
+            SDL_UnmapGPUTransferBuffer(r->dev, r->rbs[s]);
         }
     }
     for (uint32_t k = 0; k < r->nparts; k++) {
@@ -746,7 +761,7 @@ void nv_render_collect(R *r, uint32_t *picked) {
         if (!p->shown || !p->use_hlod) continue;
         for (uint32_t c = 0; c < p->npcmd; c++) r->tris += p->pf_cpu[c].num_indices / 3;
     }
-    r->tris += nv_tiles_collect(r);
+    r->tris += nv_tiles_collect(r, s);
 }
 
 /* ---- the library's entry points ---- */
@@ -795,7 +810,7 @@ void nv_render_free(R *r) {
     if (r->cull) SDL_ReleaseGPUComputePipeline(d, r->cull);
     if (r->reset) SDL_ReleaseGPUComputePipeline(d, r->reset);
     if (r->nearest) SDL_ReleaseGPUSampler(d, r->nearest);
-    if (r->rb) SDL_ReleaseGPUTransferBuffer(d, r->rb);
+    for (int k = 0; k < 2; k++) if (r->rbs[k]) SDL_ReleaseGPUTransferBuffer(d, r->rbs[k]);
     free(r->colour_base), free(r->colour_cpu);
     free(r);
 }

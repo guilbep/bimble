@@ -27,6 +27,8 @@ typedef struct {
     uint64_t tris_pass1, tris_standin_always;
     uint32_t tiles_drawn, tiles_pass1, ntests_read;
     int read_vis, read_vis_planned, budget_full, squeeze, groups, seen_planned;
+    SDL_GPUTransferBuffer *downs[2], *seen_downs[2];
+    uint32_t down_caps[2], seen_down_caps[2];
     uint64_t noroom_frame;
     uint32_t nmap;
     SDL_GPUComputePipeline *seen;
@@ -82,6 +84,12 @@ struct nv_render {
     float clip_min[4], clip_max[4];
     unsigned skip; /* NUI2 bench: passes left out (NV_SKIP_*) to find where a frame's time goes */
     nv_tiles_r tl; /* NUI2: the tile pyramids (tiles_gpu.c) */
+    /* NUI2, frames in flight: each frame recorded in a slot (its read-back buffers and what collect needs), collected in
+     * order after its fence (the app may record the next frame before it waits for this one) */
+    SDL_GPUTransferBuffer *rbs[2];
+    uint32_t rbs_parts[2];
+    struct { int readback, picking; uint32_t rb_count; } snap[2];
+    int slot, pend[2], npend;
     uint64_t state_gen; /* bumped when an element's look changes (the walker descends under hidden or selected elements) */
     float last_vp[16];
 };
@@ -94,7 +102,8 @@ int nv_tiles_has_pass2(const struct nv_render *r);
 void nv_tiles_occlusion(struct nv_render *r, SDL_GPUCommandBuffer *cmd);
 void nv_tiles_readback(struct nv_render *r, SDL_GPUCopyPass *cp);
 void nv_tiles_seen(struct nv_render *r, SDL_GPUCommandBuffer *cmd);
-uint64_t nv_tiles_collect(struct nv_render *r);
+uint64_t nv_tiles_collect(struct nv_render *r, int slot);
+void nv_tiles_snapshot(struct nv_render *r, int slot);
 uint64_t nv_tiles_pages_bytes(void);
 void nv_tiles_release(struct nv_render *r);
 /* records the tiles' passes: pass 1 inside `rp` (open), then the rest after it ends; returns the render pass for what follows */
