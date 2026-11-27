@@ -225,6 +225,8 @@ const stats = (fs: PerfFrame[]): FrameStats => {
 export interface PerfSnapshot {
   renderer: PerfRenderer; adapter: PerfAdapter | null; moving: FrameStats; still: FrameStats; synced: boolean;
   tris: number; draws: number; batches: number; culled: number; proxiesDrawn: number; proxyTris: number; gpuBytes: number | null;
+  /** GPU2: under WebGPU, the bytes each renderer holds (WebGPU's buffers, WebGL2's left) and the models taken over. */
+  gpuSplit: { webgpu: number; webgl: number; taken: number; models: number } | null;
   jsHeap: number | null; wasmBytes: number | null; elements: number; triangles: number;
   openToFirst: number | null; openToComplete: number | null; links: PerfLink[]; inputs: PerfInput[]; frames: number;
   record: { seconds: number; moving: FrameStats; still: FrameStats; inputs: PerfInput[] } | null; recording: boolean;
@@ -240,7 +242,9 @@ export function perfSnapshot(): PerfSnapshot {
     renderer, adapter: renderer.using === "WebGPU" ? renderer.adapter : glAdapter,
     moving: stats(frames.filter((f) => f.moving)), still: stats(frames.filter((f) => !f.moving)), synced: frames.some((f) => f.synced),
     tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, batches: g?.moving?.batches ?? 0, culled: g?.moving?.culled ?? 0,
-    proxiesDrawn: g?.proxies?.drawnCells ?? 0, proxyTris: g?.proxies?.drawnTris ?? 0, gpuBytes: g?.gpuBytes ?? null,
+    proxiesDrawn: g?.proxies?.drawnCells ?? 0, proxyTris: g?.proxies?.drawnTris ?? 0,
+    gpuBytes: renderer.using === "WebGPU" && g?.gpuSplit ? g.gpuSplit.webgpu + g.gpuSplit.webgl : g?.gpuBytes ?? null, // GPU2: what each renderer holds
+    gpuSplit: g?.gpuSplit ?? null,
     jsHeap: mem ? mem.usedJSHeapSize : null, wasmBytes: cc?.memBytes ? cc.memBytes() : null,
     elements: meshElements, triangles: meshTris,
     openToFirst: firstAt !== null ? firstAt - openAt : null,
@@ -277,7 +281,7 @@ export function perfReport(names: boolean, file: string | null): string {
   L.push(`  moving: ${fline(s.moving)}`);
   L.push(`  still:  ${fline(s.still)}`);
   L.push(`last frame: ${num(s.tris)} triangles, ${num(s.draws)} draw calls; batches ${num(s.batches)}, culled ${num(s.culled)}; proxies drawn ${num(s.proxiesDrawn)} (${num(s.proxyTris)} triangles)`);
-  L.push(`memory: GPU buffers ${mb(s.gpuBytes)}, JS heap ${mb(s.jsHeap)}, wasm ${mb(s.wasmBytes)}`);
+  L.push(`memory: GPU buffers ${mb(s.gpuBytes)}${s.gpuSplit && r.using === "WebGPU" ? ` (WebGPU ${mb(s.gpuSplit.webgpu)}, WebGL2 ${mb(s.gpuSplit.webgl)}; ${s.gpuSplit.taken} of ${s.gpuSplit.models} models on WebGPU)` : ""}, JS heap ${mb(s.jsHeap)}, wasm ${mb(s.wasmBytes)}`);
   if (linkGpu.value) L.push(`linked files on the GPU: ${mb(linkGpu.value.used)} of a ${mb(linkGpu.value.budget)} budget`); // SIZE3 (C)
   L.push(`model${names && file ? ` ${file}` : ""}: ${num(s.elements)} elements, ${num(s.triangles)} triangles; open -> first frame ${ms(s.openToFirst)}, -> complete picture ${ms(s.openToComplete)}`);
   if (s.links.length) {

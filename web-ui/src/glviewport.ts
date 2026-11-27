@@ -98,7 +98,7 @@ import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: b
 import { drawRefPlanes, type RefPlaneDrawn } from "./gl/refplanes"; // WAVE1B: reference planes
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
 import { perfFrame, perfInputs, perfMesh, renderer as perfRenderer } from "./perf"; // GPU1: the performance panel's counters (LNK3D: the renderer's reason)
-import { gpuSwitch, type GpuRenderer, type GpuView } from "./gpu/switch"; // GPU1: the WebGPU renderer (ADR 0083)
+import { gpuSwitch, type GlArrays, type GpuModels, type GpuRenderer, type GpuView } from "./gpu/switch"; // GPU1: the WebGPU renderer (ADR 0083)
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -774,6 +774,8 @@ interface GlStats {
   linkGpuUsed?: number;
   linksDetailedAt?: number | null;
   decodes?: { worker: number; page: number; maxPageSliceMs: number };
+  /** GPU2: under WebGPU, the bytes each renderer holds and the models taken over (gpu/render.ts). */
+  gpuSplit?: { webgpu: number; webgl: number; taken: number; models: number };
   /** SIZE2: the heavy arrays the page keeps (bytes), per model (the open model first). */
   partBytes?: number[];
   /** 3D2 (step 4): ms of the last pick's ray scan in the page (pickHit). */
@@ -842,27 +844,88 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // scene, the camera and the states into pixels on its own canvas; everything else of the viewport is shared. ----
   let gpuR: GpuRenderer | null = null;
   gpuSwitch(canvas, stats, (r) => { gpuR = r; dirty = true; }, () => gpuView());
+  // ---- GPU2 (ADR 0083, amended): WebGPU draws the viewport's own models (each link in its own buffers, placed by its
+  // row, its elements' state texels, its proxies, the memory budget) and takes their buffers over from WebGL2's:
+  // read back once, WebGL2's emptied (never both on the GPU), given back before WebGL2 draws again ----
+  const GL_BUFS = ["pos", "el", "edge", "edgeNrm", "edgeEl", "shapeIdx", "idx", "edgeIdx", "instMat", "instEl"] as const;
+  const gpuOwned = new WeakSet<object>(); // ModelGl whose buffers WebGPU holds (WebGL2's emptied)
+  let prxEmptied = false, ghostKey: { tool: unknown; n: number } | null = null, ghostArrays: ReturnType<GpuModels["ghost"]> = null;
+  const glRead = (b: WebGLBuffer): ArrayBuffer | null => {
+    gl.bindBuffer(gl.COPY_READ_BUFFER, b);
+    const n = gl.getBufferParameter(gl.COPY_READ_BUFFER, gl.BUFFER_SIZE) as number;
+    const out = n > 0 ? new ArrayBuffer(n) : null;
+    if (out) gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, new Uint8Array(out));
+    gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+    return out;
+  };
+  const glPut = (b: WebGLBuffer, d: ArrayBuffer | null) => {
+    gl.bindBuffer(gl.COPY_WRITE_BUFFER, b);
+    if (d) gl.bufferData(gl.COPY_WRITE_BUFFER, new Uint8Array(d), gl.STATIC_DRAW);
+    else gl.bufferData(gl.COPY_WRITE_BUFFER, 0, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+  };
+  const gpuModels = (): GpuModels => ({
+    slots, dbs, groups, states: stateTexels, statesKey: stats.stateUpload, xf: modelXf, plain: plainOf, lboxes, listsKey: stats.listsBuilt ?? 0,
+    linkedSel: state.value.linked ? { link: state.value.linked.link, id: state.value.linked.id } : null,
+    linkPrx: modelPrx, prePrx, linkColour: (c) => LINK_SRGB[c] ?? REFERENCE_SRGB,
+    cutLink: (x, xf, usable, planes, eye, px) => cutLinkPrx(x as LinkPrx, xf, usable, planes, eye as V3, px),
+    need: (k) => { const x = slots[k]; if (x && k > 0) x.needFrame = drawFrame, x.needAt = performance.now(); },
+    want: (k) => { wanted.add(k); },
+    readGl: (g) => {
+      const mg = g as ModelGl, out: Partial<GlArrays> = {};
+      for (const n of GL_BUFS) { const d = glRead(mg[n]); if (d) out[n] = d; }
+      return out;
+    },
+    emptyGl: (g) => { for (const n of GL_BUFS) glPut((g as ModelGl)[n], null); gpuOwned.add(g); if (!prxEmptied) gpuModels().emptyPrx(); },
+    fillGl: (g, a) => { for (const n of GL_BUFS) if (a[n]) glPut((g as ModelGl)[n], a[n]!); gpuOwned.delete(g); },
+    emptyPrx: () => {
+      prxEmptied = true;
+      for (const x of linkPrx.values()) for (const b of x.bufs) glPut(b, null);
+      for (const b of [prxPos, prxCol, prxIdx, prxEdge, prxNrm]) glPut(b, null);
+    },
+    fillPrx: () => {
+      if (!prxEmptied) return;
+      prxEmptied = false;
+      for (const x of linkPrx.values()) glPut(x.bufs[0]!, x.p.pos.slice().buffer), glPut(x.bufs[1]!, x.p.idx.slice().buffer);
+      if (prx) uploadProxies(prx);
+    },
+    recover: () => { // the device lost with WebGL2's buffers emptied: the open model from the page, the links asked back
+      for (const x of slots) if (x.gl && gpuOwned.has(x.gl)) { gpuOwned.delete(x.gl); if (x.k === 0) loadSlot(x); else releaseSlot(x); }
+      gpuModels().fillPrx();
+      dirty = true;
+    },
+    glHeld: () => 4 * STATE_TEX_W * stateRows + (prxEmptied ? 0 : prxBytes + [...linkPrx.values()].reduce((n, x) => n + x.bytes, 0)) +
+      slots.reduce((n, x) => n + (x.gl && !gpuOwned.has(x.gl) ? x.bytes : 0), 0),
+    ghost: () => {
+      if (!ghostN && !markN) return null;
+      const n = ghostN * 7 + ghostEdgeN * 3 + markN;
+      if (!ghostKey || ghostKey.tool !== tool || ghostKey.n !== n) { // (read back once a tool's answer: small)
+        ghostKey = { tool, n };
+        const f = (b: WebGLBuffer, k: number) => { const d = k ? glRead(b) : null; return d ? new Float32Array(d) : new Float32Array(0); };
+        const i = ghostN ? glRead(ghostIdx) : null;
+        ghostArrays = { key: ghostKey, pos: f(ghostPos, ghostN), idx: i ? new Uint32Array(i, 0, ghostN) : new Uint32Array(0), edges: f(ghostEdges, ghostEdgeN).subarray(0, 3 * ghostEdgeN), marks: f(markBuf, markN).subarray(0, 3 * markN) };
+      }
+      return ghostArrays;
+    },
+  });
   const gpuView = (): GpuView => {
     const { e, mvp } = matrices(), m = mesh, sel = new Set(state.value.linked ? [] : state.value.selection), k = (2 * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.height);
     return { mesh: m, boxes, shown, colour: elColour, selected: (el) => sel.has(m?.ids[el] ?? ""), prx, proxiesOn: proxiesOn(), mvp, eye: e, target,
       ortho: plan !== null || ortho3d(), plan: plan !== null, mirror: mirror(), clip: clipBox(), edges: pressed("edges", true), camKey: camKey(),
-      held: () => drag !== null, fps: userSettings.value?.values.moving_fps ?? 30, mmPerPx: ortho3d() ? () => distance * k : (d) => d * k,
+      held: () => drag !== null, fps: userSettings.value?.values.moving_fps ?? 30, mmPerPx: plan ? () => (2 * half) / Math.max(1, canvas.height) : ortho3d() ? () => distance * k : (d) => d * k,
       zbias: plan ? (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1) : 0, w: canvas.width, h: canvas.height,
-      noCull: stats.noCull === true, noProxies: stats.noProxies === true, noEdges: stats.noEdges === true };
+      noCull: stats.noCull === true, noProxies: stats.noProxies === true, noEdges: stats.noEdges === true, models: gpuModels() };
   };
-  /** The frame drawn by WebGPU (true), or by WebGL2 below (the place tool's ghost and markers: WebGL2's). */
-  // LNK3D (ADR 0078 amendment 3): the WebGPU renderer does not know a link's placement, its proxies nor its
-  // budget (each model in its own frame, buffers, uniforms): with links loaded WebGL2 draws, live, and the
-  // performance panel says why; WebGPU takes over again when the links go
-  const LINKS_WEBGL2 = "linked models are drawn by WebGL2 for now";
+  /** The frame drawn by WebGPU (true), or by WebGL2 below (while WebGPU takes the open model over). */
   const gpuDraw = (): boolean => {
-    const linksNow = (mesh?.links?.length ?? 0) > 0 || prePrx.length > 0; // (also their proxies before the mesh)
-    const v = gpuR && !linksNow && !ghostN && !markN ? gpuView() : null;
-    const ready = !!gpuR && !!v && (!gpuR.prepare || gpuR.prepare(v)); // GPU2: WebGL2 draws while WebGPU gets ready
-    if (gpuR && linksNow) perfRenderer.using = "WebGL2", perfRenderer.reason = LINKS_WEBGL2;
-    else if (gpuR && ready && perfRenderer.using !== "WebGPU") perfRenderer.using = "WebGPU", perfRenderer.reason = null;
-    gpuR?.show(ready);
-    if (!gpuR || !v || !ready) { if (gpuR && !ready && v) dirty = true; return false; }
+    if (!gpuR) return false;
+    if (state.value.file === null && !mesh) { gpuR.show(false); return false; } // (no model: WebGL2 clears the view)
+    const v = gpuView();
+    const ready = !gpuR.prepare || gpuR.prepare(v); // GPU2: WebGL2 draws until WebGPU holds the open model
+    if (ready && (perfRenderer.using !== "WebGPU" || perfRenderer.reason)) perfRenderer.using = "WebGPU", perfRenderer.reason = null;
+    gpuR.show(ready);
+    if (!ready) { dirty = true; return false; }
+    drawFrame++; // SIZE2FIX: the budget's clock counts WebGPU's frames too
     gpuR.frame(v);
     const b = clipBox();
     stats.boxHandles = b && !plan ? boxHandles(b) : [];
@@ -3358,6 +3421,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (hit) { pickCache.delete(key), pickCache.set(key, hit); return { P: hit.pos, I: hit.idx, k0: 0, k1: hit.idx.length }; }
     const lv = (m.v0[el] ?? 0) - x.v0, nv = m.nv[el] ?? 0, at = sh ? shapeI0[sh - 1] ?? -1 : elFace[el] ?? -1;
     if (at < 0) return null;
+    if (gpuR?.tris && gpuOwned.has(x.gl)) { const r = gpuR.tris(mdl, key, lv, nv, at, ni, !!sh); return r ? { P: r.pos, I: r.idx, k0: 0, k1: ni } : null; } // GPU2: WebGPU holds its buffers
     const pos = new Float32Array(3 * nv), idx = new Uint32Array(ni);
     gl.bindBuffer(gl.COPY_READ_BUFFER, x.gl.pos);
     gl.getBufferSubData(gl.COPY_READ_BUFFER, 12 * lv, pos);

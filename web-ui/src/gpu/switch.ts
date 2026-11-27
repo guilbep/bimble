@@ -33,7 +33,7 @@ export type GlName = keyof GlArrays;
 export const GL_NAMES: GlName[] = ["pos", "el", "edge", "edgeNrm", "edgeEl", "shapeIdx", "idx", "edgeIdx", "instMat", "instEl"];
 
 /** GPU2: a model's slot (glviewport.ts Slot): its ranges in the mesh and its WebGL2 buffers (null: released). */
-export interface GpuSlot { k: number; e0: number; e1: number; v0: number; v1: number; s0: number; s1: number; gl: object | null; bytes: number; fetching?: boolean }
+export interface GpuSlot { k: number; gl: object | null; bytes: number }
 /** GPU2: an instanced group and a draw batch as the viewport made them (glviewport.ts InstGroup, DrawBatch). */
 export interface GpuGroup { i0: number; ni: number; s0: number; ns: number; first: number; count: number; mirrored: boolean; link: boolean; model: number; dbs: GpuDb[] }
 export interface GpuDb { b: Batch; f0: number; e0: number; link: boolean; g: GpuGroup | null; k0: number; k1: number; model: number; items: Uint32Array; noEdge?: boolean }
@@ -66,6 +66,10 @@ export interface GpuModels {
   readGl: (gl: object) => Partial<GlArrays>; emptyGl: (gl: object) => void; fillGl: (gl: object, a: Partial<GlArrays>) => void;
   /** The device was lost with WebGL2's buffers emptied: the open model uploaded again from the page, the links released (asked back). */
   recover: () => void;
+  /** WebGL2's proxies (the open model's, the links') emptied while WebGPU draws, filled again from the page's copies. */
+  emptyPrx: () => void; fillPrx: () => void;
+  /** The bytes WebGL2 holds now (its state texture, what is not emptied). */
+  glHeld: () => number;
   /** The place tool's ghost (faces, edges) and markers (lines), in scene mm; a key that changes with them. */
   ghost: () => { key: unknown; pos: Float32Array; idx: Uint32Array; edges: Float32Array; marks: Float32Array } | null;
 }
