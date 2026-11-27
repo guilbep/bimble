@@ -263,7 +263,8 @@ GPU at once. The choices below by Claude on ticket LNK3D under the same delegati
    are drawn by WebGL2 for now"; WebGPU takes over again when the links go. Without links it stays
    correct: a visibility change gives `shown` a new array, so its lists are made again. **Alternative:**
    the placement rows and a model index in its colour table (`0xMMRRGGBB`, `gl/cull.ts` `xfRows`) and an
-   element per edge vertex in `gpu/` (its edges know no element yet): the follow-up.
+   element per edge vertex in `gpu/` (its edges know no element yet): the follow-up. *(Superseded on 27 Nov 2026 by ADR
+   0083's amendment, ticket GPU2: WebGPU draws links from these same structures; nothing falls back for links.)*
 
 ### Evidence (ticket LNK3D)
 
