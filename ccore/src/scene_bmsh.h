@@ -54,6 +54,9 @@ int cc_scene_bmsh4(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_
  * mesh; 0 ok, -1 not available) instead of encoded from the scene's arrays: a link read in place serves
  * its cache's own bytes, its meshes not decoded (only their counts are read). */
 typedef int (*cc_bmsh_block_fn)(const void *ctx, int shape, size_t i, Buf *out);
+/* SIZE3: as `blk`: version 4's rows, shapes and placements with no block at all (nB = 0): a link's rows answer
+ * (session/mesh.h cc_link_rows_answer); the counts in the rows are what the blocks would decode to. */
+#define CC_BMSH_ROWS_ONLY ((cc_bmsh_block_fn)1)
 int cc_scene_bmsh4_blocks(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_t rev, cc_bmsh_block_fn blk, const void *bctx,
                           Buf *out, cc_error *err);
 /* SIZE2: BMSH version 4 bytes (untrusted) to the version 3 bytes they stand for, appended to `out`; every

@@ -25,6 +25,9 @@
  * The host is little-endian (x86-64, aarch64); the bytes are written with memcpy.
  * With linked models (links.h), the LNKS trailer follows: one BMSH per link. Without, nothing
  * follows (the bytes above, unchanged). */
+#ifdef __clang__
+#pragma clang fp contract(off) /* SIZE3: the boxes in the page's f32 arithmetic */
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +39,7 @@
 #include "mesh.h"
 #include "scene.h"
 #include "scene_bmsh.h"
+#include "meshcodec.h" /* SIZE3 */
 #include "session.h"
 
 static void put_u32(Buf *b, uint32_t v) { buf_append(b, &v, 4); }
@@ -334,6 +338,29 @@ int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, u
 }
 
 /* ---- SIZE2: a link's mesh on its own, BMSH version 4 (mesh.h) ---- */
+/* SIZE3 (B): the page's element box (glviewport.ts elementBox: f32, each sum rounded in this order) of positions
+ * `pos` placed by `pl` (NULL: as they are), min and max grown into b[6]. */
+static void box_grow(const float (*pos)[3], uint32_t nv, const cc_placement32 *pl, float b[6]) {
+    for (uint32_t v = 0; v < nv; v++) {
+        float x = pos[v][0], y = pos[v][1], z = pos[v][2];
+        if (pl) {
+            float t0 = pl->x[0] * x, t1 = pl->y[0] * y, t2 = pl->z[0] * z, qx = t0 + t1;
+            qx = qx + t2, qx = qx + pl->t[0];
+            float u0 = pl->x[1] * x, u1 = pl->y[1] * y, u2 = pl->z[1] * z, qy = u0 + u1;
+            qy = qy + u2, qy = qy + pl->t[1];
+            float w0 = pl->x[2] * x, w1 = pl->y[2] * y, w2 = pl->z[2] * z, qz = w0 + w1;
+            qz = qz + w2, qz = qz + pl->t[2];
+            x = qx, y = qy, z = qz;
+        }
+        if (x < b[0]) b[0] = x;
+        if (x > b[3]) b[3] = x;
+        if (y < b[1]) b[1] = y;
+        if (y > b[4]) b[4] = y;
+        if (z < b[2]) b[2] = z;
+        if (z > b[5]) b[5] = z;
+    }
+}
+
 /* SIZE3: block i's BMG1 bytes from a lazy view file (viewfile.h cc_viewfile_block). */
 static int link_block(const void *ctx, int shape, size_t i, Buf *out) {
     const cc_viewfile *v = ctx;
@@ -344,23 +371,29 @@ static int link_block(const void *ctx, int shape, size_t i, Buf *out) {
     return out->oom ? -1 : 0;
 }
 
+/* SIZE2FIX, SIZE2FIX2, SIZE3: the link a page's request for link k means, or NULL with *st set: 204 (superseded: a
+ * request that names the link or carries the heads' key and finds it gone, renamed, of another key or with no
+ * geometry now) or 404 (a bare index of no such link, or not loaded). One rule for its mesh and its rows answer. */
+static cc_link *link_asked(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, int *st, Buf *out) {
+    cc_link *l = k < s->nlinks ? &s->links[k] : NULL;
+    if (l && name && (strlen(l->name) != nname || memcmp(l->name, name, nname))) l = NULL;
+    if (l && has_key && key != (uint32_t)s->links_mesh_gen) l = NULL;
+    if ((!l || !l->kind) && (name || has_key)) return *st = 204, NULL;
+    if (!l || !l->kind) return *st = 404, buf_puts(out, "no such link"), NULL;
+    *st = 200;
+    return l;
+}
+
 int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n) {
     Buf *out = &s->link_mesh_out;
     buf_free(out); /* the last answer's bytes go (a link's mesh is large: none is kept between calls) */
     buf_init(out);
-    const cc_link *l = k < s->nlinks ? &s->links[k] : NULL;
-    int st = 200;
+    int st;
     cc_error err;
-    /* SIZE2FIX: the link asked is the one the page saw: its name and the mesh key of the heads it read (a
-     * link removed, replaced or read again since: superseded, 204, not an error: the page asks again) */
-    if (l && name && (strlen(l->name) != nname || memcmp(l->name, name, nname))) l = NULL;
-    if (l && has_key && key != (uint32_t)s->links_mesh_gen) l = NULL;
-    /* SIZE2FIX2: a request that names the link or carries the key is never a 404: gone, renamed, unloaded, missing,
-     * queued or converting (no geometry now), out of range or of another key: superseded (204); 404 stays for a
-     * bare request (index alone) of no such link */
-    if ((!l || !l->kind) && (name || has_key)) st = 204;
-    else if (!l || !l->kind) st = 404, buf_puts(out, "no such link");
-    else if (l->vf && l->vf->lazy && !l->resident) { /* SIZE3: its cache's own codec bytes, no mesh decoded */
+    const cc_link *l = link_asked(s, k, name, nname, has_key, key, &st, out); /* SIZE2FIX, SIZE2FIX2 */
+    if (!l) {
+        /* 204 superseded or 404: st set */
+    } else if (l->vf && l->vf->lazy && !l->resident) { /* SIZE3: its cache's own codec bytes, no mesh decoded */
         /* the rows with the view file's counts (the link's scene shows empty meshes until decoded); the blocks
          * appended from the file, never read from these arrays (NULL) */
         const cc_scene *rs = cc_link_rows(l);
@@ -379,6 +412,75 @@ int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int 
         }
     } else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
         buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+    *p = out->p ? out->p : "", *n = out->len;
+    return st;
+}
+
+/* ---- SIZE3 (B): a link's rows and its elements' boxes (mesh.h cc_link_rows_answer) ---- */
+int cc_link_rows_answer(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n) {
+    Buf *out = &s->link_mesh_out;
+    buf_free(out);
+    buf_init(out);
+    int st;
+    cc_error err;
+    cc_link *l = link_asked(s, k, name, nname, has_key, key, &st, out); /* (as cc_link_mesh) */
+    if (l) {
+        int lazy = l->vf && l->vf->lazy && !l->resident;
+        const cc_scene *rs = lazy ? cc_link_rows(l) : cc_link_raw_scene(l);
+        cc_scene cs = *rs;
+        size_t ne = rs->nelements;
+        float (*bx)[6] = malloc((ne + 1) * sizeof *bx);
+        cs.elements = lazy ? malloc((ne + 1) * sizeof *cs.elements) : NULL;
+        if (!bx || (lazy && !cs.elements)) st = 500, buf_puts(out, "out of memory");
+        else {
+            for (size_t i = 0; i < ne; i++) {
+                for (int q = 0; q < 3; q++) bx[i][q] = 1.0f / 0.0f, bx[i][3 + q] = -1.0f / 0.0f;
+                if (lazy) cs.elements[i] = rs->elements[i], cs.elements[i].mesh = i < l->vf->nelements ? l->vf->elements[i].mesh : (cc_mesh){0};
+            }
+            if (lazy) cs.shapes = l->vf->shapes, cs.nshapes = l->vf->nshapes;
+            const cc_scene *sc = lazy ? &cs : rs;
+            if (lazy) { /* each mesh decoded once into a scratch, never kept */
+                Arena a;
+                arena_init(&a, 0);
+                size_t ns = l->vf->nshapes;
+                size_t *first = calloc(ns + 1, sizeof *first), *next = malloc((ne + 1) * sizeof *next);
+                if (!first || !next) st = 500, buf_puts(out, "out of memory");
+                for (size_t i = ne; st == 200 && i-- > 0;) /* each shape's elements, in order */
+                    if (sc->elements[i].shape >= 0 && (size_t)sc->elements[i].shape < ns)
+                        next[i] = first[sc->elements[i].shape], first[sc->elements[i].shape] = i + 1;
+                for (size_t b = 0; st == 200 && b < ns + ne; b++) {
+                    if (b >= ns && sc->elements[b - ns].shape >= 0) continue;
+                    const uint8_t *q;
+                    size_t qn;
+                    cc_mesh m;
+                    const char *why;
+                    arena_trim(&a, (size_t)1 << 22);
+                    if (cc_viewfile_block(l->vf, b, &q, &qn) || cc_meshcodec_decode(q, qn, &a, &m, &why) != CC_MC_OK) {
+                        st = 500, buf_puts(out, "a mesh of the cache does not decode");
+                        break;
+                    }
+                    if (b >= ns) box_grow((const float(*)[3])m.pos, m.nv, NULL, bx[b - ns]);
+                    else
+                        for (size_t e = first[b]; e; e = next[e - 1]) box_grow((const float(*)[3])m.pos, m.nv, &sc->elements[e - 1].to_scene, bx[e - 1]);
+                }
+                free(first), free(next);
+                arena_free(&a);
+            } else
+                for (size_t i = 0; i < ne; i++) {
+                    const cc_scene_element *e = &sc->elements[i];
+                    const cc_mesh *m = e->shape >= 0 ? ((size_t)e->shape < sc->nshapes ? &sc->shapes[e->shape] : NULL) : &e->mesh;
+                    if (m && m->pos) box_grow((const float(*)[3])m->pos, m->nv, e->shape >= 0 ? &e->to_scene : NULL, bx[i]);
+                }
+            if (st == 200 && cc_scene_bmsh4_blocks(sc, link_bmsh_id, l, (uint32_t)s->links_mesh_gen, CC_BMSH_ROWS_ONLY, NULL, out, &err))
+                buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+            if (st == 200) {
+                buf_append(out, "BOXS", 4), buf_append(out, bx, ne * sizeof *bx);
+                if (out->oom) buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), st = 500;
+            }
+        }
+        free(bx);
+        if (lazy) free(cs.elements);
+    }
     *p = out->p ? out->p : "", *n = out->len;
     return st;
 }

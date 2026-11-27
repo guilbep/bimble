@@ -91,7 +91,7 @@ import { cutProxies, fitProxies, parseBprx, standIns, usableCells, type Proxies 
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
 import { gpuBudget, linkGpu, linkDetail } from "./gl/linkmem"; // LNK3D (D)
 import { farModels, linkFar } from "./gl/farlinks"; // REAL1
-import { bmsh3Size, bmsh4Decode, bmsh4RowsDecode, bmsh4Stats, type Bmsh4Rows } from "./gl/bmsh4"; // SIZE2; SIZE3: in a worker
+import { bmsh3Size, bmsh4Decode, bmsh4RowsBoxes, bmsh4RowsDecode, bmsh4Stats, type Bmsh4Rows } from "./gl/bmsh4"; // SIZE2; SIZE3: in a worker
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
 import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
@@ -764,6 +764,10 @@ interface GlStats {
   openPeakDecoded?: number;
   /** SIZE3 (B): a test hook: the open's decoded budget (bytes; unset: OPEN_KEEP_BYTES). */
   openKeepBytes?: number;
+  /** SIZE3 (B): a test hook: false opens links from their meshes within openKeepBytes, not from the host's rows answer. */
+  openRows?: boolean;
+  /** SIZE3 (B): the last link detail asked again: fetch, read (worker), upload ms. */
+  refetchSteps?: { fetch: number; decode: number; upload: number };
   openKeptBytes?: number;
   /** SIZE3 (C): the links' GPU budget in force (bytes: the setting link_gpu_mb, or the test hook gpuBudget) and what their detail takes. */
   linkGpuBudget?: number;
@@ -803,6 +807,8 @@ export interface MeshSource {
   /** SIZE2: link k's mesh on its own (GET /mesh?link=k, BMSH version 4 read back as version 3 by gl/bmsh4.ts),
    *  with the bytes served. Present: `mesh()` answers the links' heads only (LNKS version 3). */
   linkMesh?(k: number, name: string, key: number, keep?: number): Promise<{ bytes?: ArrayBuffer; rows?: Bmsh4Rows; served: number }>;
+  /** SIZE3 (B): link k's rows and its elements' boxes from the host (no mesh): what an open needs before any detail. */
+  linkRows?(k: number, name: string, key: number): Promise<{ rows?: Bmsh4Rows; served: number }>;
 }
 
 /** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
@@ -885,6 +891,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const served = ab.byteLength;
       if (keep !== undefined && bmsh3Size(ab) > keep) return { rows: await bmsh4RowsDecode(ab, INSTANCE_MIN_COPIES, INSTANCE_MIN_TRIS), served };
       return { bytes: await bmsh4Decode(ab, 2 ** 31), served }; // SIZE3: off the page's thread
+    },
+    linkRows: async (k: number, name: string, key: number) => { // SIZE3 (B): by its name and the heads' key, as linkMesh
+      const r = await fetch(`${base}/mesh?t=${t}&link=${k}&rows=1&name=${encodeURIComponent(name)}&key=${key}`, { cache: "no-store" });
+      if (r.status === 204) throw new Superseded(name);
+      if (!r.ok) throw new Error(`rows of link ${k}: HTTP ${r.status} ${await r.text()}`);
+      const ab = await r.arrayBuffer();
+      return { rows: bmsh4RowsBoxes(ab, INSTANCE_MIN_COPIES, INSTANCE_MIN_TRIS), served: ab.byteLength };
     },
     proxies: async (budget: number) => { // 3D2
       const r = await fetch(`${base}/mesh?t=${t}&proxies=${budget}`, { cache: "no-store" });
@@ -1766,6 +1779,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const name = m.links?.[x.k - 1]?.name ?? "";
       const r = await ask(x.k - 1, name, linkKeys[x.k - 1] ?? 0);
       if (!r.bytes) return;
+      const td = performance.now();
       const lm = parseBmsh(r.bytes, 0, true);
       stats.meshBytesServed = (stats.meshBytesServed ?? 0) + r.served;
       if (mesh !== m || lm.ids.length !== x.e1 - x.e0 || lm.rev !== linkKeys[x.k - 1]) return; // another mesh since (it is asked again whole)
@@ -1773,6 +1787,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (!x.gl || !x.listsOnGpu) { loadSlot(x); x.lists = modelLists(x); if (x.lists) uploadLists(x); }
       dropPart(x);
       stats.linkRefetches = (stats.linkRefetches ?? 0) + 1, stats.linkRefetchMs = performance.now() - t0;
+      stats.refetchSteps = { fetch: td - t0, decode: 0, upload: performance.now() - td };
       dirty = true;
     } catch (e) {
       if (e instanceof Superseded) stats.linkSuperseded = (stats.linkSuperseded ?? 0) + 1; // SIZE2FIX: the mesh follows (links_mesh)
@@ -1961,20 +1976,23 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         // (their rows, boxes and batches stand; their detail is asked again when a frame needs it, budgetStep)
         for (const h of heads) keys.push(h.key);
         const order = heads.map((_, k) => k).filter((k) => heads[k]!.nE).sort((a, b) => heads[a]!.nE - heads[b]!.nE || a - b);
-        let kept = 0, gone = false;
+        let kept = 0, gone = false, full = true;
         stats.openPeakDecoded = 0;
         for (const k of order) {
           const h = heads[k]!;
           const keep = stats.openKeepBytes ?? OPEN_KEEP_BYTES;
-          const r = await source.linkMesh(k, h.name, h.key, Math.max(0, keep - kept)); // (past what is left: its rows and boxes only, in the worker)
+          // SIZE3 (B): each link's mesh while the open's budget lasts (uploaded with the open); once a link did not fit,
+          // the rest open as their rows and boxes from the host (no mesh moves), their detail asked when a frame wants it
+          const r: { bytes?: ArrayBuffer; rows?: Bmsh4Rows; served: number } = full || !source.linkRows || stats.openRows === false
+            ? await source.linkMesh(k, h.name, h.key, Math.max(0, keep - kept)) : await source.linkRows(k, h.name, h.key);
           served += r.served;
-          if (!r.rows && !r.bytes) { gone = true; break; } // SIZE3: the link went meanwhile: the change asks the mesh again
           let lm = r.rows ? rowsMesh(r.rows) : parseBmsh(r.bytes!, 0, true);
           if (lm.ids.length !== h.nE || lm.rev !== h.key) throw new Superseded(h.name); // (the host checks it too)
           const b = lm.pos.byteLength + lm.idx.byteLength + lm.edges.byteLength + lm.normals.byteLength;
           stats.openPeakDecoded = Math.max(stats.openPeakDecoded, kept + b);
           if (!lm.dropped && kept + b > keep) lm = dropArrays(lm);
           else kept += b;
+          if (lm.dropped) full = false; // (the budget is spent: the host's rows answers from now on)
           h.m = lm;
         }
         stats.openKeptBytes = kept, stats.linksDetailedAt = null;

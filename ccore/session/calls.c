@@ -2289,12 +2289,19 @@ static int iss71_sel_bounds(cc_session *s, const cc_scene *sc, float yaw, float 
         if (on) cc_vis_grow(sc, k, zero, yaw, lo, hi), any = 1;
     }
     if (s->link_sel >= 0 && (size_t)s->link_sel < s->nlinks) { /* a linked model's element */
-        const cc_scene *ls = cc_link_scene(&s->links[s->link_sel]);
-        for (size_t k = 0; ls && k < ls->nelements; k++) {
-            if (memcmp(ls->elements[k].id.c, s->link_sel_id, 22)) continue;
-            float off[3];
-            for (int q = 0; q < 3; q++) off[q] = (float)(ls->origin[q] - sc->origin[q]); /* lib.rs:1499 */
-            cc_vis_grow(ls, k, off, yaw, lo, hi), any = 1;
+        cc_link *lk = &s->links[s->link_sel];
+        const cc_scene *rows = cc_link_rows(lk); /* SIZE3: found by its rows, its geometry from its own block alone */
+        for (size_t k = 0; rows && k < rows->nelements; k++) {
+            if (memcmp(rows->elements[k].id.c, s->link_sel_id, 22)) continue;
+            cc_scene one;
+            size_t at;
+            const cc_scene *ls = cc_link_element_scene(lk, k, &one, &at);
+            if (at < ls->nelements) {
+                float off[3];
+                for (int q = 0; q < 3; q++) off[q] = (float)(ls->origin[q] - sc->origin[q]); /* lib.rs:1499 */
+                cc_vis_grow(ls, at, off, yaw, lo, hi), any = 1;
+            }
+            cc_scene_free(&one);
         }
     }
     return any;

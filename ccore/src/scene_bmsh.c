@@ -178,6 +178,12 @@ int cc_scene_bmsh4_blocks(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, 
         buf_append(out, e->to_scene.x, 12), buf_append(out, e->to_scene.y, 12);
         buf_append(out, e->to_scene.z, 12), buf_append(out, e->to_scene.t, 12);
     }
+    if (blk == CC_BMSH_ROWS_ONLY) { /* SIZE3: no block */
+        put_u32(out, 0);
+        if (out->oom) { fail(err, "out of memory"); goto done; }
+        rc = 0;
+        goto done;
+    }
     put_u32(out, (uint32_t)nb);
     for (size_t j = 0; j < nb && !out->oom; j++) {
         const cc_mesh *m = order[j] >= ne ? &s->shapes[order[j] - ne] : &s->elements[order[j]].mesh;

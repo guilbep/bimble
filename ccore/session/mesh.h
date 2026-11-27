@@ -49,7 +49,7 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n);
 /* SIZE2: cc_mesh_get_form's form 6: version 3 of the open model, then the LNKS trailer version 3 (mesh.c
  * links_lazy: each link's head, no mesh): the page asks each link's mesh on its own. */
 #define CC_MESH_FORM_LAZY 6
-/* SIZE3: 204 (no body) for a link that exists but is not loaded. SIZE2: link k's read scene as BMSH version 4 (src/scene_bmsh.h: shapes once, a placement per element,
+/* SIZE3: 204 (no body) for a link not there or not loaded (the page's request raced a change). SIZE2: link k's read scene as BMSH version 4 (src/scene_bmsh.h: shapes once, a placement per element,
  * the blocks in the mesh codec), its rev the links' mesh key (links_mesh_gen). 200 with the bytes in `*p`
  * (valid until the next call; the bytes of the call before are freed), 404 no such link (or missing), 500
  * with the error. The native host serves it as GET /mesh?link=k. */
@@ -58,4 +58,10 @@ int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int 
  * page read), a link that is no longer k under that name, a key that is no longer the links' mesh
  * generation, or a link with no geometry now (unloaded, missing, queued, converting) answers 204 (superseded:
  * no body; the page drops that fetch and asks the heads again): never 404 (SIZE2FIX2). */
+/* SIZE3 (B): link k's rows without its meshes: BMSH version 4 with no block (nB = 0), then "BOXS" and per element its
+ * box (f32 min xyz, max xyz; the page's arithmetic: a placed shape's vertices placed one by one; +inf/-inf when
+ * empty), what the page needs to merge a link, cut its batches and draw its proxies before any of its detail. A link
+ * read in place is decoded one mesh at a time into a scratch, nothing kept. The same rule as cc_link_mesh for `name`
+ * and `key` (204 superseded, never 404 with either). The native host serves it as GET /mesh?link=k&rows=1&name=&key=. */
+int cc_link_rows_answer(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n);
 #endif

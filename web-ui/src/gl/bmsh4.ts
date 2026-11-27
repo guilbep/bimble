@@ -314,3 +314,45 @@ export async function bmsh4RowsDecode(ab: ArrayBuffer, minCopies: number, minTri
   return bmsh4Rows(ab, minCopies, minTris);
 }
 const rowsPending = new Map<number, { res: (r: Bmsh4Rows) => void; rej: (e: Error) => void }>();
+
+/** SIZE3 (B): the host's rows answer of a link (GET /mesh?link=k&rows=1, ccore/session/mesh.h cc_link_rows_answer):
+ *  version 4's rows, shapes and placements with no block, then "BOXS" and each element's box (the page's arithmetic,
+ *  computed by the host): bmsh4Rows' result without decoding any mesh. Throws on damaged bytes. */
+export function bmsh4RowsBoxes(ab: ArrayBuffer, minCopies: number, minTris: number): Bmsh4Rows {
+  const b = new Uint8Array(ab), dv = new DataView(ab), n = ab.byteLength;
+  if (n < 52 || dv.getUint32(0, true) !== 0x48534d42 || dv.getUint32(4, true) !== 4) throw new Error("not BMSH version 4");
+  const rev = dv.getUint32(8, true), nE = dv.getUint32(12, true), nV = dv.getUint32(16, true), nI = dv.getUint32(20, true), nS = dv.getUint32(24, true);
+  if (52 + 52 * nE + 4 > n) throw new Error("BMSH 4: cut short");
+  const origin: [number, number, number] = [dv.getFloat64(28, true), dv.getFloat64(36, true), dv.getFloat64(44, true)];
+  const ids: string[] = [], cats = new Uint8Array(nE), v0 = new Uint32Array(nE), nv = new Uint32Array(nE), i0 = new Uint32Array(nE), ni = new Uint32Array(nE);
+  const s0 = new Uint32Array(nE), ns = new Uint32Array(nE), shape = new Uint32Array(nE), place = new Float32Array(12 * nE);
+  for (let e = 0, o = 52; e < nE; e++, o += 48) {
+    ids.push(String.fromCharCode(...b.subarray(o, o + 22)));
+    cats[e] = b[o + 22] ?? 7;
+    v0[e] = dv.getUint32(o + 24, true), nv[e] = dv.getUint32(o + 28, true), i0[e] = dv.getUint32(o + 32, true);
+    ni[e] = dv.getUint32(o + 36, true), s0[e] = dv.getUint32(o + 40, true), ns[e] = dv.getUint32(o + 44, true);
+    if (i0[e]! + ni[e]! > nI || v0[e]! + nv[e]! > nV || s0[e]! + ns[e]! > nS) throw new Error("BMSH row out of range");
+  }
+  const sh0 = 52 + 48 * nE;
+  let at = sh0 + 4 * nE;
+  for (let e = 0; e < nE; e++) {
+    shape[e] = dv.getUint32(sh0 + 4 * e, true);
+    if (!shape[e]) continue;
+    if (at + 48 > n) throw new Error("BMSH 4: cut short");
+    for (let k = 0; k < 12; k++) place[12 * e + k] = dv.getFloat32(at + 4 * k, true);
+    at += 48;
+  }
+  if (at + 8 + 24 * nE !== n || dv.getUint32(at, true) !== 0 || dv.getUint32(at + 4, true) !== 0x5358_4f42) throw new Error("BMSH 4: not a rows answer");
+  const boxes = new Float32Array(6 * nE);
+  for (let k = 0; k < 6 * nE; k++) boxes[k] = dv.getFloat32(at + 8 + 4 * k, true);
+  const copies = new Map<number, number>();
+  for (let e = 0; e < nE; e++) if (shape[e]) copies.set(shape[e]!, (copies.get(shape[e]!) ?? 0) + 1);
+  let v = nV, i = nI, sg = nS;
+  for (let e = 0; e < nE; e++) { // bake's rows (glviewport.ts bake)
+    if (!shape[e] || !((copies.get(shape[e]!) ?? 0) < minCopies || ni[e]! < 3 * minTris)) continue;
+    v0[e] = v, i0[e] = i, s0[e] = sg, shape[e] = 0;
+    v += nv[e]!, i += ni[e]!, sg += ns[e]!;
+  }
+  const size = 52 + 48 * nE + 12 * nV + 4 * nI + 32 * nS + 52 * nE;
+  return { rev, origin, size, ids, cats, v0, nv, i0, ni, s0, ns, shape, place, boxes, counts: { nv: v, ni: i, ns: sg } };
+}

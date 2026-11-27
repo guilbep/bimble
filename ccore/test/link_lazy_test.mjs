@@ -74,6 +74,16 @@ const mesh0 = await linkMesh();
 m = (await q("links_panel")).models[0];
 check("the panel, visibility_sets and the link's mesh decode nothing", count(/its meshes decoded/g) === decoded0 && m.triangles > 0 && mesh0.length > 52 &&
   mesh0.toString("latin1", 0, 4) === "BMSH" && mesh0.readUInt32LE(4) === 4, `${count(/its meshes decoded/g)} ${m.triangles} ${mesh0.length}`);
+// SIZE3 (B): the host's rows answer (GET /mesh?link=0&rows=1): version 4 with no block, then each element's box;
+// nothing kept decoded (each mesh decoded into a scratch)
+{
+  const rr = await fetch(`http://127.0.0.1:${p}/mesh?link=0&rows=1&t=${TOKEN}`);
+  const b = Buffer.from(await rr.arrayBuffer()), nE = b.length >= 16 ? b.readUInt32LE(12) : -1;
+  const at = b.length - 24 * nE - 8;
+  check("the rows answer: no block, then a box per element; the link stays undecoded", rr.status === 200 && b.readUInt32LE(4) === 4 && nE === 72 &&
+    b.readUInt32LE(at) === 0 && b.toString("latin1", at + 4, at + 8) === "BOXS" && count(/its meshes decoded/g) === decoded0,
+    `${rr.status} ${b.length} bytes (the mesh ${mesh0.length}), ${nE} elements`);
+}
 // the calls the page makes on every refresh decode nothing (link_draw)
 await q("link_draw");
 check("link_draw decodes nothing", count(/its meshes decoded/g) === decoded0, String(count(/its meshes decoded/g)));
@@ -93,8 +103,8 @@ let r = await call("select", "-", JSON.stringify({ link: "a.ifc", ids: [id] }));
 const bx = await call("action", "box_to_selection");
 const vis1 = await q("visibility");
 const box1 = JSON.stringify(vis1.section_box);
-check("Box to selection around a linked element decodes it", r.status === 200 && bx.status === 200 && vis1.section_box?.on === true &&
-  count(/its meshes decoded/g) === decoded1 + 1, `${r.text} ${box1}`);
+check("Box to selection around a linked element decodes that element's block alone, not the link (SIZE3)", r.status === 200 && bx.status === 200 && vis1.section_box?.on === true &&
+  count(/its meshes decoded/g) === decoded1, `${r.text} ${box1}`);
 await call("action", "section_box", JSON.stringify({ on: false })).catch(() => null);
 const ov = await q("open_views"), plan = ov.views.find((v) => v.type === "plan");
 const svg1 = plan ? JSON.parse((await call("query", "view_svg", JSON.stringify({ view: plan.id, bare: true }))).text).svg : "";
@@ -108,7 +118,7 @@ check("past the budget, after the keep time: its meshes dropped", count(/its mes
 r = await call("select", "-", JSON.stringify({ link: "a.ifc", ids: [id] }));
 await call("action", "box_to_selection");
 const vis2 = await q("visibility");
-check("Box to selection again: the same box (decoded again)", JSON.stringify(vis2.section_box) === box1 && count(/its meshes decoded/g) >= decoded1 + 2, JSON.stringify(vis2.section_box));
+check("Box to selection again: the same box", JSON.stringify(vis2.section_box) === box1, JSON.stringify(vis2.section_box));
 const svg2 = plan ? JSON.parse((await call("query", "view_svg", JSON.stringify({ view: plan.id, bare: true }))).text).svg : "";
 check("the plan again: the same drawing", svg2 === svg1 && svg2.length > 0);
 void vis0;

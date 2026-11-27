@@ -10,6 +10,7 @@
 #include "jobs.h"       /* LINKF: cc_atomic_load */
 #include "ifc_math.h"   /* LINKF: cc_sin, cc_cos */
 #include "json_r.h"
+#include "meshcodec.h" /* SIZE3: one element decoded */
 
 static const char *const FAMILY[CC_CAT_COUNT] = {"Concrete", "Steel", "Timber", "Masonry",
                                                  "Insulation", "Earth", "Glass", "Other"}; /* MaterialCategory::label */
@@ -108,6 +109,47 @@ int cc_link_resident(cc_link *k) {
         else k->placed = 1;
     }
     return 0;
+}
+
+const cc_scene *cc_link_element_scene(cc_link *k, size_t i, cc_scene *tmp, size_t *at) {
+    memset(tmp, 0, sizeof *tmp);
+    arena_init(&tmp->arena, 0);
+    if (!k->vf || !k->vf->lazy || k->resident || i >= k->scene.nelements || i >= k->vf->nelements) {
+        *at = i;
+        return cc_link_scene(k); /* decoded already, or not read in place: the whole scene */
+    }
+    /* one element: its own mesh's block or its shape's, decoded into the scratch scene, placed as the link is */
+    const cc_view_element *x = &k->vf->elements[i];
+    cc_scene one;
+    memset(&one, 0, sizeof one);
+    arena_init(&one.arena, 0);
+    memcpy(one.origin, k->scene.origin, sizeof one.origin);
+    one.elements = arena_alloc(&one.arena, sizeof *one.elements, 8);
+    cc_mesh *m = arena_alloc(&one.arena, sizeof *m, 8);
+    const uint8_t *q;
+    size_t qn;
+    const char *why;
+    size_t b = x->shape >= 0 ? (size_t)x->shape : k->vf->nshapes + i;
+    int ok = one.elements && m && cc_viewfile_block(k->vf, b, &q, &qn) == 0 && cc_meshcodec_decode(q, qn, &one.arena, m, &why) == CC_MC_OK;
+    if (ok) {
+        one.elements[0] = k->scene.elements[i];
+        if (x->shape >= 0) one.shapes = m, one.nshapes = 1, one.elements[0].shape = 0;
+        else one.elements[0].mesh = *m;
+        one.nelements = 1;
+    }
+    *at = 0;
+    if (!ok) return cc_scene_free(&one), tmp; /* (an empty scene: nothing to measure) */
+    if (!k->pwant) {
+        cc_scene_free(tmp);
+        *tmp = one;
+        return tmp;
+    }
+    cc_scene_free(tmp);
+    int rc = place_scene(tmp, &one, k->pc, k->ps, k->pt); /* its arrays (own) copied placed; a shape's borrowed */
+    if (rc) cc_scene_free(tmp), memset(tmp, 0, sizeof *tmp), arena_init(&tmp->arena, 0);
+    else arena_adopt(&tmp->arena, &one.arena); /* the shape it borrows lives on */
+    if (rc) cc_scene_free(&one);
+    return tmp;
 }
 
 int cc_link_box_lazy(const cc_link *k, const double org[3], double lo[3], double hi[3]) {
@@ -318,7 +360,7 @@ static void str_or_null(JsonW *w, cc_str t) {
 
 /* The read-only element detail (lib.rs:4508 link_properties, :4570 properties): query element's
  * shape plus family, read_only, triangles and volume_m3; "link" only for a linked model. */
-static int ro_element_json(const cc_scene *sc, size_t i, cc_str cls, cc_str nm, cc_str storey, cc_str material,
+static int ro_element_json(const cc_scene *sc, size_t i, double vol_mm3, cc_str cls, cc_str nm, cc_str storey, cc_str material,
                            const char t[22], const char *link, Buf *out) {
     const cc_scene_element *e = &sc->elements[i];
     const cc_mesh *lm = cc_scene_local_mesh(sc, i);
@@ -352,7 +394,7 @@ static int ro_element_json(const cc_scene *sc, size_t i, cc_str cls, cc_str nm, 
     jw_key(&w, "storey"), jw_str(&w, "");
     jw_key(&w, "storey_name"), str_or_null(&w, storey);
     if (!link) jw_key(&w, "triangles"), jw_u64(&w, lm ? lm->ni / 3 : 0); /* lib.rs:4590 "Triangles" */
-    jw_key(&w, "volume_m3"), jw_f64(&w, volume_mm3(sc, i) / 1e9);
+    jw_key(&w, "volume_m3"), jw_f64(&w, vol_mm3 / 1e9);
     jw_obj_end(&w);
     if (jw_finish(&w) != JW_OK || out->oom) {
         buf_clear(out);
@@ -374,7 +416,7 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
         buf_puts(out, "no element with this id");
         return -1;
     }
-    const cc_scene *sc = cc_link_scene(k); /* SIZE3: decoded (its volume below reads its mesh) */
+    const cc_scene *sc = cc_link_rows(k); /* SIZE3: its texts from the rows; its volume from its own block (below) */
     const cc_scene_element *e = &sc->elements[i];
     cc_str cls = e->class_name, nm = {0}, storey = {0}, material = {0};
     if (k->kind == CC_LINK_IFC) {
@@ -394,7 +436,12 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
     char t[22];
     cc_link_id(k, (size_t)i, t);
     size_t at = out->len;
-    if (ro_element_json(sc, (size_t)i, cls, nm, storey, material, t, k->name, out)) return -1;
+    cc_scene one; /* SIZE3: its volume from its own block when the link is not decoded */
+    size_t gi;
+    const cc_scene *gs = cc_link_element_scene((cc_link *)k, (size_t)i, &one, &gi);
+    double vol = gi < gs->nelements ? volume_mm3(gs, gi) : 0.0;
+    cc_scene_free(&one);
+    if (ro_element_json(sc, (size_t)i, vol, cls, nm, storey, material, t, k->name, out)) return -1;
     if (out->len > at && out->p[out->len - 1] == '}') { /* M1LINKS: its property sets (m1links.h) */
         out->len--;
         cc_link_psets_json(s, k, (size_t)i, out);
@@ -420,7 +467,7 @@ int cc_scene_element_json(cc_session *s, const char *id, size_t idn, Buf *out) {
             const cc_view_element *f = &s->vf->elements[e->model_index];
             cls = f->class_name, nm = f->name, storey = f->storey, material = f->material;
         }
-        return ro_element_json(sc, i, cls, nm, storey, material, e->id.c, NULL, out);
+        return ro_element_json(sc, i, volume_mm3(sc, i), cls, nm, storey, material, e->id.c, NULL, out);
     }
     buf_puts(out, "no element with this id");
     return -1;

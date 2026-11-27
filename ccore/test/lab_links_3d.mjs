@@ -445,7 +445,8 @@ async function main() {
   // (both pictures after a reload of every link: the first with the open's default budget, the second with 0)
   const reloadAll = async (keep) => {
     const f0 = (await gl()).meshFetches;
-    await evalJs(keep === null ? "delete window.__bbGl.openKeepBytes" : `window.__bbGl.openKeepBytes = ${keep}`);
+    // (null: every link opened from its own mesh, kept whole; 0: from the host's rows answer, nothing decoded)
+    await evalJs(keep === null ? "(delete window.__bbGl.openKeepBytes, window.__bbGl.openRows = false)" : `(window.__bbGl.openKeepBytes = ${keep}, delete window.__bbGl.openRows)`);
     await hcall("action", "manage_links", { op: "reload_all" });
     await waitFor("the mesh asked again", 30000, async () => (await gl()).meshFetches > f0);
     await waitFor("every link ready again", 60000, async () => JSON.parse((await hcall("query", "links_panel")).text).models.every((m) => m.state === "ready" && !m.indexing));
@@ -460,10 +461,10 @@ async function main() {
   const { st: st5, pic: pic5 } = await reloadAll(0);
   let d5 = 0;
   for (let i = 0; i < refPic.length; i += 4) if (Math.max(Math.abs(refPic[i] - pic5[i]), Math.abs(refPic[i + 1] - pic5[i + 1]), Math.abs(refPic[i + 2] - pic5[i + 2])) > 40) d5++;
-  check("SIZE3: an open keeping no link's arrays: each read off the page's thread, none kept; the same picture once the links in view are back",
+  check("SIZE3: an open from the links' rows and boxes (the host's rows answer: no mesh moved), their detail read in the worker when wanted: the same picture as an open keeping every link whole once the links in view are back",
     st5.openKeptBytes === 0 && st5.decodes?.worker > 0 && st5.decodes.page === 0 && d5 === 0 && (st5.partBytes ?? []).slice(1).every((b) => b === 0),
     `kept ${st5.openKeptBytes}, peak ${st5.openPeakDecoded}, decodes ${JSON.stringify(st5.decodes)}, ${d5} pixels differ, refetches ${st5.linkRefetches}`);
-  await evalJs("delete window.__bbGl.openKeepBytes");
+  await evalJs("(delete window.__bbGl.openKeepBytes, delete window.__bbGl.openRows)");
 
   // ---- SIZE3 (C): the links' GPU budget is a setting in MB (768 by default), shown in the performance panel ----
   const b0 = (await gl()).linkGpuBudget;

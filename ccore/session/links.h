@@ -190,6 +190,10 @@ uint64_t cc_link_triangles(const cc_link *k);
 /* SIZE3: a link read in place and not decoded: its box in the open scene's frame (`org`, the open scene's origin;
  * its placement applied, from the counts' read: no mesh decoded): 1; else 0 (test it whole). */
 int cc_link_box_lazy(const cc_link *k, const double org[3], double lo[3], double hi[3]);
+/* SIZE3: element i of link k's geometry for a call that needs one element (its volume, its box): a link read in place
+ * and not decoded has that element's block alone decoded into `tmp` (placed as the link), *at = 0; else the link's
+ * scene, *at = i. Free `tmp` with cc_scene_free after (always initialized). */
+const cc_scene *cc_link_element_scene(cc_link *k, size_t i, cc_scene *tmp, size_t *at);
 /* SIZE3: whether the carrier should call cc_links_tick: a conversion queued or running, a refused link
  * waiting for its automatic retry, or decoded link meshes past the budget waiting to be dropped. */
 int cc_links_wants_tick(const cc_session *s);
