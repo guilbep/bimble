@@ -48,7 +48,7 @@ Key cc_hg_up(Key k, unsigned s) {
     return k;
 }
 
-int cc_hg_fam_vert(Fam *f, Key k, const double s[3], uint64_t n, const float *box) { /* hlod.rs:247 add_vertex (merged later) */
+int cc_hg_fam_vert(Fam *f, Key k, const double s[3], uint64_t n, const float *box, const double *q) { /* hlod.rs:247 add_vertex (merged later) */
     if (f->nv == f->cv) {
         size_t c = f->cv ? 2 * f->cv : 64;
         Vert *v = realloc(f->v, c * sizeof *v);
@@ -60,6 +60,7 @@ int cc_hg_fam_vert(Fam *f, Key k, const double s[3], uint64_t n, const float *bo
     memcpy(v->s, s, sizeof v->s);
     for (int j = 0; j < 3; j++) /* TILE1: the members' box (a point: itself) */
         v->lo[j] = box ? box[j] : (float)(s[j] / (double)(n ? n : 1)), v->hi[j] = box ? box[3 + j] : v->lo[j];
+    for (int j = 0; j < 10; j++) v->q[j] = q ? q[j] : 0.0; /* TILE1: its quadric */
     return 0;
 }
 
@@ -95,6 +96,7 @@ static void fam_compact(Fam *f) {
                     if (f->v[i].lo[c] < f->v[o].lo[c]) f->v[o].lo[c] = f->v[i].lo[c];
                     if (f->v[i].hi[c] > f->v[o].hi[c]) f->v[o].hi[c] = f->v[i].hi[c];
                 }
+                for (int c = 0; c < 10; c++) f->v[o].q[c] += f->v[i].q[c];
             } else f->v[++o] = f->v[i];
         }
         f->nv = o + 1;
@@ -160,7 +162,7 @@ int cc_hg_grid_add_clusters(Grid *g, const Clusters *cl) {
         const Part *p = &cl->p[i];
         Fam *f = &g->f[i];
         for (size_t v = 0; v < p->nv; v++)
-            if (cc_hg_fam_vert(f, cc_hg_up(p->v[v].k, shift), p->v[v].s, p->v[v].n, p->v[v].lo)) return -1;
+            if (cc_hg_fam_vert(f, cc_hg_up(p->v[v].k, shift), p->v[v].s, p->v[v].n, p->v[v].lo, p->v[v].q)) return -1;
         for (size_t t = 0; t < p->nt; t++)
             if (cc_hg_fam_tri(f, cc_hg_up(p->v[p->t[t][0]].k, shift), cc_hg_up(p->v[p->t[t][1]].k, shift), cc_hg_up(p->v[p->t[t][2]].k, shift)))
                 return -1;
@@ -322,7 +324,7 @@ static int add_triangles(struct cc_hlod_work *w, cc_category cat, const float (*
                 w->ke[i] = (uint8_t)w->g.e;
                 if (w->has[i]) {
                     double s[3] = {pos[i][0], pos[i][1], pos[i][2]};
-                    if (cc_hg_fam_vert(f, w->keys[i], s, 1, NULL)) return -1;
+                    if (cc_hg_fam_vert(f, w->keys[i], s, 1, NULL, NULL)) return -1;
                 }
             }
             if (!w->has[i]) ok = 0;

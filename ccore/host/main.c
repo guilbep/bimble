@@ -447,11 +447,12 @@ static char **utf8_argv(int *argc) {
 }
 #endif
 
-/* LINKF: bimble-ccore link-convert [--cache-dir DIR] [--keep] FILE...: each file through a link's
+/* LINKF: bimble-ccore link-convert [--cache-dir DIR] [--keep] [--index|--reindex] FILE...: each file through a link's
  * conversion (session/link_cache.h), one at a time, in the order given; with --cache-dir the
  * caches go only there (nothing written beside the files). One line per file: bytes, ms, elements,
  * shapes, triangles, cache bytes, from the cache or read. --keep: every scene kept until the end,
- * then the totals (all of them loaded together). Exit 1 when one failed. */
+ * then the totals (all of them loaded together). TILE1: --index runs the indexing job (proxies, tile pyramid) after a
+ * conversion, --reindex also on a complete cache (its time and the process's peak alone). Exit 1 when one failed. */
 static int link_convert_main(int argc, char **argv) {
     const cc_platform *pf = cc_platform_native();
     int keep = 0, no_beside = 0, bad = 0, index = 0;
@@ -459,6 +460,7 @@ static int link_convert_main(int argc, char **argv) {
     for (; i < argc && !strncmp(argv[i], "--", 2); i++) {
         if (!strcmp(argv[i], "--keep")) keep = 1;
         else if (!strcmp(argv[i], "--index")) index = 1; /* TILE1 */
+        else if (!strcmp(argv[i], "--reindex")) index = 2; /* TILE1: a complete cache indexed again (timing, peak) */
         else if (!strcmp(argv[i], "--cache-dir") && i + 1 < argc) {
 #ifndef _WIN32
             setenv("BIMBLE_CACHE_DIR", argv[++i], 1);
@@ -467,7 +469,7 @@ static int link_convert_main(int argc, char **argv) {
 #endif
             no_beside = 1;
         } else {
-            fprintf(stderr, "usage: bimble-ccore link-convert [--cache-dir DIR] [--keep] [--index] FILE...\n");
+            fprintf(stderr, "usage: bimble-ccore link-convert [--cache-dir DIR] [--keep] [--index|--reindex] FILE...\n");
             return 2;
         }
     }
@@ -494,7 +496,7 @@ static int link_convert_main(int argc, char **argv) {
                (unsigned long long)j->bytes, j->ms, ne, ns, (unsigned long long)nt, (unsigned long long)j->cache_bytes,
                j->from_cache ? "from-cache" : "read");
         fflush(stdout);
-        if (index && j->incomplete && j->cache[0]) { /* TILE1: the indexing job (proxies, tiles) run here, timed */
+        if (index && (j->incomplete || index == 2) && j->cache[0]) { /* TILE1: the indexing job (proxies, tiles) run here, timed */
             cc_link_job *x = cc_link_job_new(pf, argv[i]);
             if (!x) return 1;
             x->index_only = 1;

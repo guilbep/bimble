@@ -795,12 +795,32 @@ static void grow_world(const uint8_t *sec, size_t sn, double c, double si, const
     }
 }
 
+/* bounds mode: where each pyramid stands (world = R(c, sn) p + o) */
+static void frame_place(JsonW *w, const char *name, double c, double sn, const double o[3]) {
+    jw_obj_begin(w);
+    jw_key(w, "cos"), jw_f64(w, c + 0.0);
+    jw_key(w, "name"), jw_str(w, name);
+    jw_key(w, "origin"), jw_arr_begin(w);
+    for (int k = 0; k < 3; k++) jw_f64(w, o[k] + 0.0);
+    jw_arr_end(w);
+    jw_key(w, "sin"), jw_f64(w, sn + 0.0);
+    jw_obj_end(w);
+}
+
 int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
     JsonW w;
     jw_init(&w, out, 0);
     double tot[6] = {0}, b[6] = {1e300, 1e300, 1e300, -1e300, -1e300, -1e300};
     jw_obj_begin(&w);
     jw_key(&w, "links"), jw_arr_begin(&w);
+    if (s->tiles_status == 200 && s->tiles && s->tiles_scene) { /* the open scene's pyramid, once built (cc_mesh_tiles) */
+        cc_tiles_src src = {s->tiles_scene, NULL};
+        const double *o = s->tiles_scene->origin;
+        const uint8_t *sec = (const uint8_t *)s->tiles->out.p;
+        size_t sn = s->tiles->out.len;
+        if (q->bounds_only) grow_world(sec, sn, 1, 0, o, b), frame_place(&w, "(open)", 1, 0, o);
+        else frame_one(s, "(open)", &src, sec, sn, (uint32_t)s->tiles_scene->nelements, q, 1, 0, o, &w, tot);
+    }
     for (size_t i = 0; i < s->nlinks; i++) {
         cc_link *l = &s->links[i];
         if (!l->kind || !l->visible) continue;
@@ -822,7 +842,7 @@ int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
         cc_link_placement(s, l, &c, &si, t);
         const double *lo = cc_link_rows(l)->origin;
         o[0] = c * lo[0] - si * lo[1] + t[0], o[1] = si * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
-        if (q->bounds_only) grow_world(sec, sn, c, si, o, b);
+        if (q->bounds_only) grow_world(sec, sn, c, si, o, b), frame_place(&w, l->name, c, si, o);
         else frame_one(s, l->name, &src, sec, sn, (uint32_t)cc_link_rows(l)->nelements, q, c, si, o, &w, tot);
     }
     jw_arr_end(&w);

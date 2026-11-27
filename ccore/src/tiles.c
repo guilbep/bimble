@@ -2,6 +2,9 @@
 #ifdef __clang__
 #pragma clang fp contract(off) /* the same bytes from every build (native, wasm): no fused multiply-add */
 #endif
+#ifdef TILES_DEBUG
+#include <stdio.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -155,6 +158,10 @@ typedef struct {
     Occ *occ;
     uint32_t nocc;
     uint32_t id, level;
+    double (*smp)[4];         /* points of its content (vertices and triangle centres, strided) and the size of what they are
+                               * on (an element's middle extent: its omission costs no more; a proxy's: unbounded), until
+                               * its parent used them */
+    uint32_t nsmp;
 } Node;
 
 struct cc_tiles_work {
@@ -190,7 +197,12 @@ struct cc_tiles_work {
     uint32_t nocc;
     uint64_t leaf_verts;
     int chain_done;
+    double (*lsmp)[4];        /* the leaf in progress: its samples */
+    uint32_t nlsmp, clsmp;
+    uint64_t lstride, lcount;
 };
+
+#define CC_TILES_SAMPLES 16384u /* points kept per tile to measure its parent's error */
 
 static double lattice_size(const cc_tiles_work *w, uint32_t e) {
     double g = w->g0;
@@ -217,6 +229,8 @@ static void work_free(cc_tiles_work *w) {
     if (!w) return;
     if (w->cl)
         for (uint32_t i = 0; i < w->nnodes; i++) cc_hg_clusters_free(&w->cl[i]);
+    for (uint32_t i = 0; w->nodes && i < w->nnodes; i++) free(w->nodes[i].smp);
+    free(w->lsmp);
     cc_hg_grid_free(&w->g);
     free(w->cl), free(w->nodes), free(w->els), free(w->box), free(w->tris), free(w->order), free(w->eflag), free(w->shape_flag);
     free(w->shapes), free(w->shape_seen), free(w->touched), free(w->wpos), free(w->keys), free(w->has);
@@ -512,6 +526,8 @@ static double extent(const float *b) {
     return e;
 }
 
+static int lsmp_add(cc_tiles_work *w, const float *p, double size);
+
 static int u64_cmp(const void *a, const void *b) {
     uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
     return x < y ? -1 : x > y;
@@ -611,28 +627,56 @@ static int leaf_element(cc_tiles_work *w, Node *x, uint32_t el) {
         w->has[i] = (uint8_t)lattice_key(w, w->wpos[i], w->g.e, &w->keys[i]);
     }
     Fam *f = &w->g.f[src_cat(s, el)];
-    /* each used vertex once (an unused one would only move a cluster's mean) */
+    uint32_t e0 = w->g.e; /* the grid the keys were made on (a fit below may coarsen it: keys moved up by the difference) */
+    /* pass 1: each used vertex's quadric (its faces' planes, area weighted); pass 2: each used vertex once (an unused one
+     * would only move a cluster's mean); pass 3: the triangles */
+    double(*vq)[10] = arena_alloc_n(&w->tmp, (size_t)m.nv + 1, sizeof *vq, 8);
     uint8_t *used = arena_alloc_n(&w->tmp, (size_t)m.nv + 1, 1, 1);
-    if (!used) return -1;
+    if (!used || !vq) return -1;
     memset(used, 0, (size_t)m.nv + 1);
+    memset(vq, 0, ((size_t)m.nv + 1) * sizeof *vq);
+    for (uint32_t t = 0; t / 3 < m.ni / 3; t += 3) {
+        uint32_t a = m.idx[t], b = m.idx[t + 1], c = m.idx[t + 2];
+        if (a >= m.nv || b >= m.nv || c >= m.nv || !w->has[a] || !w->has[b] || !w->has[c]) continue;
+        double u[3], v[3], n[3];
+        for (int q = 0; q < 3; q++) u[q] = (double)w->wpos[b][q] - w->wpos[a][q], v[q] = (double)w->wpos[c][q] - w->wpos[a][q];
+        n[0] = u[1] * v[2] - u[2] * v[1], n[1] = u[2] * v[0] - u[0] * v[2], n[2] = u[0] * v[1] - u[1] * v[0];
+        double l = cc_sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        used[a] = used[b] = used[c] = 1;
+        if (!(l > 0)) continue;
+        double area = l / 2, pa = n[0] / l, pb = n[1] / l, pc = n[2] / l, pd = -(pa * w->wpos[a][0] + pb * w->wpos[a][1] + pc * w->wpos[a][2]);
+        double Q[10] = {pa * pa, pa * pb, pa * pc, pa * pd, pb * pb, pb * pc, pb * pd, pc * pc, pc * pd, pd * pd};
+        for (int z = 0; z < 3; z++) {
+            uint32_t x3 = z == 0 ? a : z == 1 ? b : c;
+            for (int k = 0; k < 10; k++) vq[x3][k] += area * Q[k];
+        }
+    }
+    for (uint32_t i = 0; i < m.nv; i++)
+        if (used[i]) {
+            double sm[3] = {w->wpos[i][0], w->wpos[i][1], w->wpos[i][2]};
+            if (cc_hg_fam_vert(f, w->keys[i], sm, 1, NULL, vq[i])) return -1;
+        }
     int opq = opaque(s, el);
+    double esize; /* its middle extent */
+    {
+        double e[3];
+        for (int k = 0; k < 3; k++) e[k] = (double)w->box[el][3 + k] - (double)w->box[el][k];
+        double lo = e[0] < e[1] ? e[0] : e[1], hi = e[0] < e[1] ? e[1] : e[0];
+        esize = e[2] < lo ? lo : e[2] > hi ? hi : e[2];
+    }
     double amin = extent(x->box) / 64.0;
     amin *= amin;
     for (uint32_t t = 0; t / 3 < m.ni / 3; t += 3) {
         uint32_t a = m.idx[t], b = m.idx[t + (mir ? 2 : 1)], c = m.idx[t + (mir ? 1 : 2)];
         if (a >= m.nv || b >= m.nv || c >= m.nv) continue;
-        uint32_t v3[3] = {a, b, c};
-        int ok = 1;
-        for (int q = 0; q < 3; q++) {
-            uint32_t v = v3[q];
-            if (!w->has[v]) { ok = 0; continue; }
-            if (!used[v]) {
-                used[v] = 1;
-                double sm[3] = {w->wpos[v][0], w->wpos[v][1], w->wpos[v][2]};
-                if (cc_hg_fam_vert(f, w->keys[v], sm, 1, NULL)) return -1;
-            }
+        int ok = w->has[a] && w->has[b] && w->has[c];
+        unsigned sh2 = w->g.e - e0;
+        if (ok && cc_hg_fam_tri(f, cc_hg_up(w->keys[a], sh2), cc_hg_up(w->keys[b], sh2), cc_hg_up(w->keys[c], sh2))) return -1;
+        { /* the leaf's points: its first corner and its centre */
+            float ctr[3];
+            for (int k = 0; k < 3; k++) ctr[k] = (w->wpos[a][k] + w->wpos[b][k] + w->wpos[c][k]) / 3.0f;
+            if ((finite3(w->wpos[a]) && lsmp_add(w, w->wpos[a], esize)) || (finite3(ctr) && lsmp_add(w, ctr, esize))) return -1;
         }
-        if (ok && cc_hg_fam_tri(f, w->keys[a], w->keys[b], w->keys[c])) return -1;
         if (opq && ok) {
             double u[3], v[3], n[3];
             for (int q = 0; q < 3; q++) u[q] = (double)w->wpos[b][q] - w->wpos[a][q], v[q] = (double)w->wpos[c][q] - w->wpos[a][q];
@@ -648,6 +692,303 @@ static int leaf_element(cc_tiles_work *w, Node *x, uint32_t el) {
         if ((t / 3) % 4096 == 4095 && cc_hg_grid_fit(&w->g, w->o.proxy_tris, 0)) return -1;
     }
     return cc_hg_grid_fit(&w->g, w->o.proxy_tris, 0);
+}
+
+/* ---- a cluster's point: where its quadric is least (Lindstrom 2000), kept in its members' box ---- */
+
+/* the eigen decomposition of a symmetric 3x3 (Jacobi, fixed sweeps: deterministic) */
+static void eig3(double a[3][3], double v[3][3]) {
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) v[i][j] = i == j;
+    for (int sweep = 0; sweep < 12; sweep++)
+        for (int p = 0; p < 2; p++)
+            for (int q = p + 1; q < 3; q++) {
+                if (a[p][q] == 0) continue;
+                double th = (a[q][q] - a[p][p]) / (2 * a[p][q]), t = (th >= 0 ? 1 : -1) / ((th >= 0 ? th : -th) + cc_sqrt(th * th + 1));
+                double c = 1 / cc_sqrt(t * t + 1), s = t * c;
+                for (int k = 0; k < 3; k++) {
+                    double x = a[k][p], y = a[k][q];
+                    a[k][p] = c * x - s * y, a[k][q] = s * x + c * y;
+                }
+                for (int k = 0; k < 3; k++) {
+                    double x = a[p][k], y = a[q][k];
+                    a[p][k] = c * x - s * y, a[q][k] = s * x + c * y;
+                }
+                for (int k = 0; k < 3; k++) {
+                    double x = v[k][p], y = v[k][q];
+                    v[k][p] = c * x - s * y, v[k][q] = s * x + c * y;
+                }
+            }
+}
+
+static void rep(const Vert *x, double out[3]) {
+    double n = (double)(x->n ? x->n : 1), m[3];
+    for (int k = 0; k < 3; k++) m[k] = x->s[k] / n, out[k] = m[k];
+    const double *q = x->q;
+    double A[3][3] = {{q[0], q[1], q[2]}, {q[1], q[4], q[5]}, {q[2], q[5], q[7]}}, b[3] = {q[3], q[6], q[8]}, V[3][3];
+    double r[3]; /* -(A m + b): the step from the mean */
+    for (int i = 0; i < 3; i++) r[i] = -(A[i][0] * m[0] + A[i][1] * m[1] + A[i][2] * m[2] + b[i]);
+    eig3(A, V);
+    double lmax = 0;
+    for (int i = 0; i < 3; i++) lmax = A[i][i] > lmax ? A[i][i] : lmax;
+    if (!(lmax > 0)) return;
+    for (int i = 0; i < 3; i++) { /* the pseudo inverse: directions of a flat or an edge left at the mean */
+        if (!(A[i][i] > 1e-3 * lmax)) continue;
+        double d = (V[0][i] * r[0] + V[1][i] * r[1] + V[2][i] * r[2]) / A[i][i];
+        for (int k = 0; k < 3; k++) out[k] += d * V[k][i];
+    }
+    for (int k = 0; k < 3; k++) { /* within its members' box */
+        if (!(out[k] >= x->lo[k])) out[k] = x->lo[k];
+        if (!(out[k] <= x->hi[k])) out[k] = x->hi[k];
+        if (!(out[k] - out[k] == 0)) out[k] = m[k];
+    }
+}
+
+/* ---- the error: a sampled two-sided distance between a proxy and the level below ---- */
+
+static int lsmp_add(cc_tiles_work *w, const float *p, double size) { /* every lstride-th point of the leaf's content */
+    if (w->lcount++ % w->lstride) return 0;
+    if (w->nlsmp == w->clsmp) {
+        uint32_t c = w->clsmp ? 2 * w->clsmp : 1024;
+        double(*v)[4] = realloc(w->lsmp, (size_t)c * sizeof *v);
+        if (!v) return -1;
+        w->lsmp = v, w->clsmp = c;
+    }
+    for (int k = 0; k < 3; k++) w->lsmp[w->nlsmp][k] = p[k];
+    w->lsmp[w->nlsmp][3] = size;
+    w->nlsmp++;
+    return 0;
+}
+
+typedef struct { /* a uniform grid of items (points or triangles) for nearest queries */
+    double lo[3], h;
+    int n[3];
+    uint32_t *start, *items, *stamp, mark;
+} UGrid;
+
+static void ug_free(UGrid *g) { free(g->start), free(g->items), free(g->stamp); }
+
+static void ug_cell(const UGrid *g, const double *p, int c[3]) {
+    for (int k = 0; k < 3; k++) {
+        double q = (p[k] - g->lo[k]) / g->h;
+        c[k] = q < 0 ? 0 : q >= g->n[k] ? g->n[k] - 1 : (int)q;
+    }
+}
+
+/* items: n boxes box(i, lo, hi) */
+static int ug_build(UGrid *g, uint32_t n, void (*box)(const void *, uint32_t, double *, double *), const void *ctx) {
+    memset(g, 0, sizeof *g);
+    double lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300}, a[3], b[3];
+    for (uint32_t i = 0; i < n; i++) {
+        box(ctx, i, a, b);
+        for (int k = 0; k < 3; k++) lo[k] = a[k] < lo[k] ? a[k] : lo[k], hi[k] = b[k] > hi[k] ? b[k] : hi[k];
+    }
+    double ext = 0;
+    for (int k = 0; k < 3; k++) ext = hi[k] - lo[k] > ext ? hi[k] - lo[k] : ext;
+    g->h = ext / 32 > 1 ? ext / 32 : 1;
+    for (int k = 0; k < 3; k++) g->lo[k] = lo[k], g->n[k] = n ? 1 + (int)((hi[k] - lo[k]) / g->h) : 1;
+    for (int k = 0; k < 3; k++) if (g->n[k] > 33) g->n[k] = 33;
+    size_t nc = (size_t)g->n[0] * g->n[1] * g->n[2];
+    g->start = calloc(nc + 1, sizeof *g->start);
+    g->stamp = calloc((size_t)n + 1, sizeof *g->stamp);
+    if (!g->start || !g->stamp) return -1;
+    for (int pass = 0; pass < 2; pass++) {
+        for (uint32_t i = 0; i < n; i++) {
+            int c0[3], c1[3];
+            box(ctx, i, a, b), ug_cell(g, a, c0), ug_cell(g, b, c1);
+            for (int z = c0[2]; z <= c1[2]; z++)
+                for (int y = c0[1]; y <= c1[1]; y++)
+                    for (int x = c0[0]; x <= c1[0]; x++) {
+                        size_t c = ((size_t)z * g->n[1] + y) * g->n[0] + x;
+                        if (!pass) g->start[c + 1]++;
+                        else g->items[g->start[c]++] = i;
+                    }
+        }
+        if (!pass) {
+            for (size_t c = 0; c < nc; c++) g->start[c + 1] += g->start[c];
+            g->items = malloc(((size_t)g->start[nc] + 1) * sizeof *g->items);
+            if (!g->items) return -1;
+        } else { /* start[c] moved to the next cell's start: back */
+            for (size_t c = nc; c > 0; c--) g->start[c] = g->start[c - 1];
+            g->start[0] = 0;
+        }
+    }
+    memset(g->stamp, 0, ((size_t)n + 1) * sizeof *g->stamp);
+    return 0;
+}
+
+static double pt_tri(const double *p, const double *a, const double *b, const double *c) { /* Ericson 5.1.5 */
+    double ab[3], ac[3], ap[3], bp[3], cp[3], q[3];
+    for (int k = 0; k < 3; k++) ab[k] = b[k] - a[k], ac[k] = c[k] - a[k], ap[k] = p[k] - a[k], bp[k] = p[k] - b[k], cp[k] = p[k] - c[k];
+#define D3(u, v) (u[0] * v[0] + u[1] * v[1] + u[2] * v[2])
+    double d1 = D3(ab, ap), d2 = D3(ac, ap), d3 = D3(ab, bp), d4 = D3(ac, bp), d5 = D3(ab, cp), d6 = D3(ac, cp);
+    double va = d3 * d6 - d5 * d4, vb = d5 * d2 - d1 * d6, vc = d1 * d4 - d3 * d2;
+    if (d1 <= 0 && d2 <= 0) memcpy(q, a, 24);
+    else if (d3 >= 0 && d4 <= d3) memcpy(q, b, 24);
+    else if (d6 >= 0 && d5 <= d6) memcpy(q, c, 24);
+    else if (vc <= 0 && d1 >= 0 && d3 <= 0) { double v = d1 / (d1 - d3); for (int k = 0; k < 3; k++) q[k] = a[k] + v * ab[k]; }
+    else if (vb <= 0 && d2 >= 0 && d6 <= 0) { double v = d2 / (d2 - d6); for (int k = 0; k < 3; k++) q[k] = a[k] + v * ac[k]; }
+    else if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { double v = (d4 - d3) / ((d4 - d3) + (d5 - d6)); for (int k = 0; k < 3; k++) q[k] = b[k] + v * (c[k] - b[k]); }
+    else {
+        double den = va + vb + vc, v = den != 0 ? vb / den : 0, u = den != 0 ? vc / den : 0;
+        for (int k = 0; k < 3; k++) q[k] = a[k] + v * ab[k] + u * ac[k];
+    }
+    double d[3] = {p[0] - q[0], p[1] - q[1], p[2] - q[2]};
+    return D3(d, d);
+#undef D3
+}
+
+typedef struct { /* a proxy as a mesh in doubles */
+    double (*v)[3];
+    uint32_t (*t)[3];
+    uint32_t nv, nt;
+} PM;
+static void pm_tbox(const void *ctx, uint32_t i, double *lo, double *hi) {
+    const PM *m = ctx;
+    for (int k = 0; k < 3; k++) {
+        const double *a = m->v[m->t[i][0]], *b = m->v[m->t[i][1]], *c = m->v[m->t[i][2]];
+        lo[k] = a[k] < b[k] ? (a[k] < c[k] ? a[k] : c[k]) : (b[k] < c[k] ? b[k] : c[k]);
+        hi[k] = a[k] > b[k] ? (a[k] > c[k] ? a[k] : c[k]) : (b[k] > c[k] ? b[k] : c[k]);
+    }
+}
+typedef struct {
+    double (*p)[4];
+    uint32_t n;
+} PS;
+
+/* the squared distance from p to the nearest item (rings of cells until no nearer can be) */
+static double ug_near(UGrid *g, const double *p, const PM *m) {
+    int c[3];
+    ug_cell(g, p, c);
+    double best = 1e300;
+    if (++g->mark == 0) g->mark = 1;
+    int maxr = g->n[0] > g->n[1] ? g->n[0] : g->n[1];
+    maxr = maxr > g->n[2] ? maxr : g->n[2];
+    for (int r = 0; r <= maxr; r++) {
+        for (int z = c[2] - r; z <= c[2] + r; z++)
+            for (int y = c[1] - r; y <= c[1] + r; y++)
+                for (int x = c[0] - r; x <= c[0] + r; x++) {
+                    if (x < 0 || y < 0 || z < 0 || x >= g->n[0] || y >= g->n[1] || z >= g->n[2]) continue;
+                    if (r && x != c[0] - r && x != c[0] + r && y != c[1] - r && y != c[1] + r && z != c[2] - r && z != c[2] + r) continue;
+                    size_t cell = ((size_t)z * g->n[1] + y) * g->n[0] + x;
+                    for (uint32_t q = g->start[cell]; q < g->start[cell + 1]; q++) {
+                        uint32_t i = g->items[q];
+                        if (g->stamp[i] == g->mark) continue;
+                        g->stamp[i] = g->mark;
+                        double d = pt_tri(p, m->v[m->t[i][0]], m->v[m->t[i][1]], m->v[m->t[i][2]]);
+                        if (d < best) best = d;
+                    }
+                }
+        double reach = r * g->h;
+        if (best <= reach * reach) break;
+    }
+    return best;
+}
+
+/* The proxy `cl` against its children's samples: max over the children's points of the distance to the proxy's
+ * triangles, and over the proxy's points of the distance to the nearest child point; its own samples set (x->smp). */
+static int pm_from(const Clusters *const *cls, uint32_t ncl, PM *m) { /* clusters as one mesh (vertices at their means) */
+    m->nv = m->nt = 0;
+    for (uint32_t c = 0; c < ncl; c++)
+        for (int i = 0; i < CC_CAT_COUNT; i++) m->nv += (uint32_t)cls[c]->p[i].nv, m->nt += (uint32_t)cls[c]->p[i].nt;
+    m->v = malloc(((size_t)m->nv + 1) * sizeof *m->v), m->t = malloc(((size_t)m->nt + 1) * sizeof *m->t);
+    if (!m->v || !m->t) return -1;
+    m->nv = m->nt = 0;
+    for (uint32_t c = 0; c < ncl; c++)
+        for (int i = 0; i < CC_CAT_COUNT; i++) {
+            const Part *p = &cls[c]->p[i];
+            for (size_t v = 0; v < p->nv; v++) rep(&p->v[v], m->v[m->nv + v]);
+            for (size_t t = 0; t < p->nt; t++)
+                for (int k = 0; k < 3; k++) m->t[m->nt + t][k] = m->nv + p->t[t][k];
+            m->nv += (uint32_t)p->nv, m->nt += (uint32_t)p->nt;
+        }
+    return 0;
+}
+
+/* children: their clusters (the level below as meshes: a leaf's at its fine grid, a proxy's its proxy) */
+static double proxy_error(cc_tiles_work *w, const Clusters *cl, const Clusters *const *kids, uint32_t nk, uint32_t n, int *bad) {
+    Node *x = &w->nodes[n];
+    PM m = {0}, km = {0};
+    PS ch = {0}, own = {0};
+    double err = 0;
+    if (pm_from(kids, nk, &km)) goto oom;
+    for (int i = 0; i < CC_CAT_COUNT; i++) m.nv += (uint32_t)cl->p[i].nv, m.nt += (uint32_t)cl->p[i].nt;
+    for (uint32_t k = 0; k < x->nkids; k++) ch.n += w->nodes[x->kids[k]].nsmp;
+    m.v = malloc(((size_t)m.nv + 1) * sizeof *m.v), m.t = malloc(((size_t)m.nt + 1) * sizeof *m.t);
+    ch.p = malloc(((size_t)ch.n + 1) * sizeof *ch.p);
+    uint64_t total = (uint64_t)m.nv + m.nt, stride = total / CC_TILES_SAMPLES + 1;
+    own.p = malloc(((size_t)(total / stride) + 2) * sizeof *own.p);
+    if (!m.v || !m.t || !ch.p || !own.p) goto oom;
+    m.nv = m.nt = 0;
+    for (int i = 0; i < CC_CAT_COUNT; i++) {
+        const Part *p = &cl->p[i];
+        for (size_t v = 0; v < p->nv; v++) {
+            double d = (double)(p->v[v].n ? p->v[v].n : 1);
+            for (int k = 0; k < 3; k++) m.v[m.nv + v][k] = p->v[v].s[k] / d;
+        }
+        for (size_t t = 0; t < p->nt; t++)
+            for (int k = 0; k < 3; k++) m.t[m.nt + t][k] = m.nv + p->t[t][k];
+        m.nv += (uint32_t)p->nv, m.nt += (uint32_t)p->nt;
+    }
+    ch.n = 0;
+    double cerr = 0;
+    for (uint32_t k = 0; k < x->nkids; k++) {
+        Node *c = &w->nodes[x->kids[k]];
+        if (c->nsmp) memcpy(ch.p + ch.n, c->smp, (size_t)c->nsmp * sizeof *ch.p);
+        ch.n += c->nsmp;
+        if (!(c->flags & CC_TILE_LEAF) && c->error > cerr) cerr = c->error;
+    }
+    for (uint64_t i = 0, q = 0; i < total; i++) { /* the proxy's own points: vertices, then triangle centres */
+        if (i % stride) continue;
+        if (i < m.nv) memcpy(own.p[q], m.v[i], 24);
+        else {
+            const uint32_t *t = m.t[i - m.nv];
+            for (int k = 0; k < 3; k++) own.p[q][k] = (m.v[t[0]][k] + m.v[t[1]][k] + m.v[t[2]][k]) / 3.0;
+        }
+        own.p[q][3] = 1e150;
+        own.n = (uint32_t)++q;
+    }
+    double d2 = 0;
+    if (m.nt && ch.n) {
+        UGrid g;
+        if (ug_build(&g, m.nt, pm_tbox, &m)) { ug_free(&g); goto oom; }
+        for (uint32_t i = 0; i < ch.n; i++) {
+            double d = ug_near(&g, ch.p[i], &m), sz = ch.p[i][3] * ch.p[i][3];
+            if (d > sz) d = sz; /* a part that vanished: its omission costs its size */
+            if (d > d2) d2 = d;
+#ifdef TILES_DEBUG
+            if (d > 2e6) fprintf(stderr, "node %u: child point %.0f %.0f %.0f at %.0f mm of the proxy\n", n, ch.p[i][0], ch.p[i][1], ch.p[i][2], cc_sqrt(d));
+#endif
+        }
+        ug_free(&g);
+        if (km.nt) { /* the proxy's points to the level below's triangles */
+            if (ug_build(&g, km.nt, pm_tbox, &km)) { ug_free(&g); goto oom; }
+            for (uint32_t i = 0; i < own.n; i++) {
+                double d = ug_near(&g, own.p[i], &km);
+                if (d > d2) d2 = d;
+#ifdef TILES_DEBUG
+                if (d > 2e6) fprintf(stderr, "node %u: proxy point %.0f %.0f %.0f at %.0f mm of the level below\n", n, own.p[i][0], own.p[i][1], own.p[i][2], cc_sqrt(d));
+#endif
+            }
+            ug_free(&g);
+        }
+    } else if (ch.n) { /* an empty proxy: everything vanished: the farthest child point from the box's centre */
+        double ctr[3] = {(x->box[0] + x->box[3]) / 2.0, (x->box[1] + x->box[4]) / 2.0, (x->box[2] + x->box[5]) / 2.0};
+        for (uint32_t i = 0; i < ch.n; i++) {
+            double e[3] = {ch.p[i][0] - ctr[0], ch.p[i][1] - ctr[1], ch.p[i][2] - ctr[2]}, d = e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
+            if (d > d2) d2 = d;
+        }
+    }
+    err = cc_sqrt(d2) + cerr;
+    for (uint32_t k = 0; k < x->nkids; k++) free(w->nodes[x->kids[k]].smp), w->nodes[x->kids[k]].smp = NULL, w->nodes[x->kids[k]].nsmp = 0;
+    free(x->smp);
+    x->smp = own.p, x->nsmp = own.n;
+    free(m.v), free(m.t), free(ch.p), free(km.v), free(km.t);
+    return err;
+oom:
+    free(m.v), free(m.t), free(ch.p), free(own.p), free(km.v), free(km.t);
+    *bad = 1;
+    return 0;
 }
 
 /* ---- a proxy: clusters to TPX1 ---- */
@@ -726,13 +1067,9 @@ static int write_proxy(cc_tiles_work *w, const Clusters *cl, Node *x) {
                 uint32_t v = p->t[t][k];
                 if (map[v] == UINT32_MAX) {
                     map[v] = v0++;
-                    double d = (double)(p->v[v].n ? p->v[v].n : 1), r2 = 0;
-                    for (int j = 0; j < 3; j++) {
-                        double mj = p->v[v].s[j] / d, a = mj - p->v[v].lo[j], c = p->v[v].hi[j] - mj, q = a > c ? a : c;
-                        r2 += q * q;
-                        put16(b, quant16((float)mj, x->box[j], x->box[3 + j]));
-                    }
-                    if (r2 > dev2) dev2 = r2;
+                    double pt[3];
+                    rep(&p->v[v], pt);
+                    for (int j = 0; j < 3; j++) put16(b, quant16((float)pt[j], x->box[j], x->box[3 + j]));
                 }
                 if (wide) put32(&idx, map[v]);
                 else put16(&idx, map[v]);
@@ -752,7 +1089,8 @@ static int write_proxy(cc_tiles_work *w, const Clusters *cl, Node *x) {
         double q = ((double)x->box[3 + j] - (double)x->box[j]) / 65535.0 / 2.0;
         qd += q * q;
     }
-    x->error = (float)(cc_sqrt(dev2) + cc_sqrt(qd));
+    x->error = (float)cc_sqrt(qd); /* the 16-bit quantum's half diagonal; the caller adds the measured distance */
+    (void)dev2;                     /* (the farthest member of a cluster: a bound 3 to 10 times what the picture shows) */
     x->flags |= CC_TILE_PROXY;
     return b->oom ? -1 : 0;
 }
@@ -776,12 +1114,22 @@ static int inner(cc_tiles_work *w, uint32_t n) {
         Clusters *ch = &w->cl[x->kids[k]];
         if (!ch->built) continue;
         if (cc_hg_grid_add_clusters(&g, ch) || cc_hg_grid_fit(&g, cap, 0)) return cc_hg_grid_free(&g), -1;
-        cc_hg_clusters_free(ch);
     }
     Clusters cl;
     memset(&cl, 0, sizeof cl);
     if (cc_hg_grid_fit(&g, cap, 1) || cc_hg_grid_finish(&g, &cl)) return cc_hg_grid_free(&g), cc_hg_clusters_free(&cl), -1;
     if (write_proxy(w, &cl, x)) return cc_hg_clusters_free(&cl), -1;
+    int bad = 0;
+    const Clusters **kc = malloc(((size_t)x->nkids + 1) * sizeof *kc);
+    uint32_t nk = 0;
+    for (uint32_t k = 0; kc && k < x->nkids; k++)
+        if (w->cl[x->kids[k]].built) kc[nk++] = &w->cl[x->kids[k]];
+    double pe = kc ? proxy_error(w, &cl, kc, nk, n, &bad) : (bad = 1, 0.0);
+    free(kc);
+    x = &w->nodes[n];
+    for (uint32_t k = 0; k < x->nkids; k++) cc_hg_clusters_free(&w->cl[x->kids[k]]);
+    if (bad) return cc_hg_clusters_free(&cl), -1;
+    x->error = (float)(x->error + pe);
     w->cl[n] = cl;
     /* occluders: the children's largest */
     Occ set[CC_TILES_OCC];
@@ -824,6 +1172,12 @@ static int chain(cc_tiles_work *w) {
         if (cc_hg_grid_add_clusters(&g, cl) || cc_hg_grid_fit(&g, cap, 1) || cc_hg_grid_finish(&g, &out))
             return cc_hg_grid_free(&g), cc_hg_clusters_free(&out), -1;
         if (write_proxy(w, &out, y)) return cc_hg_clusters_free(&out), -1;
+        int bad = 0;
+        const Clusters *kc1[1] = {cl};
+        double pe = proxy_error(w, &out, kc1, 1, q, &bad);
+        x = &w->nodes[top], y = &w->nodes[q];
+        if (bad) return cc_hg_clusters_free(&out), -1;
+        y->error = (float)(y->error + pe);
         if (occ_store(w, y, x->occ, x->nocc)) return cc_hg_clusters_free(&out), -1;
         cc_hg_clusters_free(cl);
         w->cl[q] = out;
@@ -918,6 +1272,7 @@ int cc_tiles_step(cc_tiles *t, uint64_t budget, cc_error *err) {
                 memset(&w->g, 0, sizeof w->g);
                 w->g.e = CC_TILES_MAX_DEPTH - (x->cdepth < CC_TILES_MAX_DEPTH ? x->cdepth : CC_TILES_MAX_DEPTH);
                 w->open = 1, w->j = 0, w->nocc = 0, w->leaf_verts = 0, w->ntouched = 0;
+                w->nlsmp = 0, w->lcount = 0, w->lstride = 2 * x->detail / CC_TILES_SAMPLES + 1;
                 arena_reset(&w->dec);
             }
             while (w->j < x->nel) {
@@ -940,6 +1295,8 @@ int cc_tiles_step(cc_tiles *t, uint64_t budget, cc_error *err) {
             x->tris = (uint32_t)(x->detail > 0xFFFFFFFFull ? 0xFFFFFFFFu : x->detail);
             x->verts = (uint32_t)(w->leaf_verts > 0xFFFFFFFFull ? 0xFFFFFFFFu : w->leaf_verts);
             if (occ_store(w, x, w->occ, w->nocc)) return fail(err, "out of memory");
+            x->smp = w->lsmp, x->nsmp = w->nlsmp; /* the leaf's points move to it */
+            w->lsmp = NULL, w->nlsmp = w->clsmp = 0;
             w->open = 0;
             arena_reset(&w->dec);
         } else if (inner(w, n)) return fail(err, "out of memory");

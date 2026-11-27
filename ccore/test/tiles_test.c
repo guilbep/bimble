@@ -18,7 +18,8 @@
  *     element twice, absurd counts: refused or read, never a crash (ASan/UBSan in the gate);
  *   - a huge element (400,000 triangles) and non-finite vertices: bounded, ends;
  *   - cancel: a build stopped half way frees everything.
- * TILES_SYNTH_OUT=<file.bimbleview>: the buildings scene written there (ccore/tools/tiles.mjs uses it).
+ * TILES_SYNTH_OUT=<file.bimbleview> (TILES_SYNTH="bx,by,storeys,parts"): a buildings scene of that size written there
+ * (ccore/tools/tiles.mjs uses it).
  * Fails on the code before TILE1: src/tiles.h did not exist. */
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
@@ -643,10 +644,19 @@ int main(void) {
     Buf vb;
     buf_init(&vb);
     check_true("buildings: view file written", write_view(&y, &vb) == 0);
-    const char *out = getenv("TILES_SYNTH_OUT");
+    const char *out = getenv("TILES_SYNTH_OUT"), *dims = getenv("TILES_SYNTH"); /* ccore/tools/tiles.mjs: "bx,by,storeys,parts" */
     if (out) {
-        FILE *f = fopen(out, "wb");
-        if (f) fwrite(vb.p, 1, vb.len, f), fclose(f);
+        Synth z;
+        int bx = 3, by = 2, st = 4, pa = 60;
+        if (dims) sscanf(dims, "%d,%d,%d,%d", &bx, &by, &st, &pa);
+        synth(&z, bx, by, st, pa);
+        Buf zb;
+        buf_init(&zb);
+        FILE *f = write_view(&z, &zb) == 0 ? fopen(out, "wb") : NULL;
+        if (f) fwrite(zb.p, 1, zb.len, f), fclose(f);
+        printf("  wrote %s: %zu elements, %zu bytes\n", out, z.s.nelements, zb.len);
+        buf_free(&zb);
+        synth_free(&z);
     }
     cc_viewfile vf;
     cc_error e;

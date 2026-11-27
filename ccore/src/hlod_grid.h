@@ -15,6 +15,7 @@ typedef struct {
     double s[3]; /* sum of the original vertices in the grid cell */
     uint64_t n;  /* their count */
     float lo[3], hi[3]; /* TILE1: their box (then hi follows lo: a float[6]) */
+    double q[10];       /* TILE1: the sum of their faces' plane quadrics (a2 ab ac ad b2 bc bd c2 cd d2), area weighted */
 } Vert;
 typedef struct {
     Key t[3];
@@ -43,7 +44,8 @@ typedef struct {
 } Clusters;
 
 Key cc_hg_up(Key k, unsigned s);
-int cc_hg_fam_vert(Fam *f, Key k, const double s[3], uint64_t n, const float *box /* lo xyz, hi xyz; NULL: the point */);
+int cc_hg_fam_vert(Fam *f, Key k, const double s[3], uint64_t n, const float *box /* lo xyz, hi xyz; NULL: the point */,
+                   const double *q /* 10, or NULL: none */);
 int cc_hg_fam_tri(Fam *f, Key a, Key b, Key c);
 void cc_hg_grid_free(Grid *g);
 uint64_t cc_hg_grid_triangles(const Grid *g);
