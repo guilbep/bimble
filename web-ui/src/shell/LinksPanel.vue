@@ -36,10 +36,11 @@ const can = computed(() => { void state.value; return { model: enabled("link_mod
 const PALETTE = ["#c0504d", "#4f81bd", "#9bbb59", "#8064a2", "#4bacc6", "#f79646", "#2c4d75", "#7f7f7f", "#d99694", "#95b3d7", "#c3d69b", "#b2a2c7"];
 const mb = (n = 0) => (n < 1e6 ? `${(n / 1e3).toFixed(0)} kB` : `${(n / 1e6).toFixed(n < 1e8 ? 1 : 0)} MB`);
 const num = (n = 0) => n.toLocaleString();
-const busy = (m: PanelModel) => m.state === "queued" || m.state === "converting";
+const busy = (m: PanelModel) => m.state === "queued" || m.state === "converting" || !!m.indexing; // SIZE3 (E): indexing too
 function stateText(m: PanelModel): string {
   if (m.missing) return t("links.missing");
   if (m.state === "converting") return t("links.state.converting", { n: m.progress ?? 0 });
+  if (m.state === "ready" && m.indexing) return t("links.state.indexing"); // SIZE3 (E): drawn; its proxies being baked
   return m.state && m.state !== "ready" ? t(`links.state.${m.state}`) : m.kind;
 }
 const detail = (m: PanelModel) => m.state === "ready"

@@ -1753,7 +1753,9 @@ export interface LinkNote { at: [number, number, number]; element: string; index
 export const linkNotes = () => tryQuery<LinkNote[]>("link_notes", []);
 /** LNK3D: how each link is drawn (`query link_draw`, ccore/session/links.h): shown, colour (-1: its own),
  *  its turn about Z (cos, sin) and placed origin (host world mm), in link order. */
-export interface LinkDraw { colour: number; cos: number; name: string; origin: [number, number, number]; sin: number; visible: boolean }
+export interface LinkDraw { colour: number; cos: number; name: string; origin: [number, number, number]; sin: number; visible: boolean;
+  /** SIZE3 (E): moves when the link's proxies were baked after it was ready (ask them again). */
+  proxies?: number }
 export const linkDraw = () => tryQuery<LinkDraw[]>("link_draw", []);
 /** LNK3D: what the mesh holds (`query mesh_key`): `draw` moves with a change that may change what is drawn
  *  (not a hide in a view, a sheet), `links` with the links' geometry. null: not served (the Rust viewer). */

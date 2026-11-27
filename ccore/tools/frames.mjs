@@ -674,8 +674,11 @@ async function linksMain() {
   await hcall("action", "new");
   const t0 = Date.now();
   await hcall("action", "link_folder", { path: dir });
-  await waitFor("the links converted", 600000, async () => { const r = JSON.parse((await hcall("query", "links_panel")).text).models; return r.length === LINKS && r.every((m) => m.state === "ready"); }, 200);
-  const convertMs = Date.now() - t0;
+  let drawnAt = null; // SIZE3 (E): every link ready (drawn) before its proxies are baked (indexed)
+  await waitFor("the links converted", 600000, async () => { const r = JSON.parse((await hcall("query", "links_panel")).text).models;
+    if (drawnAt === null && r.length === LINKS && r.every((m) => m.state === "ready")) drawnAt = Date.now();
+    return r.length === LINKS && r.every((m) => m.state === "ready" && !m.indexing); }, 200);
+  const convertMs = Date.now() - t0, drawnMs = (drawnAt ?? Date.now()) - t0;
   for (let k = 0; k < LINKS; k++) {
     await hcall("action", "manage_links", { op: "unpin", name: `link_${k}.ifc` });
     await hcall("action", "manage_links", { op: "place", name: `link_${k}.ifc`, move_mm: [30000 * (k % 5), 30000 * Math.floor(k / 5), 0] });
@@ -684,7 +687,7 @@ async function linksMain() {
   const detail = logs.reduce((n, t) => n + Number(/\ntriangles: (\d+)/.exec(t)?.[1] ?? 0), 0);
   const cacheBytes = files.reduce((n, f) => n + statSync(`${f}.bimbleview`).size, 0);
   const hlod = logs.map((t) => /proxies \(HLOD, baked for the 3D view\): (\d+) cells, (\d+) triangles, (\d+) bytes, built in (\d+) ms/.exec(t));
-  const out = { label: LABEL, links: LINKS, load: loadNow(), detailTris: detail, cacheBytes, convertMs,
+  const out = { label: LABEL, links: LINKS, load: loadNow(), detailTris: detail, cacheBytes, convertMs, drawnMs,
     hlodBytes: hlod.reduce((n, m) => n + Number(m?.[3] ?? 0), 0), hlodMs: hlod.reduce((n, m) => n + Number(m?.[4] ?? 0), 0) };
   await startBrowser();
   BUILD = "native", MODEL = "links";
@@ -737,6 +740,7 @@ async function linksMain() {
   await sleep(500);
   { const h = await S("Runtime.getHeapUsage"); out.jsHeap = h.usedSize, out.arrayBuffers = h.backingStorageSize ?? null; }
   out.rss = chromeRss();
+  console.log(`SIZE3: the ${LINKS} links drawn (ready) in ${out.drawnMs} ms, indexed (proxies baked) in ${out.convertMs} ms`);
   console.log(`SIZE3: open: JS heap + array buffers at most ${mb(out.maxHeap)} MB, decoded at most ${mb(out.openPeakDecoded)} MB, decodes ${JSON.stringify(out.decodes)}, ` +
     `links in view detailed at ${out.detailedAt?.toFixed(0)} ms (first picture ${out.firstPicture?.toFixed(0)} ms); host anonymous ${out.hostAnonMb.toFixed(0)} MB, link meshes decoded ${out.hostDecodes} times, dropped ${out.hostDrops}`);
   if (process.env.FRAMES_HOST_LOG) for (const l of host.out.split("\n").filter((x) => /decoded|dropped|POST|query/.test(x)).slice(-60)) console.log(`  host: ${l}`);
@@ -851,17 +855,19 @@ async function folderMain() {
       const lf = await hcall("action", "link_folder", { path: dir });
       if (lf.status !== 200) throw new Error(`link_folder: ${lf.status} ${lf.text.slice(0, 200)}`);
       let panel = null;
+      let drawnAt = null; // SIZE3 (E): every link drawn (ready) before its proxies are baked (indexed)
       await W(waitFor("the links converted", 3600000, async () => {
         panel = JSON.parse((await hcall("query", "links_panel")).text).models;
-        return panel.length === n && panel.every((m) => m.state !== "converting" && m.state !== "queued");
+        if (drawnAt === null && panel.length === n && panel.every((m) => m.state !== "converting" && m.state !== "queued")) drawnAt = Date.now();
+        return panel.length === n && panel.every((m) => m.state !== "converting" && m.state !== "queued" && !m.indexing);
       }, 500));
-      out.convertMs = Date.now() - t0;
+      out.convertMs = Date.now() - t0, out.drawnMs = (drawnAt ?? Date.now()) - t0;
       out.states = panel.map((m) => m.state).join(",");
       out.fromCache = panel.filter((m) => m.from_cache).length;
       out.elements = panel.reduce((k, m) => k + m.elements, 0), out.storedTris = panel.reduce((k, m) => k + m.triangles, 0);
       out.origins = panel.map((m) => m.origin);
       out.hostRssMb = rssMb(host.pid);
-      log(`${n} files: converted in ${out.convertMs} ms (${out.fromCache} from cache), ${out.elements} elements, ${out.storedTris} stored triangles, host RSS ${out.hostRssMb.toFixed(0)} MB`);
+      log(`${n} files: drawn (ready) in ${out.drawnMs} ms, indexed in ${out.convertMs} ms (${out.fromCache} from cache), ${out.elements} elements, ${out.storedTris} stored triangles, host RSS ${out.hostRssMb.toFixed(0)} MB`);
       try {
         if (memGb() < 3) throw new Error(`memory: ${memGb().toFixed(1)} GB available before Chromium`);
         curTarget = null;

@@ -22,6 +22,8 @@ export interface PanelModel {
   state?: "ready" | "missing" | "queued" | "converting" | "failed" | "refused" | "unloaded"; progress?: number;
   message?: string | null; bytes?: number; elements?: number; triangles?: number; cache?: string | null;
   cache_mtime_s?: number; log?: string | null; from_cache?: boolean; pinned?: boolean; colour?: number | null;
+  /** SIZE3 (E): ready, its proxies being baked after (ccore/session/links.h `indexing`). */
+  indexing?: boolean;
   origin?: "file" | "origin" | "base_point" | "survey_point"; move_mm?: [number, number, number]; rotation_deg?: number;
 }
 export interface PanelReference {

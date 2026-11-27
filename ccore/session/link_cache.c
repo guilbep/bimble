@@ -63,6 +63,7 @@ int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size
         jw_arr_end(&w);
     }
     jw_key(&w, "bytes"), jw_u64(&w, bytes);
+    jw_key(&w, "complete"), jw_bool(&w, 0); /* SIZE3 (E): the proxies are baked after (cc_link_cache_mark_complete) */
     jw_key(&w, "ends"), jw_str(&w, e);
     jw_key(&w, "format"), jw_str(&w, CC_LINK_CACHE_FORMAT);
     jw_key(&w, "mtime_s"), jw_i64(&w, mtime_s);
@@ -105,6 +106,30 @@ int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mti
     }
     arena_free(&a);
     return ok;
+}
+
+int cc_link_cache_complete(const char *src, size_t n) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, src, n, &je), *c = v && v->type == JR_OBJ ? jr_get(v, "complete") : NULL;
+    int ok = c && c->type == JR_BOOL && c->b;
+    arena_free(&a);
+    return ok;
+}
+
+int cc_link_cache_mark_complete(const char *src, size_t n, char *out, size_t cap) {
+    static const char F[] = "\"complete\":false";
+    const size_t fl = sizeof F - 1;
+    size_t at = n;
+    for (size_t i = 0; i + fl <= n; i++)
+        if (!memcmp(src + i, F, fl)) { at = i; break; }
+    if (at == n || n + 1 > cap) return -1;
+    memcpy(out, src, at);
+    memcpy(out + at, "\"complete\":true", 15);
+    memcpy(out + at + 15, src + at + fl, n - at - fl);
+    out[n - 1] = 0; /* one byte shorter */
+    return cc_link_cache_complete(out, n - 1) ? 0 : -1;
 }
 
 cc_link_job *cc_link_job_new(const cc_platform *pf, const char *path) {
@@ -354,7 +379,108 @@ static void bake_hlod(cc_link_job *j, Buf *vb) {
     j->hlod_ms = pf->now_ms(pf->ctx) - t0;
 }
 
+/* ---- SIZE3 (E): the proxies baked after the link is ready ----
+ * The cache at j->cache (written by the conversion with SRCE "complete": false, read untrusted again here) rebuilt as
+ * its sections but the lazy ones, SRCE marked complete, its proxies baked (HLOD), then its property sets (PRPZ, PROP:
+ * last, read lazily); written in place (tmp + rename: a crash leaves the incomplete cache, completed at the next open);
+ * its report appended; the completed cache read in place for the session. Cancellable between proxy steps. */
+static void sleep_cancellable(cc_link_job *j, double ms) {
+    const cc_platform *pf = j->pf;
+    double t0 = pf->now_ms(pf->ctx);
+    while (pf->now_ms(pf->ctx) - t0 < ms && !cc_atomic_load(&j->pg.cancel))
+        for (volatile unsigned long spin = 0; spin < 200000ul; spin++) {} /* (no sleep in the platform: tests only) */
+}
+
+static void index_run(cc_link_job *j) {
+    const cc_platform *pf = j->pf;
+    if (j->index_delay_ms > 0) sleep_cancellable(j, j->index_delay_ms);
+    if (cc_atomic_load(&j->pg.cancel)) return fail(j, CC_JOB_CANCELLED, NULL);
+    char *p = NULL;
+    size_t n = 0;
+    if (pf->read_file(pf->ctx, j->cache, cc_session_read_limit(j->cache, NULL), &p, &n) != CC_PF_OK)
+        return fail(j, CC_JOB_FAILED, "the cache cannot be read again");
+    Buf vb, tail, lg;
+    buf_init(&vb), buf_init(&tail), buf_init(&lg);
+    int bad = n < 12 || memcmp(p, "BIMBLEVW", 8) != 0, have_src = 0;
+    if (!bad) buf_append(&vb, p, 12);
+    for (size_t at = 12; !bad && at < n;) { /* every section checked against what is there */
+        if (n - at < 12) { bad = 1; break; }
+        uint64_t len = 0;
+        for (int i = 0; i < 8; i++) len |= (uint64_t)(unsigned char)p[at + 4 + i] << (8 * i);
+        if (len > n - at - 12) { bad = 1; break; }
+        const char *kind = p + at;
+        if (!memcmp(kind, "SRCE", 4)) { /* its JSON text (a string: varint length, bytes) marked complete */
+            char *src = NULL;
+            size_t sn = 0;
+            {
+                size_t q = 0, shift = 0;
+                uint64_t ln = 0;
+                const unsigned char *s = (const unsigned char *)p + at + 12;
+                while (q < len && q < 10) { ln |= (uint64_t)(s[q] & 0x7f) << shift; shift += 7; if (!(s[q++] & 0x80)) break; }
+                if (ln == len - q) src = (char *)s + q, sn = (size_t)ln;
+            }
+            char out[1024];
+            if (!src || sn + 1 > sizeof out || cc_link_cache_mark_complete(src, sn, out, sizeof out)) bad = 1;
+            else if (cc_viewfile_append_source(&vb, out, strlen(out))) bad = 1;
+            have_src = 1;
+        } else if (!memcmp(kind, "HLOD", 4)) { /* (none expected: dropped, baked again) */
+        } else if (!memcmp(kind, "PROP", 4) || !memcmp(kind, "PRPZ", 4)) buf_append(&tail, p + at, 12 + (size_t)len);
+        else buf_append(&vb, p + at, 12 + (size_t)len);
+        at += 12 + (size_t)len;
+    }
+    free(p);
+    if (bad || !have_src || vb.oom || tail.oom) {
+        buf_free(&vb), buf_free(&tail);
+        return fail(j, CC_JOB_FAILED, "the cache is damaged: converted again at the next open");
+    }
+    j->geom_bytes = section_bytes(&vb, "ELEM");
+    bake_hlod(j, &vb);
+    if (cc_atomic_load(&j->pg.cancel)) {
+        buf_free(&vb), buf_free(&tail);
+        return fail(j, CC_JOB_CANCELLED, NULL);
+    }
+    buf_append(&vb, tail.p, tail.len);
+    buf_free(&tail);
+    if (vb.oom || pf->write_file(pf->ctx, j->cache, vb.p, vb.len)) {
+        buf_free(&vb);
+        return fail(j, CC_JOB_FAILED, "the completed cache cannot be written");
+    }
+    { /* its report: the proxies' lines appended */
+        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ"};
+        for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) j->sections[q] = section_bytes(&vb, KINDS[q]);
+        j->cache_bytes = vb.len;
+        char *old = NULL;
+        size_t on = 0;
+        if (j->log[0] && pf->read_file(pf->ctx, j->log, (size_t)4 << 20, &old, &on) == CC_PF_OK) {
+            buf_append(&lg, old, on);
+            buf_puts(&lg, "\n\nindexed after the link was ready (SIZE3):");
+            report_tail(&lg, j, vb.len, j->cache, "");
+            if (!lg.oom) pf->write_file(pf->ctx, j->log, lg.p, lg.len);
+        }
+        free(old);
+        buf_free(&lg);
+    }
+    cc_pf_stat cs;
+    if (pf->stat_path(pf->ctx, j->cache, 1, &cs) == CC_PF_OK) j->cache_mtime_s = cs.mtime_s;
+    cc_error me;
+    cc_viewfile *mv = map_view(pf, j->cache, &j->map, &me);
+    if (!mv) {
+        mv = malloc(sizeof *mv);
+        if (!mv || cc_viewfile_read((const uint8_t *)vb.p, vb.len, mv, &j->err)) {
+            if (mv) cc_viewfile_free(mv), free(mv);
+            buf_free(&vb);
+            return fail(j, CC_JOB_FAILED, mv ? NULL : "out of memory");
+        }
+    }
+    buf_free(&vb);
+    j->vf = mv;
+}
+
 static void run(cc_link_job *j) {
+    if (j->index_only) { /* SIZE3 (E) */
+        index_run(j);
+        return;
+    }
     const cc_platform *pf = j->pf;
     cc_pf_stat st;
     int have_stat = pf->stat_path && pf->stat_path(pf->ctx, j->path, 1, &st) == CC_PF_OK && st.kind == CC_PF_FILE;
@@ -391,6 +517,7 @@ static void run(cc_link_job *j) {
         if (!vf) vf = read_view(pf, cp, cs.size, &e);
         if (vf && vf->has_source && cc_link_cache_matches(vf->source.p, vf->source.n, j->bytes, j->mtime_s, ends, ends_known)) {
             j->vf = vf, j->from_cache = 1, j->map = map;
+            j->incomplete = !cc_link_cache_complete(vf->source.p, vf->source.n); /* SIZE3 (E): its proxies to bake */
             snprintf(j->cache, sizeof j->cache, "%s", cp);
             if (c) snprintf(j->log, sizeof j->log, "%s", alt_log);
             else snprintf(j->log, sizeof j->log, "%s.log.txt", j->path);
@@ -461,7 +588,8 @@ static void run(cc_link_job *j) {
     cc_viewfile_meta_free(&mt);
     report(&lg, j, s, read_ms);
     cc_ifc_scene_free(s), free(s); /* LNK3D: the IFC's scene goes before the proxies are built (its peak) */
-    if (!wr && !vb.oom) bake_hlod(j, &vb); /* LNK3D: then HLOD, then PROP (both read lazily) */
+    /* SIZE3 (E): the proxies are baked after the link is ready (index_run), not here: the link draws sooner */
+    snprintf(j->hlod_why, sizeof j->hlod_why, "none yet (baked after the link is ready: see below)");
     if (!wr && psb.len) { /* M1LINKS: last, read lazily; SIZE2: packed (each set once, in gzip blocks) */
         Buf pk;
         buf_init(&pk);
@@ -503,6 +631,7 @@ static void run(cc_link_job *j) {
         if (!lg.oom && pf->write_file(pf->ctx, logp, lg.p, lg.len) == 0) snprintf(j->log, sizeof j->log, "%s", logp);
     }
     buf_free(&lg); /* the session keeps the light scene only (the IFC's went above) */
+    j->incomplete = j->cache[0] != 0; /* SIZE3 (E): written without proxies: the session queues its indexing */
     if (j->cache[0]) { /* SIZE3: the cache just written, read in place (its meshes stay in the file) */
         cc_error me;
         cc_viewfile *mv = map_view(pf, j->cache, &j->map, &me);

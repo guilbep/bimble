@@ -407,6 +407,7 @@ export type PartKey =
   | "links.show"
   | "links.state.converting"
   | "links.state.failed"
+  | "links.state.indexing"
   | "links.state.missing"
   | "links.state.queued"
   | "links.state.refused"

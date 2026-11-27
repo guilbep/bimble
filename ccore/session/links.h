@@ -110,6 +110,11 @@ struct cc_link {
     double mused_ms;
     const struct cc_platform *map_pf; /* who mapped it */
     cc_mesh *zshapes; /* SIZE3: the zeroed shapes its scene shows while not decoded (in the scene's arena) */
+    /* SIZE3 (E): ready, its cache without proxies yet: 1 waiting for its indexing job, 2 the job baking them (the
+     * Links panel's "indexing"; cancel stops it: the cache stays without, completed at the next open); then 0 and
+     * proxies_gen moves (query link_draw "proxies": the page asks its proxies again) */
+    int indexing;
+    unsigned proxies_gen;
 };
 #define CC_LINK_MESH_BUDGET ((uint64_t)256 << 20) /* SIZE3: decoded link meshes kept at rest, all links */
 #define CC_LINK_KEEP_MS 10000.0                    /* SIZE3: a link used this recently is kept past the budget */

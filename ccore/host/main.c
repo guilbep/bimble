@@ -309,6 +309,8 @@ static int serve(unsigned port, Serve *sv) {
         if (mb && *mb) ses->link_mesh_budget = strtoull(mb, NULL, 10) << 20;
         const char *km = cc_host_getenv("BIMBLE_LINK_KEEP_MS"); /* SIZE3: tests */
         if (km && *km) ses->link_keep_ms = strtod(km, NULL);
+        const char *id = cc_host_getenv("BIMBLE_LINK_INDEX_DELAY_MS"); /* SIZE3 (E): tests */
+        if (id && *id) ses->link_index_delay_ms = strtod(id, NULL);
     }
     const char *model = sv->model;
     if (model && *model) {

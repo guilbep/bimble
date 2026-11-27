@@ -139,7 +139,8 @@ async function main() {
   console.log(`made ${files.length} IFC in ${Date.now() - t0} ms, ${(statSync(files[0]).size / 1e6).toFixed(1)} MB each`);
   check("a new project", (await hcall("action", "new")).status === 200);
   check("link the folder", (await hcall("action", "link_folder", { path: dir })).status === 200);
-  await waitFor("the links ready", 120000, async () => { const r = await rows(); return r.length === N && r.every((m) => m.state === "ready") ? r : null; });
+  // (SIZE3 E: ready, then indexed: the proxies are baked after; the checks below open the page with them)
+  await waitFor("the links ready and indexed", 120000, async () => { const r = await rows(); return r.length === N && r.every((m) => m.state === "ready" && !m.indexing) ? r : null; });
   const logs = files.map((f) => readFileSync(`${f}.log.txt`, "utf8"));
   const prx = logs.map((t) => /proxies \(HLOD, baked for the 3D view\): (\d+) cells, (\d+) triangles, (\d+) bytes, built in (\d+) ms/.exec(t));
   const detail = logs.map((t) => Number(/\ntriangles: (\d+)/.exec(t)?.[1] ?? 0));
@@ -447,7 +448,7 @@ async function main() {
     await evalJs(keep === null ? "delete window.__bbGl.openKeepBytes" : `window.__bbGl.openKeepBytes = ${keep}`);
     await hcall("action", "manage_links", { op: "reload_all" });
     await waitFor("the mesh asked again", 30000, async () => (await gl()).meshFetches > f0);
-    await waitFor("every link ready again", 60000, async () => JSON.parse((await hcall("query", "links_panel")).text).models.every((m) => m.state === "ready"));
+    await waitFor("every link ready again", 60000, async () => JSON.parse((await hcall("query", "links_panel")).text).models.every((m) => m.state === "ready" && !m.indexing));
     await sleep(1500); // (the last conversion's change reaches the page, which asks the mesh once more)
     await waitFor("the links in view detailed", 60000, async () => { const g = await gl(); return typeof g.linksDetailedAt === "number" && g.linksDetailedAt > g.meshAt; });
     await calm();

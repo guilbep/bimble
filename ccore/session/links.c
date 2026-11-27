@@ -40,6 +40,7 @@ static void link_drop_data(cc_link *k) {
     if (k->placed) cc_scene_free(&k->pscene), k->placed = 0; /* LINKF */
     free(k->psets), k->psets = NULL, k->npsets = 0; /* M1LINKS */
     k->kind = 0;
+    k->indexing = 0; /* SIZE3 (E): a job still running for it is not taken (link_take_index) */
 }
 
 void cc_link_free(cc_link *k) {
@@ -283,6 +284,7 @@ void cc_links_draw_json(cc_session *s, JsonW *w) {
         jw_key(w, "origin"), jw_arr_begin(w);
         for (int q = 0; q < 3; q++) jw_f64(w, o[q] + 0.0); /* + 0.0: never -0.0 */
         jw_arr_end(w);
+        jw_key(w, "proxies"), jw_u64(w, k->proxies_gen); /* SIZE3 (E): moves when its proxies were baked after it was ready */
         jw_key(w, "sin"), jw_f64(w, sn + 0.0);
         jw_key(w, "visible"), jw_bool(w, k->visible && k->kind);
         jw_obj_end(w);
@@ -885,8 +887,52 @@ static void take(cc_session *s, cc_link *k, cc_link_job *j) {
     link_geo(k); /* LINKF: where the file says it is */
     k->cache = dup_z(j->cache), k->log = dup_z(j->log), k->msg = dup_z(j->note);
     k->cache_mtime_s = j->cache_mtime_s, k->from_cache = j->from_cache;
+    k->indexing = j->incomplete && j->cache[0] && k->kind == CC_LINK_VIEW ? 1 : 0; /* SIZE3 (E): its proxies next */
     cc_log(s->pf, "bimble-ccore: linked %s: %zu elements (%s, %.0f ms)", k->path, cc_link_rows(k)->nelements,
            j->from_cache ? "its cache" : j->cache[0] ? "read, cache written" : "read", j->ms);
+}
+
+/* SIZE3 (E): link k's indexing job done: its completed cache in place of the one it read (the same rows: the
+ * placement, colour and selection stay); its proxies' generation moves. A job of a link unloaded, removed or read
+ * again meanwhile is not taken. */
+static void take_index(cc_session *s, cc_link *k, cc_link_job *j) {
+    if (k->state != CC_LS_READY || k->indexing != 2 || k->kind != CC_LINK_VIEW) return;
+    k->indexing = 0;
+    if (j->rc != CC_JOB_OK) {
+        if (j->rc != CC_JOB_CANCELLED) free(k->msg), k->msg = dup_z(j->err.msg[0] ? j->err.msg : "its proxies could not be baked");
+        cc_log(s->pf, "bimble-ccore: link %s: indexing %s", k->path, j->rc == CC_JOB_CANCELLED ? "cancelled" : j->err.msg);
+        return;
+    }
+    cc_scene sc;
+    cc_error err;
+    if (cc_view_scene(&sc, j->vf, &err)) return; /* (out of memory: the link keeps its cache as it was) */
+    link_evict(k);
+    if (k->placed) cc_scene_free(&k->pscene), k->placed = 0;
+    cc_scene_free(&k->scene), cc_viewfile_free(k->vf), free(k->vf);
+    if (k->map) k->map_pf->unmap_file(k->map_pf->ctx, k->map);
+    k->scene = sc, k->vf = j->vf, j->vf = NULL;
+    k->map = j->map, k->map_pf = j->pf, j->map = NULL;
+    k->zshapes = NULL;
+    if (k->vf->lazy && link_rows_view(k)) k->state = CC_LS_FAILED, free(k->msg), k->msg = dup_z("out of memory");
+    k->cache_mtime_s = j->cache_mtime_s;
+    k->proxies_gen++;
+    cc_log(s->pf, "bimble-ccore: link %s: indexed (proxies baked in %.0f ms after it was ready)", k->path, j->ms);
+}
+
+/* SIZE3 (E): link i's proxies baked by a job of their own, after every queued conversion. */
+static void start_index(cc_session *s, int i) {
+    cc_link *k = &s->links[i];
+    cc_link_job *j = cc_link_job_new(s->pf, k->path);
+    if (!j) {
+        k->indexing = 0;
+        return;
+    }
+    j->index_only = 1, j->index_delay_ms = s->link_index_delay_ms;
+    snprintf(j->cache, sizeof j->cache, "%s", k->cache ? k->cache : "");
+    snprintf(j->log, sizeof j->log, "%s", k->log ? k->log : "");
+    k->indexing = 2;
+    s->link_job = j, s->link_job_uid = k->uid;
+    if (!s->pf->spawn || s->pf->spawn(s->pf->ctx, cc_link_job_run, j)) cc_link_job_run(j);
 }
 
 /* Starts link i's conversion: on the carrier's thread, else here. */
@@ -906,7 +952,7 @@ static void start(cc_session *s, int i) {
 int cc_links_busy(const cc_session *s) {
     if (s->link_job) return 1;
     for (size_t i = 0; i < s->nlinks; i++)
-        if (s->links[i].state == CC_LS_QUEUED) return 1;
+        if (s->links[i].state == CC_LS_QUEUED || s->links[i].indexing == 1) return 1; /* SIZE3 (E): an indexing to start */
     return 0;
 }
 
@@ -947,7 +993,7 @@ static void links_trim(cc_session *s) {
 }
 
 int cc_links_tick(cc_session *s) {
-    int ch = 0;
+    int ch = 0, idx = 0;
     links_trim(s);
     cc_link_job *j = s->link_job;
     if (j) {
@@ -958,10 +1004,11 @@ int cc_links_tick(cc_session *s) {
             if (at >= 0) s->links[at].progress = (unsigned)cc_atomic_load(&j->pg.done);
             return 0;
         } else {
-            if (at >= 0) take(s, &s->links[at], j);
+            if (at >= 0) j->index_only ? take_index(s, &s->links[at], j) : take(s, &s->links[at], j); /* SIZE3 (E) */
+            if (j->index_only) idx = 1; /* SIZE3 (E): the same geometry: the panel and link_draw only */
+            else ch = 1;
             cc_link_job_free(j);
             s->link_job = NULL, s->link_job_uid = 0;
-            ch = 1;
         }
     }
     if (!s->link_job && s->pf->mem_available && s->pf->stat_path) { /* SIZE2: a link refused for memory, queued again once
@@ -988,11 +1035,17 @@ int cc_links_tick(cc_session *s) {
         for (size_t i = 0; i < s->nlinks; i++)
             if (s->links[i].state == CC_LS_QUEUED && (best < 0 || s->links[i].bytes < s->links[best].bytes)) best = (int)i;
         if (best >= 0) start(s, best); /* "converting": no change published (above) */
+        else { /* SIZE3 (E): no conversion waits: a ready link's proxies, the smallest first */
+            for (size_t i = 0; i < s->nlinks; i++)
+                if (s->links[i].state == CC_LS_READY && s->links[i].indexing == 1 && s->links[i].cache && (best < 0 || s->links[i].bytes < s->links[best].bytes)) best = (int)i;
+            if (best >= 0) start_index(s, best);
+        }
         if (s->link_job && cc_link_job_done(s->link_job)) /* ran here (no thread): take it now */
             return cc_links_tick(s), 1;
     }
     if (ch) s->links_gen++, s->links_mesh_gen++;
-    return ch;
+    else if (idx) s->links_gen++;
+    return ch || idx;
 }
 
 /* Queues `path` as a link: at *at (in its place) when at is given, else in the place of a link of
@@ -1110,6 +1163,8 @@ void cc_links_cancel(cc_session *s, int i) {
         s->links_gen++, s->links_mesh_gen++;
     } else if (k->state == CC_LS_CONVERTING && s->link_job && s->link_job_uid == k->uid)
         cc_atomic_store(&s->link_job->pg.cancel, 1); /* the job ends "cancelled" (a batch later) */
+    else if (k->indexing == 1) k->indexing = 0, s->links_gen++; /* SIZE3 (E): not baked now (at the next open) */
+    else if (k->indexing == 2 && s->link_job && s->link_job_uid == k->uid) cc_atomic_store(&s->link_job->pg.cancel, 1);
 }
 
 void cc_links_unload(cc_session *s, int i) {

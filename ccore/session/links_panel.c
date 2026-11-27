@@ -37,6 +37,7 @@ int cc_links_panel_json(struct cc_session *s, Buf *out) {
         jw_key(&w, "colour"), k->colour >= 0 ? jw_u64(&w, (uint64_t)k->colour) : jw_null(&w);
         jw_key(&w, "elements"), jw_u64(&w, sc->nelements);
         jw_key(&w, "from_cache"), jw_bool(&w, k->from_cache);
+        jw_key(&w, "indexing"), jw_bool(&w, k->indexing != 0); /* SIZE3 (E): ready, its proxies being baked */
         jw_key(&w, "kind"), jw_str(&w, ext);
         jw_key(&w, "log"), k->log ? jw_str(&w, k->log) : jw_null(&w);
         jw_key(&w, "message"), k->msg ? jw_str(&w, k->msg) : jw_null(&w);

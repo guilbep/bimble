@@ -712,6 +712,19 @@ static void link_cache_source(void) {
     check_true("other ends: no", !cc_link_cache_matches(src, strlen(src), 68059, 1795696594, hexs, 1));
     check_true("ends unknown (the IFC unreadable): size and time", cc_link_cache_matches(src, strlen(src), 68059, 1795696594, "", 0));
     check_true("not JSON: no", !cc_link_cache_matches("{bytes", 6, 68059, 1795696594, "", 0));
+    /* SIZE3 (E): the "complete" marker: written false, marked true; anything else (untrusted) is not complete */
+    {
+        char done[512];
+        check_true("SIZE3: a new cache's source says complete: false", strstr(src, "\"complete\":false") && !cc_link_cache_complete(src, strlen(src)));
+        check_true("SIZE3: marked complete, it says so and still matches", cc_link_cache_mark_complete(src, strlen(src), done, sizeof done) == 0 &&
+                   cc_link_cache_complete(done, strlen(done)) && cc_link_cache_matches(done, strlen(done), 68059, 1795696594, "", 0));
+        check_true("SIZE3: a source without the marker cannot be marked", cc_link_cache_mark_complete("{\"bytes\":1}", 11, done, sizeof done) == -1);
+        check_true("SIZE3: no room: refused", cc_link_cache_mark_complete(src, strlen(src), done, 8) == -1);
+        static const char *const hostile[] = {"{\"complete\":1}", "{\"complete\":\"true\"}", "{\"complete\":null}", "[true]", "not json", "{\"complete\":tru", ""};
+        int none = 1;
+        for (size_t i = 0; i < sizeof hostile / sizeof *hostile; i++) none &= !cc_link_cache_complete(hostile[i], strlen(hostile[i]));
+        check_true("SIZE3: hostile markers are not complete", none);
+    }
     static const char other[] = "{\"bytes\":1,\"ends\":\"\",\"format\":\"x\",\"mtime_s\":1}";
     check_true("another format: no", !cc_link_cache_matches(other, sizeof other - 1, 1, 1, "", 0));
     /* hostile SRCE sections */

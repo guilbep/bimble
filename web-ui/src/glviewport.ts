@@ -756,6 +756,8 @@ interface GlStats {
   linkRefetches?: number;
   linkRefetchMs?: number;
   gpuPickReads?: number;
+  /** SIZE3 (E): links whose proxies came after they were drawn (baked once they were ready). */
+  linkProxiesLate?: number;
   /** SIZE3 (B): the open's decoded link arrays at most at once and those kept to upload (bytes); when every link a
    *  frame wanted in detail was on the GPU, none asked (performance.now(), null until then); the decodes made in
    *  the worker and on the page's thread, the longest slice on the page's thread (ms). */
@@ -1144,12 +1146,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   const dropLinkPrx = (x: LinkPrx) => { gl.deleteVertexArray(x.vao); for (const b of x.bufs) gl.deleteBuffer(b); };
   /** Asks every link's proxies not held yet (rows: query link_draw, in link order). */
+  /** SIZE3 (E): per link the proxies' generation its proxies were asked at (query link_draw "proxies"). */
+  const prxGen = new Map<string, number>();
   const fetchLinkProxies = async (rows: LinkDraw[]): Promise<number> => {
     const ask = source.linkProxies;
     if (!ask || !proxiesOn()) return 0;
     let got = 0;
     await Promise.all(rows.map(async (r, k) => {
       if (linkPrx.has(r.name)) return;
+      prxGen.set(r.name, r.proxies ?? 0);
       try {
         const a = await ask(k);
         if (a.status !== 200) return;
@@ -2017,9 +2022,37 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!m) return;
     bounds = sceneBounds(m) ?? bounds;
   };
+  /** SIZE3 (E): link k's proxies baked after it was ready: asked, then its batches made again by its proxies' leaves
+   *  (its detail released: asked again when a frame wants it, grouped). */
+  const refreshLinkProxies = async (k: number, r: LinkDraw) => {
+    const ask = source.linkProxies, m = mesh;
+    if (!ask || !m || !proxiesOn()) return;
+    try {
+      const a = await ask(k);
+      if (a.status !== 200 || mesh !== m) return;
+      const p = parseBprx(a.bytes);
+      const l = m.links?.[k];
+      if (!p.cells.length || !l || p.nElements !== l.elements) return;
+      const old = linkPrx.get(r.name);
+      if (old) dropLinkPrx(old);
+      const x = makeLinkPrx(r.name, p);
+      linkPrx.set(r.name, x);
+      modelPrx[k + 1] = x;
+      const sl = slots[k + 1];
+      if (sl) releaseSlot(sl);
+      ownOrd[k + 1] = undefined;
+      stats.linkProxiesLate = (stats.linkProxiesLate ?? 0) + 1;
+      visKey = "\u0000", dirty = true;
+    } catch (err) { console.warn("gl viewport: link proxies:", err); }
+  };
   const applyLinkDraw = (rows: LinkDraw[]) => {
     const m = mesh, L = m?.links;
     if (!m || !L || rows.length !== L.length || rows.some((r, k) => r.name !== L[k]!.name)) return; // the mesh follows (links_mesh)
+    rows.forEach((r, k) => { // SIZE3 (E): proxies baked since
+      if ((r.proxies ?? 0) === (prxGen.get(r.name) ?? 0)) return;
+      prxGen.set(r.name, r.proxies ?? 0);
+      void refreshLinkProxies(k, r);
+    });
     let vis = false, col = false;
     const moved: number[] = [];
     rows.forEach((r, k) => {

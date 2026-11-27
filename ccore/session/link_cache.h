@@ -28,7 +28,7 @@
 #include "hlod.h"
 
 #define CC_LINK_CACHE_MIN ((uint64_t)1 << 20) /* bytes; below, no cache (ADR 0079) */
-#define CC_LINK_CACHE_FORMAT "bimble-link-cache 5" /* 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD; 5 (SIZE2): HLOD gzipped within a budget, PRPZ */
+#define CC_LINK_CACHE_FORMAT "bimble-link-cache 6" /* 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD; 5 (SIZE2): HLOD gzipped within a budget, PRPZ; 6 (SIZE3): SRCE says "complete" (the proxies baked after the link was ready) */
 /* SIZE2: the proxies' byte budget per link (cc_link_hlod_cap): 15 % of its geometry, within these. */
 #define CC_LINK_HLOD_MIN ((uint64_t)256 << 10)
 #define CC_LINK_HLOD_MAX ((uint64_t)32 << 20)
@@ -72,6 +72,11 @@ typedef struct cc_link_job {
      * cc_viewfile_read_mapped): the link takes the mapping with the view file and unmaps it after
      * freeing it. NULL: `vf` owns its bytes (no mapping: the wasm module, a gzipped cache, a failure). */
     void *map;
+    /* SIZE3 (E): the cache's proxies are baked after the link is ready. `incomplete` (result): the cache served or
+     * written has none yet (SRCE "complete": false): the session queues an indexing job. `index_only` (input): this
+     * job is that one: `cache` names the cache to complete; its result is the completed cache read in place (vf, map). */
+    int incomplete, index_only;
+    double index_delay_ms; /* tests: the indexing job waits this long first (BIMBLE_LINK_INDEX_DELAY_MS) */
 } cc_link_job;
 
 /* A new job for `path` (copied). NULL out of memory. */
@@ -98,4 +103,9 @@ int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size
 int cc_link_cache_base_point(const char *src, size_t n, double out[3]);
 /* Whether `src` (a cache's SRCE) matches the IFC: 1 yes; with ends_known 0, size and time only. */
 int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex, int ends_known);
+/* SIZE3 (E): whether a cache's SRCE says it is complete ("complete": true: its proxies baked; false: geometry, names and
+ * property sets only, the proxies still to bake). Anything else (untrusted): 0. */
+int cc_link_cache_complete(const char *src, size_t n);
+/* SIZE3 (E): SRCE text `src` marked complete into `out` (`"complete":false` turned true). 0 ok, -1 not such a text. */
+int cc_link_cache_mark_complete(const char *src, size_t n, char *out, size_t cap);
 #endif
