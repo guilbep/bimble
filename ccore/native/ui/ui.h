@@ -248,7 +248,7 @@ struct App {
     double tiles_checked;
     int truth;                   /* --truth: each 3D frame drawn with and without occlusion, the id buffers compared */
     char settings_line[600];     /* the optimisations in force (the report's line, for the summary) */
-    int truth_missing, truth_ties;           /* the truth test: element ids missing from this frame with occlusion (-1: not tested) */
+    int truth_missing, truth_ties, truth_small; /* truth_small: of the missing, those with 8 pixels or fewer (edge-on slivers) */           /* the truth test: element ids missing from this frame with occlusion (-1: not tested) */
 };
 
 /* core.c */

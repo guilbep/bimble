@@ -307,16 +307,17 @@ static int truth_compare(App *a) {
     const uint32_t *x = SDL_MapGPUTransferBuffer(a->dev, truth_tb[0], false), *y = SDL_MapGPUTransferBuffer(a->dev, truth_tb[1], false);
     const float *dx = truth_db[0] ? SDL_MapGPUTransferBuffer(a->dev, truth_db[0], false) : NULL, *dy = truth_db[1] ? SDL_MapGPUTransferBuffer(a->dev, truth_db[1], false) : NULL;
     uint8_t *seen = calloc(ne, 1);
-    int missing = -1, ties = 0;
-    if (x && y && seen) {
-        for (uint32_t i = 0; i < n; i++) if (x[i] > NV_ELEM0 && x[i] < ne) seen[x[i]] |= 1;
+    uint16_t *px = calloc(ne, 2); /* the reference's pixels an element (to 65535) */
+    int missing = -1, ties = 0, small = 0;
+    if (x && y && seen && px) {
+        for (uint32_t i = 0; i < n; i++) if (x[i] > NV_ELEM0 && x[i] < ne) seen[x[i]] |= 1, px[x[i]] += px[x[i]] < 65535;
         for (uint32_t i = 0; i < n; i++) if (y[i] > NV_ELEM0 && y[i] < ne) seen[y[i]] |= 2;
         for (uint32_t i = 0; dx && dy && i < n; i++)
             if (x[i] > NV_ELEM0 && x[i] < ne && seen[x[i]] == 1 && dy[i] < dx[i] * (1 - 1e-5f)) seen[x[i]] |= 4;
         missing = 0;
         for (uint32_t e = 0; e < ne; e++) {
             if ((seen[e] & 3) != 1) continue;
-            if (seen[e] & 4 || !(dx && dy)) missing++;
+            if (seen[e] & 4 || !(dx && dy)) missing++, small += px[e] <= 8;
             else ties++;
         }
         if (missing) {
@@ -336,8 +337,8 @@ static int truth_compare(App *a) {
     if (y) SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[1]);
     if (dx) SDL_UnmapGPUTransferBuffer(a->dev, truth_db[0]);
     if (dy) SDL_UnmapGPUTransferBuffer(a->dev, truth_db[1]);
-    free(seen);
-    a->truth_ties = ties;
+    free(seen), free(px);
+    a->truth_ties = ties, a->truth_small = small;
     return missing;
 }
 

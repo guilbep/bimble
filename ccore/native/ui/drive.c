@@ -96,7 +96,7 @@ int drive_setup(App *a) {
     outpath(a, pth, sizeof pth, "memory.csv");
     a->mlog = fopen(pth, "w");
     if (!a->flog || !a->ilog || !a->mlog) { fprintf(stderr, "bimble: cannot write in %s\n", a->out_dir ? a->out_dir : "."); return -1; }
-    fprintf(a->flog, "t_ms,kind,frame_ms,ui_ms,triangles,draws,tiles,logic_ms,acquire_ms,uibuild_ms,rec3d_ms,recui_ms,gpu_ms,missing,ties\n");
+    fprintf(a->flog, "t_ms,kind,frame_ms,ui_ms,triangles,draws,tiles,logic_ms,acquire_ms,uibuild_ms,rec3d_ms,recui_ms,gpu_ms,missing,ties,missing_small\n");
     fprintf(a->ilog, "t_ms,what,app_ms,frame_ms\n");
     fprintf(a->mlog, "t_ms,rss_mb,gpu_mb\n");
     if (a->preset) {
@@ -489,9 +489,9 @@ void drive_frame(App *a, double now, int drew3d) {
     if (a->rec_until && now >= a->rec_until) a->rec_until = 0, a->rec_done = 1;
     if (!a->flog) return;
     nv_render_stats st = nv_render_get_stats(a->r);
-    fprintf(a->flog, "%.1f,%s,%.3f,%.3f,%llu,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d\n", now - a->t_start, drew3d ? (a->moving ? "moving" : "still") : "ui",
+    fprintf(a->flog, "%.1f,%s,%.3f,%.3f,%llu,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d\n", now - a->t_start, drew3d ? (a->moving ? "moving" : "still") : "ui",
             drew3d ? a->frame_ms : a->gpu_ms, a->ui_ms, (unsigned long long)st.tris, st.draws, st.tiles, a->st_logic, a->st_acquire, a->st_ui, a->st_rec3d,
-            a->st_recui, a->st_gpu, a->truth_missing, a->truth_missing >= 0 ? a->truth_ties : -1);
+            a->st_recui, a->st_gpu, a->truth_missing, a->truth_missing >= 0 ? a->truth_ties : -1, a->truth_missing >= 0 ? a->truth_small : -1);
     if (now >= a->next_mem) {
         uint64_t peak = 0, rss = app_rss(&peak);
         fprintf(a->mlog, "%.0f,%.1f,%.1f\n", now - a->t_start, rss / 1e6, st.gpu_bytes / 1e6);
@@ -543,7 +543,7 @@ void drive_finish(App *a) {
     enum { NSTAGE = 6 };
     double *stg[NSTAGE], *tri_m = malloc(sizeof(double) * 200000), *tri_s = malloc(sizeof(double) * 200000), *til = malloc(sizeof(double) * 200000);
     for (int k = 0; k < NSTAGE; k++) stg[k] = malloc(sizeof(double) * 200000);
-    long miss_total = 0, ties_total = 0;
+    long miss_total = 0, ties_total = 0, small_total = 0;
     int miss_frames = 0, truth_frames = 0, nst = 0;
     outpath(a, p, sizeof p, "frames.csv");
     FILE *f = fopen(p, "r");
@@ -552,10 +552,11 @@ void drive_finish(App *a) {
         double t, fm;
         char kind[16];
         double um, tr, dr, ti, sv[NSTAGE];
-        int miss = -1, tie = -1;
-        if (sscanf(line, "%lf,%15[^,],%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%d,%d", &t, kind, &fm, &um, &tr, &dr, &ti, &sv[0], &sv[1], &sv[2], &sv[3], &sv[4], &sv[5],
-                   &miss, &tie) < 3) continue;
+        int miss = -1, tie = -1, smallm = -1;
+        if (sscanf(line, "%lf,%15[^,],%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%d,%d,%d", &t, kind, &fm, &um, &tr, &dr, &ti, &sv[0], &sv[1], &sv[2], &sv[3], &sv[4], &sv[5],
+                   &miss, &tie, &smallm) < 3) continue;
         if (tie > 0) ties_total += tie;
+        if (smallm > 0) small_total += smallm;
         if (!strcmp(kind, "moving") && nm < 200000) {
             for (int k = 0; k < NSTAGE && stg[k]; k++) stg[k][nm] = sv[k];
             if (tri_m) tri_m[nm] = tr;
@@ -614,7 +615,7 @@ void drive_finish(App *a) {
             fprintf(f, "| triangles moving / still (median) | %.0f / %.0f |\n| tiles drawn moving (median) | %.0f |\n| GPU peak | %.0f MB |\n", m5, m6, m7, gmax);
             fprintf(f, "| moving frame by stage, median ms: logic / acquire / UI build / 3D record / UI record / GPU | %.2f / %.2f / %.2f / %.2f / %.2f / %.2f |\n", sm[0], sm[1], sm[2], sm[3],
                     sm[4], sm[5]);
-            fprintf(f, "| truth test: frames, with ids missing, ids missing | %d / %d / %ld |\n| truth test: coplanar ties (another element at the same depth won the pixel) | %ld |\n", truth_frames, miss_frames, miss_total, ties_total);
+            fprintf(f, "| truth test: frames, with ids missing, ids missing | %d / %d / %ld |\n| truth test: coplanar ties (another element at the same depth won the pixel) | %ld |\n| truth test: of the missing, 8 pixels or fewer in the reference (edge-on) | %ld |\n", truth_frames, miss_frames, miss_total, ties_total, small_total);
             fprintf(f, "| settings | %s |\n", a->settings_line);
             if (truth_frames && miss_total) expect(a, 0, "the truth test: no element missing with occlusion");
         }
