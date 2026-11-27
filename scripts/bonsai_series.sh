@@ -7,12 +7,12 @@
 # confirmation on the next file).
 # Usage: bonsai_series.sh <first nn> <last nn>    (files are $W/files/fNN.ifc, anonymous copies)
 set -u
-W=/home/guilbep/.cache/bimble-bonsai/work
-S=/home/guilbep/Work/github/guilbep/bimble-ccore/scripts
-PY=/home/guilbep/.cache/bimble-ifc-corpus/venv/bin/python
-FR=/home/guilbep/.cache/bimble-bonsai/bin/fedora-run.sh
-BIM=/home/guilbep/bimble-test/bimble-ccore
-LOCK=/home/guilbep/.cache/bimble-measure.lock
+W=$HOME/.cache/bimble-bonsai/work
+S=$(cd "$(dirname "$0")" && pwd)
+PY=$HOME/.cache/bimble-ifc-corpus/venv/bin/python
+FR=$HOME/.cache/bimble-bonsai/bin/fedora-run.sh
+BIM=$HOME/bimble-test/bimble-ccore
+LOCK=$HOME/.cache/bimble-measure.lock
 TOOLS="ios bimble bload blink"
 mkdir -p "$W/res" "$W/logs" "$W/bimble-cache"
 declare -A fails stopped
