@@ -207,7 +207,7 @@ export function ccoreProxies(budget: number): { status: number; bytes: ArrayBuff
 
 /** TILE1 (ADR 0078 amendment 6, ccore/src/tiles.h): the tile pyramid (host_tiles, session/mesh.h): `link` >= 0 that
  *  link's (cc_link_tiles), -1 the open scene's built in steps of `budget` triangles (cc_mesh_tiles: 202 "done total" until
- *  built); `req` "toc" (the table of contents) or "a,b,c" (a "TILS" answer). Decode with gl/tiles.ts. */
+ *  built); `req` "toc" (the table of contents), "occ" (the occluders) or "a,b,c" (a "TILS" answer). Decode with gl/tiles.ts. */
 export function ccoreTiles(link: number, req: string, budget = 200000): { status: number; bytes: ArrayBuffer; rev: number } {
   if (!module) throw new Error("ccore: not loaded");
   const X = module.X;

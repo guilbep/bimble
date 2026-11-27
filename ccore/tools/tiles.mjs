@@ -72,7 +72,7 @@ async function pyramids(H, nlinks, open) {
       if (toc.flags[i] & T.TILE_LEAF) leaves++; else if (toc.flags[i] & T.TILE_PROXY) proxies++, (proxyTris += toc.tris[i]);
       occ += toc.nocc_[i];
     }
-    out.push({ who, name, toc, lv, lvTiles, lvErr, leaves, proxies, occ, proxyTris, sectionBytes: ((toc.tocBytes + 7) & ~7) + toc.blobBytes, tocBytes: toc.tocBytes });
+    out.push({ who, name, toc, lv, lvTiles, lvErr, leaves, proxies, occ, proxyTris, sectionBytes: toc.blobAt + toc.blobBytes, tocBytes: toc.tocBytes, occBytes: 36 * toc.nocc });
   };
   if (open) await one("", "(open)");
   for (let k = 0; k < nlinks; k++) await one(`link=${k}&`, `link ${k}`);
@@ -291,7 +291,7 @@ async function report(label, H, nlinks, open, conv, buildMs) {
     label, links: nlinks, tiles: pys.reduce((n, p) => n + p.toc.ntiles, 0), leaves: pys.reduce((n, p) => n + p.leaves, 0), proxies: pys.reduce((n, p) => n + p.proxies, 0),
     maxLevels: Math.max(...pys.map((p) => p.toc.levels)), detail: pys.reduce((n, p) => n + p.toc.detail[0], 0), levels, errs,
     roots: pys.reduce((n, p) => n + p.toc.tris[0], 0), sectionBytes: pys.reduce((n, p) => n + p.sectionBytes, 0), tocBytes: pys.reduce((n, p) => n + p.tocBytes, 0),
-    occ: pys.reduce((n, p) => n + p.occ, 0), proxyTris: pys.reduce((n, p) => n + p.proxyTris, 0),
+    occ: pys.reduce((n, p) => n + p.occ, 0), occBytes: pys.reduce((n, p) => n + p.occBytes, 0), proxyTris: pys.reduce((n, p) => n + p.proxyTris, 0),
     leafServed: sum("served"), leafDeflated: sum("deflated"), leafRaw21: sum("raw21"), proxyBytes: sum("proxies"), proxyDeflated: sum("proxiesDeflated"),
     decodeMs: sum("decodeMs"), copyMs: sum("copyMs"), first: firstPicture(pys), frames: fr, conv, buildMs, hostPeak: H.rss(),
   };
@@ -315,10 +315,10 @@ async function report(label, H, nlinks, open, conv, buildMs) {
 
 function md(rs) {
   const L = ["# Tile pyramids (TILE1)", "", `\`node ccore/tools/tiles.mjs\`, ${new Date().toISOString().slice(0, 10)}, native host (${BIN.split("/").slice(-2).join("/")}). Cameras 1920 x 1080, 60 deg; far = the whole set in view, close = a fifth of that distance, inside = a third into the box at eye height.`, ""];
-  L.push("| set | detail tris | tiles (leaves / proxies) | levels | tris per level (root first) | largest proxy error per level, mm | pyramid bytes (tables) | occluders | build |", "|---|---|---|---|---|---|---|---|---|");
+  L.push("| set | detail tris | tiles (leaves / proxies) | levels | tris per level (root first) | largest proxy error per level, mm | pyramid bytes (tables) | occluders (bytes) | build |", "|---|---|---|---|---|---|---|---|---|");
   for (const r of rs) {
     const b = r.conv ? `index ${fmt(r.conv.reduce((n, c) => n + c.indexMs, 0))} ms (tiles ${fmt(r.conv.reduce((n, c) => n + c.tilesMs, 0))} ms), peak ${MB(Math.max(...r.conv.map((c) => c.indexPeak)))}` : `${fmt(r.buildMs)} ms in the host`;
-    L.push(`| ${r.label} | ${fmt(r.detail)} | ${fmt(r.tiles)} (${fmt(r.leaves)} / ${fmt(r.proxies)}) | ${r.maxLevels} | ${r.levels.map(fmt).join(" / ")} | ${r.errs.map(fmt).join(" / ")} | ${MB(r.sectionBytes)} (${MB(r.tocBytes)}) | ${fmt(r.occ)} | ${b} |`);
+    L.push(`| ${r.label} | ${fmt(r.detail)} | ${fmt(r.tiles)} (${fmt(r.leaves)} / ${fmt(r.proxies)}) | ${r.maxLevels} | ${r.levels.map(fmt).join(" / ")} | ${r.errs.map(fmt).join(" / ")} | ${MB(r.sectionBytes)} (${MB(r.tocBytes)}) | ${fmt(r.occ)} (${MB(r.occBytes)}) | ${b} |`);
   }
   L.push("", "| set | view | 1 px: tiles, tris, bytes to fetch | 2 px: tiles, tris, bytes | walk |", "|---|---|---|---|---|");
   for (const r of rs) for (const v of ["far", "close", "inside"]) {

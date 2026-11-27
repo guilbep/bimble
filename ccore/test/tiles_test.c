@@ -317,7 +317,7 @@ static void check_tiles(const char *what, const cc_tiles_src *src, const cc_scen
     max_err_in = 0, max_err_out_ratio = 0;
     uint64_t samples = 0, outside = 0;
     int prox_ok = 1;
-    const uint8_t *blobs = toc.p + ((toc.toc + 7) & ~7u);
+    const uint8_t *blobs = toc.p + toc.blob_at;
     for (uint32_t i = 0; i < toc.ntiles; i++) {
         cc_tile t;
         cc_tiles_get(&toc, i, &t);

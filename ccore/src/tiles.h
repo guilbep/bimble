@@ -17,8 +17,9 @@
  *
  * ---- Section TILE (little-endian; offsets from the section's first byte) ----
  *   0  char[4] "TIL1"            4  u32 version (1)       8  u32 nT tiles          12 u32 nE elements (rows)
- *   16 u32 nL element list       20 u32 nO occluder tris  24 u32 toc bytes (48 + 80 nT + 4 nL + 36 nO, then
- *                                                            padded to 8: where the blobs start)
+ *   16 u32 nL element list       20 u32 nO occluder tris  24 u32 toc bytes (48 + 80 nT + 4 nL + pad4(nL)): the
+ *                                                            table of contents; the occluders follow, then the blobs
+ *                                                            at pad8(toc + 36 nO)
  *   28 u32 leaf target (tris)    32 u64 blob bytes        40 u32 levels (deepest level + 1)   44 u32 0
  *   48 nT tiles of 80 bytes, tile 0 the root; ids breadth first (a tile's children are consecutive ids,
  *      each after its parent):
@@ -34,7 +35,8 @@
  *      68 u32 first occluder   72 u16 occluders   74 u16 0
  *      76 u32 detail triangles under it, copies counted (saturates at 0xFFFFFFFF)
  *   then u32 x nL elements (row indices: the link's BMSH rows, the view file's order), each once
- *   then nO occluder triangles, f32[9] each (three corners, link scene mm): real triangles of opaque large
+ *   then u8 x nL per list entry: 1 closed and outward, 2 opaque occluder class; padded to 4 (the table ends here)
+ *   then nO occluder triangles, f32[9] each (three corners, link scene mm), outside the table of contents: real triangles of opaque large
  *      elements (walls, slabs, roofs, footings, columns, beams, coverings; not glass), the largest by area,
  *      at most CC_TILES_OCC per tile (an inner tile: its children's largest): drawing only these into a
  *      depth buffer never hides what is in front of a real surface (a subset of the real geometry)
@@ -45,7 +47,8 @@
  *      then padded to 4, indices: u16 x ni when nv <= 65536, else u32 x ni
  *
  * ---- Answers (session/mesh.h cc_link_tiles, GET /mesh?link=k&tiles=toc | &tile=a,b,…) ----
- *   tiles=toc: the section's bytes [0, toc bytes) (header, tiles, list, occluders) as stored.
+ *   tiles=toc: the section's bytes [0, toc bytes) (header, tiles, list, flags) as stored; tiles=occ: the occluders
+ *   (36 nO bytes, tile i's are [occ0, occ0 + nocc)).
  *   tile=…: "TILS" u32 count, then per tile asked: u32 id, u32 kind (0 none, 1 leaf TLF1, 2 proxy TPX1),
  *      u32 bytes, the bytes, padded to 4. A proxy: its TPX1 blob as stored. A leaf, TLF1:
  *      0 "TLF1"  4 u32 id  8 u32 nel  12 u32 nb blocks
@@ -134,7 +137,8 @@ typedef struct {
     size_t n;
     uint32_t ntiles, nelements, nlist, nocc, toc, levels, leaf_target;
     uint64_t blobs;
-    const uint8_t *list, *eflags, *occ;
+    uint32_t blob_at;   /* the blobs' offset in the section: pad8(toc + 36 nO) */
+    const uint8_t *list, *eflags, *occ; /* occ NULL when only the table of contents was given */
 } cc_tiles_toc;
 
 /* The table of contents at p[0..n) checked (n may stop at the toc bytes: `with_blobs` 0), every rule above. 0 ok,

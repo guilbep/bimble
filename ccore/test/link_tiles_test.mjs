@@ -12,11 +12,11 @@
 //   - a format 6 cache (the previous format, complete, no TILE): linked from it (the IFC not read) and re-indexed:
 //     format 7 with its TILE;
 //   - a small link without a cache (an IFC under 1 MiB read as it is): its pyramid built at once;
-//   - the open model (golden/frame.json): GET /mesh?tiles=toc&step=N answers 202 "done total", then its table; its
-//     tiles decode;
+//   - the open model (bench/mesh_heavy_model.py 160 x 600: several leaves): GET /mesh?tiles=toc&step=N answers 202
+//     "done total" (a run of leaves a call), then its table; its tiles decode;
 //   - tiles.ts on damaged bytes: 2,000 damaged tables and answers throw or read, never hang.
 // Fails on the code before TILE1: no section TILE, no tiles route (404 / the link's mesh).
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -126,6 +126,10 @@ if (toc) {
   check("every tile in one request decodes: leaves' rows and triangles as the table says, each element once, proxies in their box",
     all.ok && once && all.leafTris === toc.detail[0], `${all.why} leaf triangles ${all.leafTris} of ${toc.detail[0]}`);
 }
+g = await A.get("link=0&name=a.ifc&tiles=occ");
+let occ = null;
+try { occ = T.parseOcc(g.bytes, toc); } catch (e) { console.log(e.message); }
+check("its occluders apart (tiles=occ), as the table counts them", g.status === 200 && occ && occ.length === 9 * toc.nocc, `${toc?.nocc} triangles`);
 g = await A.get("link=0&name=b.ifc&tiles=toc");
 check("another name: 204 superseded (never 404)", g.status === 204 && g.headers.get("X-Superseded") === "1", `${g.status}`);
 g = await A.get("link=0&name=a.ifc&tile=99999");
@@ -161,7 +165,9 @@ check("then re-indexed: format 7, complete, its TILE served", c7.includes("bimbl
 
 // ---- a small link read as it is (no cache): its pyramid built at once ----
 await B.call("action", "link_model", JSON.stringify({ path: join(tmp, "small.ifc") }));
-const C = await startHost("link_tiles_test_3", {}, [join(CCORE, "golden/frame.json")]);
+// the open model: bench/mesh_heavy_model.py's (golden/frame.json and 160 closed meshes of 600 triangles: several leaves)
+execFileSync("python3", [join(CCORE, "bench/mesh_heavy_model.py"), "160", "600", join(tmp, "heavy.json")]);
+const C = await startHost("link_tiles_test_3", {}, [join(tmp, "heavy.json")]);
 await C.call("action", "link_model", JSON.stringify({ path: join(tmp, "small.ifc") }));
 await until(async () => (await C.row("small.ifc"))?.state === "ready");
 g = await C.get("link=0&name=small.ifc&tiles=toc");
@@ -172,7 +178,7 @@ check("a small link without a cache: its pyramid built at once", g.status === 20
 // ---- the open model, in steps ----
 const steps = [];
 for (let i = 0; i < 200; i++) {
-  g = await C.get("tiles=toc&step=500");
+  g = await C.get("tiles=toc&step=1");
   steps.push(g.status);
   if (g.status !== 202) break;
 }

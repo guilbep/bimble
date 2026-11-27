@@ -436,7 +436,9 @@ frame over tiles is ticket VIS1's, a native viewer's NAT2's: both read what is b
    of the same target. A cell with one octant and nothing of its own is not kept (the chain of empty levels collapsed).
    Every element with geometry is in exactly one leaf; each tile's subtree is one range of an element list in depth
    first order. Above the octree's root, a chain of coarser proxies of the whole, each at most a quarter of the one
-   below, ends at 512 triangles or fewer (`CC_TILES_ROOT_TRIS`): a link seen from afar costs a few hundred.
+   below, ends at 512 triangles or fewer (`CC_TILES_ROOT_TRIS`): a link seen from afar costs a few hundred. More than 8
+   own leaves are grouped 8 at a time under tiles of their own (no tile has more than 16 children: a parent's proxy and
+   error read its children at once; a link whose elements are all larger than its cells once made a tile of hundreds).
    **Alternative:** hlod.c's cells (every element in a leaf by its centre: a slab in a leaf whose box is the slab's, the
    leaves' boxes overlapping) or a box tree (cells that do not halve: the error does not either).
 32. **Proxies: vertex clustering on one lattice, each cluster placed where its quadric is least.** hlod.c's clusters
@@ -461,8 +463,13 @@ frame over tiles is ticket VIS1's, a native viewer's NAT2's: both read what is b
    (720 samples, none outside). **Alternative 1:** hlod.c's `grid × √3` (the bound of a point's move): measured 4.2 times
    the real worst; every site view of the synthetic sets then drew every leaf. **Alternative 2:** the farthest member of
    a cluster from its point (rigorous one way): 1.7 times the grid bound's tightness only, still 3 to 10 times what the
-   picture shows on beams (points move along the surface, which changes nothing on screen). Cost: the build's time
-   rises about five times on the synthetic sets (the distance queries: a 32³ grid of triangles per tile, rings searched).
+   picture shows on beams (points move along the surface, which changes nothing on screen). Cost: the distance queries
+   (a 32³ grid of triangles per tile, rings searched, a vanished part's search stopped at its size) took 55 % of the
+   build on the buildings scene. **The build is parallel** (`cc_jobs`, as the IFC reader: pthreads natively, in order in
+   wasm): runs of leaves (post-order, a run bounded so that memory stays a few leaves' clusters) are read by workers with
+   their own state, and the error's queries are split in chunks; each writes only its own slots, so the bytes do not
+   depend on the threads (the test's builds in steps equal the one build). Buildings scene (6.7 M triangles): 12.9 s
+   single-threaded to 3.5 s.
 34. **Leaves are not copied: a leaf is its elements' blocks in `ELEM`.** The tile table lists a leaf's elements; the answer
    (`TLF1`) gathers their BMG1 blocks from the mapped cache (each shape once per leaf, its copies as placements: copies
    stay instanced). Measured on the synthetic links (17 x 93 k triangles): the leaves as served 9.40 MB (5.9 bytes a
@@ -488,7 +495,8 @@ frame over tiles is ticket VIS1's, a native viewer's NAT2's: both read what is b
    largest by area (at least 1/64 of the tile's extent squared), of opaque classes (`IfcWall*`, `IfcSlab`, `IfcRoof`,
    `IfcFooting`, `IfcColumn`, `IfcBeam`, `IfcCovering`; never the glass family); an inner tile keeps its children's
    largest. A subset of real surfaces never hides what is in front of one. 36 bytes a triangle, at most 2.3 KB a tile; built
-   while the leaves are read (no extra pass). **Alternative:** shrunken proxies of opaque elements (a second simplified
+   while the leaves are read (no extra pass). Kept after the table of contents, not in it (`tiles=occ`): on the synthetic
+   links they were 90 % of the table (0.29 of 0.32 MB), and the table is what every reader loads at open. **Alternative:** shrunken proxies of opaque elements (a second simplified
    mesh per tile, never outside the solid: a constrained simplification); boxes of elements whose volume fills them (a
    wall with a window is not conservative).
 38. **Back faces:** a flag per element (in the list's order) "closed and outward": the mesh welded by position, every
@@ -531,7 +539,7 @@ Section `TILE` (little-endian; offsets from the section's first byte):
 | 12 | u32 | nE, the link's rows (BMSH row order = the view file's element order) |
 | 16 | u32 | nL, the element list's length (elements with geometry) |
 | 20 | u32 | nO, occluder triangles |
-| 24 | u32 | toc bytes = 48 + 80 nT + 4 nL + pad4(nL) + 36 nO; the blobs start at pad8(toc) |
+| 24 | u32 | toc bytes = 48 + 80 nT + 4 nL + pad4(nL): the table of contents; the occluders follow it, the blobs start at pad8(toc + 36 nO) |
 | 28 | u32 | the leaf target (triangles) |
 | 32 | u64 | blob bytes |
 | 40 | u32 | levels |
@@ -539,8 +547,8 @@ Section `TILE` (little-endian; offsets from the section's first byte):
 | 48 | 80 × nT | tiles, depth-first preorder (tile 0 the root; a subtree is ids [i, i + skip)) |
 | … | u32 × nL | element rows, depth first (a subtree's elements one range) |
 | … | u8 × nL, pad 4 | per list entry: 1 closed and outward, 2 opaque occluder class |
-| … | f32[9] × nO | occluder triangles, link scene mm |
-| pad8(toc) | blobs | a `TPX1` per proxy tile, in post-order (a subtree's proxies one byte range) |
+| toc | f32[9] × nO | occluder triangles, link scene mm (outside the table: asked apart, `tiles=occ`) |
+| pad8(toc + 36 nO) | blobs | a `TPX1` per proxy tile, in post-order (a subtree's proxies one byte range) |
 
 A tile (80 bytes):
 
@@ -566,13 +574,14 @@ A tile (80 bytes):
 and outward: 0 today), u32 first index, u32 indices}; u16[3] × nv (p = lo + q (hi − lo) / 65535, the tile's box); pad 4;
 indices u16 × ni (nv ≤ 65,536) else u32. No edges, no normals (edges are found on screen).
 
-Answers: `tiles=toc` the section's bytes [0, toc); `tile=a,b,c`: "TILS", u32 count, per tile {u32 id, u32 kind (0
+Answers: `tiles=toc` the section's bytes [0, toc); `tiles=occ` the occluders (36 nO bytes); `tile=a,b,c`: "TILS", u32 count, per tile {u32 id, u32 kind (0
 none, 1 leaf, 2 proxy), u32 bytes, the bytes, pad 4}. `TLF1` (a leaf): "TLF1", u32 id, u32 nel, u32 blocks; per element
 {u32 row, u32 block, f32[12] placement: columns x, y, z, then t; the identity for an own mesh}; u32 × blocks (bytes); the
 BMG1 blocks (`meshcodec.h`; edges included, a decoder skips them). `tiles.ts` gives per leaf the own meshes merged
 (one vertex block, one index block, runs of {row, first index, count}) and per shape its vertices, indices and instances.
 
-What a reader does: read the table once per link (a few hundred kB: 0.32 MB for 17 synthetic links), walk it each frame
+What a reader does: read the table once per link (80 bytes a tile and 5 an element: 32 kB for 17 synthetic links; their
+occluders, 0.29 MB, apart), walk it each frame
 by `cc_tiles_select`'s rule (or its own with occlusion), ask the tiles it lacks in batches, draw proxies as they are
 (u16 positions, the tile box as uniforms), leaves with their element runs (hide, select, pick by the state texel),
 descend under a hidden or selected element (proxies have no element boundary), and use each tile's occluders before

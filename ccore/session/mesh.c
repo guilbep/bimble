@@ -535,6 +535,10 @@ static int tiles_answer(const cc_tiles_src *src, const uint8_t *sec, size_t n, u
     cc_tiles_toc toc;
     cc_error err;
     if (cc_tiles_check(sec, n, 1, ne, &toc, &err)) return buf_puts(out, err.msg), 500;
+    if (nreq == 3 && !memcmp(req, "occ", 3)) { /* the occluders (after the table of contents) */
+        buf_append(out, toc.occ, 36 * (size_t)toc.nocc);
+        return out->oom ? (buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), 500) : 200;
+    }
     if (nreq == 3 && !memcmp(req, "toc", 3)) {
         buf_append(out, sec, toc.toc);
         return out->oom ? (buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), 500) : 200;
@@ -549,7 +553,7 @@ static int tiles_answer(const cc_tiles_src *src, const uint8_t *sec, size_t n, u
         if (i < nreq) i++;
     }
     if (!nid) return buf_puts(out, "no tile asked"), 400;
-    const uint8_t *blobs = sec + ((toc.toc + 7u) & ~7u);
+    const uint8_t *blobs = sec + toc.blob_at;
     buf_append(out, "TILS", 4);
     unsigned char c4[4];
 #define PUT32(v) (c4[0] = (unsigned char)(v), c4[1] = (unsigned char)((v) >> 8), c4[2] = (unsigned char)((v) >> 16), c4[3] = (unsigned char)((v) >> 24), buf_append(out, c4, 4))

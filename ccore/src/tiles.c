@@ -1287,8 +1287,8 @@ static int write_section(cc_tiles *t) {
     for (uint32_t i = 0; i < np; i++) nocc += w->nodes[pre[i]].nocc;
     Buf *o = &t->out;
     buf_clear(o);
-    uint64_t toc = CC_TILES_HEAD + (uint64_t)CC_TILES_REC * np + 4ull * w->nels + ((w->nels + 3ull) & ~3ull) + 36ull * nocc;
-    uint64_t tocp = (toc + 7) & ~7ull;
+    uint64_t toc = CC_TILES_HEAD + (uint64_t)CC_TILES_REC * np + 4ull * w->nels + ((w->nels + 3ull) & ~3ull);
+    uint64_t tocp = (toc + 36ull * nocc + 7) & ~7ull; /* the occluders after the table, then the blobs */
     if (buf_reserve(o, (size_t)(tocp + w->blobs.len))) return free(pre), free(st), free(skip), -1;
     buf_append(o, "TIL1", 4);
     put32(o, CC_TILES_VERSION), put32(o, np), put32(o, (uint32_t)src_n(&w->src)), put32(o, w->nels), put32(o, nocc);
@@ -1453,8 +1453,8 @@ int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelement
     uint64_t blobs = (uint64_t)rd32(p + 32) | (uint64_t)rd32(p + 36) << 32;
     if (nelements != CC_TILES_NONE && ne != nelements) return fail(err, "tiles: of another scene");
     if (nt > CC_TILES_MAX_TILES || nl > ne || no > (uint64_t)CC_TILES_OCC * nt) return fail(err, "tiles: counts");
-    if (tb != CC_TILES_HEAD + (uint64_t)CC_TILES_REC * nt + 4 * nl + ((nl + 3) & ~3ull) + 36 * no) return fail(err, "tiles: table size");
-    uint64_t tp = (tb + 7) & ~7ull;
+    if (tb != CC_TILES_HEAD + (uint64_t)CC_TILES_REC * nt + 4 * nl + ((nl + 3) & ~3ull)) return fail(err, "tiles: table size");
+    uint64_t tp = (tb + 36 * no + 7) & ~7ull; /* the blobs' start */
     if (with_blobs ? (tp + blobs != n) : (n < tb)) return fail(err, "tiles: section size");
     if (rd32(p + 40) > CC_TILES_MAX_LEVELS || rd32(p + 44)) return fail(err, "tiles: levels");
     if (!nt && (nl || no || blobs)) return fail(err, "tiles: counts");
@@ -1463,7 +1463,8 @@ int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelement
     toc->blobs = blobs;
     toc->list = p + CC_TILES_HEAD + (size_t)CC_TILES_REC * nt;
     toc->eflags = toc->list + 4 * nl;
-    toc->occ = toc->eflags + ((nl + 3) & ~3ull);
+    toc->occ = n >= tb + 36 * no ? p + tb : NULL; /* the occluders: absent from a table of contents alone */
+    toc->blob_at = (uint32_t)tp;
     for (uint64_t i = 0; i < nl; i++)
         if (toc->eflags[i] & ~3u) return fail(err, "tiles: an element's flags");
     for (uint64_t i = 0; i < nl; i++)
@@ -1478,7 +1479,7 @@ int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelement
     }
     free(seen);
     if (bad) return fail(err, "tiles: an element twice");
-    for (uint64_t i = 0; i < 9 * no; i++)
+    for (uint64_t i = 0; toc->occ && i < 9 * no; i++)
         if (!(rdf(toc->occ + 4 * i) > -3.0e38f && rdf(toc->occ + 4 * i) < 3.0e38f)) return fail(err, "tiles: an occluder");
     uint64_t leaves_el = 0;
     for (uint32_t i = 0; i < nt; i++) {
@@ -1528,6 +1529,7 @@ int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelement
     }
     if (with_blobs) {
         const uint8_t *bl = p + tp;
+        if (tp > UINT32_MAX) return fail(err, "tiles: section size");
         for (uint32_t i = 0; i < nt; i++) {
             cc_tile t;
             cc_tiles_get(toc, i, &t);

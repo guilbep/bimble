@@ -18,7 +18,8 @@ export interface TilesToc {
   off: Float64Array; len: Uint32Array; tris: Uint32Array; verts: Uint32Array; occ0: Uint32Array; nocc_: Uint16Array; detail: Uint32Array;
   list: Uint32Array; // element rows, DFS: each subtree a range
   elFlags: Uint8Array; // per list entry: EL_CLOSED (closed and outward), EL_OPAQUE
-  occ: Float32Array; // 9 per occluder triangle
+  occ: Float32Array; // 9 per occluder triangle (empty when only the table was given: parseOcc reads GET …&tiles=occ)
+  blobAt: number; // the blobs' offset in the section: pad8(tocBytes + 36 nocc)
 }
 
 const fail = (why: string): never => { throw new Error(`tiles: ${why}`); };
@@ -32,14 +33,15 @@ export function parseToc(ab: ArrayBuffer | Uint8Array, nelements = -1): TilesToc
   if (nelements >= 0 && ne !== nelements) fail("of another scene");
   if (nt > 1 << 22 || nl > ne || no > 64 * nt) fail("counts");
   const pad4 = (x: number) => (x + 3) & ~3;
-  if (tb !== HEAD + REC * nt + 4 * nl + pad4(nl) + 36 * no || n < tb) fail("table size");
+  if (tb !== HEAD + REC * nt + 4 * nl + pad4(nl) || n < tb) fail("table size"); // the occluders follow the table, then the blobs
   const blobBytes = dv.getUint32(32, true) + dv.getUint32(36, true) * 2 ** 32;
   const t: TilesToc = {
     ntiles: nt, nelements: ne, nlist: nl, nocc: no, levels: dv.getUint32(40, true), leafTarget: dv.getUint32(28, true), tocBytes: tb, blobBytes,
     parent: new Uint32Array(nt), skip: new Uint32Array(nt), nchildren: new Uint16Array(nt), level: new Uint8Array(nt), flags: new Uint8Array(nt),
     box: new Float32Array(6 * nt), error: new Float32Array(nt), el0: new Uint32Array(nt), nel: new Uint32Array(nt), off: new Float64Array(nt),
     len: new Uint32Array(nt), tris: new Uint32Array(nt), verts: new Uint32Array(nt), occ0: new Uint32Array(nt), nocc_: new Uint16Array(nt),
-    detail: new Uint32Array(nt), list: new Uint32Array(nl), elFlags: new Uint8Array(nl), occ: new Float32Array(9 * no),
+    detail: new Uint32Array(nt), list: new Uint32Array(nl), elFlags: new Uint8Array(nl), occ: new Float32Array(n >= tb + 36 * no ? 9 * no : 0),
+    blobAt: (tb + 36 * no + 7) & ~7,
   };
   for (let i = 0; i < nt; i++) {
     const r = HEAD + REC * i;
@@ -57,8 +59,7 @@ export function parseToc(ab: ArrayBuffer | Uint8Array, nelements = -1): TilesToc
   for (let i = 0; i < nl; i++) if (t.elFlags[i]! & ~3) fail("an element's flags");
   const seen = new Uint8Array(ne);
   for (let i = 0; i < nl; i++) { if (seen[t.list[i]!]) fail("an element twice"); seen[t.list[i]!] = 1; }
-  const oo = lo + 4 * nl + pad4(nl);
-  for (let i = 0; i < 9 * no; i++) { const f = dv.getFloat32(oo + 4 * i, true); if (!(Math.abs(f) < 3e38)) fail("an occluder"); t.occ[i] = f; }
+  for (let i = 0; i < t.occ.length; i++) { const f = dv.getFloat32(tb + 4 * i, true); if (!(Math.abs(f) < 3e38)) fail("an occluder"); t.occ[i] = f; }
   let leavesEl = 0;
   for (let i = 0; i < nt; i++) {
     const f = t.flags[i]!, b = 6 * i;
@@ -90,6 +91,16 @@ export function parseToc(ab: ArrayBuffer | Uint8Array, nelements = -1): TilesToc
   }
   if (nt && (leavesEl !== nl || t.el0[0] !== 0 || t.nel[0] !== nl)) fail("an element in no leaf");
   return t;
+}
+
+/** The occluders (GET …&tiles=occ: 36 bytes a triangle, three corners in link scene mm; tile i's are
+ *  [occ0[i], occ0[i] + nocc_[i])), checked against the table. */
+export function parseOcc(ab: ArrayBuffer | Uint8Array, toc: TilesToc): Float32Array {
+  const u8 = ab instanceof Uint8Array ? ab : new Uint8Array(ab);
+  if (u8.byteLength !== 36 * toc.nocc) fail("occluders: size");
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), out = new Float32Array(9 * toc.nocc);
+  for (let i = 0; i < out.length; i++) { const f = dv.getFloat32(4 * i, true); if (!(Math.abs(f) < 3e38)) fail("an occluder"); out[i] = f; }
+  return out;
 }
 
 /** A tile's children ids. */
