@@ -34,7 +34,7 @@ const CAMERA = String.raw`(async (setCam, fast) => {
   const pix = () => b.read().rgba;
   g.noProxies = true; // (the culling's exactness: far cells' proxies at 1 px stand for elements the ground truth draws)
   setCam(b);
-  if (fast) { for (let i = 0; i < 5; i++) { b.frame(0.3, true); await raf(); } for (let i = 0; i < 5; i++) { b.frame(-0.3, true); await raf(); } b.frame(0, true); await raf(); await raf(); await raf(); }
+  if (fast) { for (let i = 0; i < 5; i++) { b.frame(0.3, true); await raf(); } for (let i = 0; i < 5; i++) { b.frame(-0.3, true); await raf(); } b.frame(0, true); for (let i = 0; i < 8; i++) await raf(); } // (the moving frame's pyramid: its fence answered within a few frames, more under load)
   let usedFirst = null;
   if (fast) { g.visible = true; b.frame(0, false); usedFirst = g.vis ? g.vis.used : null; }
   g.visible = false; b.frame(0, false);
