@@ -44,7 +44,9 @@ export function budgetCut(cs: Cut[], budget: number): { t: number; tris: number 
     else lo = mid;
   }
   let tris = at(hi);
-  if (tris === 0) hi = top, tris = at(top); // one item over the budget: the largest one(s) on screen alone
+  // one item over the budget: the largest one(s) on screen alone (VIS2: a hair under its size over distance: (s / d) * d can
+  // round above s, and the item was then left out: a fill of slices drawing 0 triangles forever, seen on a real project)
+  if (tris === 0) hi = top * (1 - 1e-9), tris = at(hi);
   return { t: hi, tris };
 }
 
@@ -265,7 +267,7 @@ export function budgetCutFast(cs: Cut[], budget: number, key: string): { t: numb
   if (tris === 0) { // one item over the budget: the largest on screen alone (budgetCut's rule)
     let hi = 0;
     for (const c of cs) if (c.k0 < c.b.n) hi = Math.max(hi, c.b.size[c.k0]! / Math.max(c.dist, 1e-9));
-    t = hi, tris = at(hi);
+    t = hi * (1 - 1e-9), tris = at(t); // (VIS2: a hair under, as budgetCut)
   }
   return { t, tris };
 }
