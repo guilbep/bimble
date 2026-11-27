@@ -328,25 +328,27 @@ typedef struct {
 } Soup;
 
 struct cc_shell {
-    cc_tiles_src src;
-    cc_tiles_toc toc;
+    cc_shell_part *parts;
+    uint32_t nparts;
+    uint32_t *pe0;            /* per part: its first element in the global arrays (nparts + 1) */
+    size_t *pb0;              /* per part: its first block (nparts + 1) */
     cc_shell_opts o;
-    uint32_t ne;
-    uint8_t *ext, *opq, *in;  /* per scene element: exterior, occluder, listed with geometry */
-    float (*ebox)[6];
+    uint32_t ne;              /* elements of every part */
+    uint8_t *ext, *opq, *in;  /* per element: exterior, occluder, listed with geometry */
+    float (*ebox)[6];         /* world boxes */
     double ctr[3], radius;
     double *dirs;
-    uint32_t *leaf, nleaf;    /* the pyramid's leaves, in id order */
+    uint32_t (*leaf)[2], nleaf; /* (part, tile): the pyramids' leaves, part after part, in id order */
     uint32_t b0, nb, bcap;    /* the batch of views: [b0, b0 + nb) */
     cc_shell_zb *zb;
     int pass;                 /* 1 depth, 2 tests */
     uint32_t at;              /* next leaf */
     Soup soup;
-    uint32_t *rel, nrel, crel; /* the run's elements (scene rows) */
+    uint32_t *rel, nrel, crel; /* the run's elements (global) */
     uint32_t (*rng)[2];       /* their triangles in the soup */
     uint8_t *vm;              /* per view of the batch x run element: 1 the box may show (pass 2), then 2 seen */
     Arena dec;
-    cc_mesh *shapes;          /* per block decoded in this run (nv = UINT32_MAX: not yet) */
+    cc_mesh *shapes;          /* per block (global) decoded in this run (nv = UINT32_MAX: not yet) */
     uint32_t *touched, ntouched;
     size_t nblocks;
     int done, need_batch;
@@ -358,63 +360,104 @@ void cc_shell_free(cc_shell *s) {
     for (uint32_t i = 0; s->zb && i < s->bcap; i++) cc_shell_zb_free(&s->zb[i]);
     free(s->zb), free(s->ext), free(s->opq), free(s->in), free(s->ebox), free(s->dirs), free(s->leaf);
     free(s->soup.t), free(s->soup.te), free(s->rel), free(s->rng), free(s->vm), free(s->shapes), free(s->touched);
+    free(s->parts), free(s->pe0), free(s->pb0);
     arena_free(&s->dec);
     free(s);
 }
 
 const uint8_t *cc_shell_exterior(const cc_shell *s) { return s->ext; }
+const uint8_t *cc_shell_exterior_of(const cc_shell *s, uint32_t part) { return part < s->nparts ? s->ext + s->pe0[part] : NULL; }
 void cc_shell_get_stats(const cc_shell *s, cc_shell_stats *st) { *st = s->st; }
 
+static void to_world(const cc_shell_part *p, const float in[3], float out[3]) {
+    double x = in[0], y = in[1];
+    out[0] = (float)(p->c * x - p->s * y + p->o[0]), out[1] = (float)(p->s * x + p->c * y + p->o[1]), out[2] = (float)((double)in[2] + p->o[2]);
+}
+static int identity(const cc_shell_part *p) { return p->c == 1.0 && p->s == 0.0 && p->o[0] == 0.0 && p->o[1] == 0.0 && p->o[2] == 0.0; }
+
 int cc_shell_start(cc_shell **out, const cc_tiles_src *src, const cc_tiles_toc *toc, const cc_shell_opts *o, cc_error *err) {
+    cc_shell_part p;
+    memset(&p, 0, sizeof p);
+    p.src = *src, p.toc = *toc, p.c = 1.0;
+    return cc_shell_start_parts(out, &p, 1, o, err);
+}
+
+int cc_shell_start_parts(cc_shell **out, const cc_shell_part *parts, uint32_t nparts, const cc_shell_opts *o, cc_error *err) {
     *out = NULL;
     cc_shell *s = calloc(1, sizeof *s);
     if (!s) return fail(err, "out of memory");
-    s->src = *src, s->toc = *toc, s->o = *o;
+    s->o = *o;
     if (s->o.views > CC_SHELL_MAX_VIEWS) s->o.views = CC_SHELL_MAX_VIEWS;
     if (s->o.res > CC_SHELL_MAX_RES) s->o.res = CC_SHELL_MAX_RES;
     if (s->o.res < 8) s->o.res = 8;
     arena_init(&s->dec, 0);
-    size_t ne = cc_tiles_src_count(src);
-    if (ne != toc->nelements || ne >= CC_TILES_MAX_TILES) return cc_shell_free(s), fail(err, "shell: the pyramid is of another scene");
+    s->nparts = nparts;
+    s->parts = malloc(((size_t)nparts + 1) * sizeof *s->parts);
+    s->pe0 = calloc((size_t)nparts + 1, sizeof *s->pe0), s->pb0 = calloc((size_t)nparts + 1, sizeof *s->pb0);
+    if (!s->parts || !s->pe0 || !s->pb0) return cc_shell_free(s), fail(err, "out of memory");
+    if (nparts) memcpy(s->parts, parts, nparts * sizeof *parts);
+    uint64_t ne = 0, nb = 0, nt = 0;
+    for (uint32_t k = 0; k < nparts; k++) {
+        size_t n = cc_tiles_src_count(&parts[k].src);
+        if (n != parts[k].toc.nelements) return cc_shell_free(s), fail(err, "shell: the pyramid is of another scene");
+        s->pe0[k] = (uint32_t)ne, s->pb0[k] = (size_t)nb;
+        ne += n, nb += cc_tiles_src_nblocks(&parts[k].src), nt += parts[k].toc.ntiles;
+        if (ne >= CC_TILES_MAX_TILES * (uint64_t)16 || nb >= ((uint64_t)1 << 31)) return cc_shell_free(s), fail(err, "shell: too many elements");
+    }
+    s->pe0[nparts] = (uint32_t)ne, s->pb0[nparts] = (size_t)nb;
     s->ne = (uint32_t)ne;
-    s->nblocks = cc_tiles_src_nblocks(src);
+    s->nblocks = (size_t)nb;
     s->ext = calloc(ne + 1, 1), s->opq = calloc(ne + 1, 1), s->in = calloc(ne + 1, 1);
     s->ebox = malloc((ne + 1) * sizeof *s->ebox);
     s->dirs = malloc(3 * ((size_t)s->o.views + 1) * sizeof *s->dirs);
-    s->leaf = malloc(((size_t)toc->ntiles + 1) * sizeof *s->leaf);
+    s->leaf = malloc((nt + 1) * sizeof *s->leaf);
     s->shapes = malloc((s->nblocks + 1) * sizeof *s->shapes);
     s->touched = malloc((s->nblocks + 1) * sizeof *s->touched);
     if (!s->ext || !s->opq || !s->in || !s->ebox || !s->dirs || !s->leaf || !s->shapes || !s->touched) return cc_shell_free(s), fail(err, "out of memory");
     for (size_t b = 0; b < s->nblocks; b++) s->shapes[b].nv = UINT32_MAX;
     cc_shell_dirs(s->o.views, s->dirs);
-    for (uint32_t i = 0; i < toc->nlist; i++) {
-        uint32_t e = cc_tiles_list(toc, i);
-        if (e >= ne) continue;
-        s->in[e] = 1, s->st.elements++;
-        s->opq[e] = (cc_tiles_el_flags(toc, i) & CC_TILES_EL_OPAQUE) != 0;
-    }
-    for (uint32_t i = 0; i < toc->ntiles; i++) {
-        cc_tile t;
-        cc_tiles_get(toc, i, &t);
-        if (t.flags & CC_TILE_LEAF) s->leaf[s->nleaf++] = i;
-    }
-    /* the link's box: the elements' (finite) boxes */
     float all[6] = {1e30f, 1e30f, 1e30f, -1e30f, -1e30f, -1e30f};
     Arena scratch;
     arena_init(&scratch, 0);
-    for (uint32_t e = 0; e < s->ne; e++) {
-        float *b = s->ebox[e];
-        arena_trim(&scratch, (size_t)1 << 22);
-        if (!s->in[e] || cc_tiles_src_box(src, e, b, &scratch)) {
-            s->in[e] = 0;
-            continue;
+    for (uint32_t k = 0; k < nparts; k++) {
+        const cc_shell_part *p = &s->parts[k];
+        const cc_tiles_toc *toc = &p->toc;
+        uint32_t e0 = s->pe0[k], n = s->pe0[k + 1] - e0;
+        for (uint32_t i = 0; i < toc->nlist; i++) {
+            uint32_t e = cc_tiles_list(toc, i);
+            if (e >= n) continue;
+            s->in[e0 + e] = 1, s->st.elements++;
+            s->opq[e0 + e] = (cc_tiles_el_flags(toc, i) & CC_TILES_EL_OPAQUE) != 0;
         }
-        int ok = 1;
-        for (int k = 0; k < 6; k++) ok &= b[k] - b[k] == 0.0f;
-        if (!ok || !(b[0] <= b[3] && b[1] <= b[4] && b[2] <= b[5])) { s->in[e] = 0; continue; }
-        for (int k = 0; k < 3; k++) {
-            if (b[k] < all[k]) all[k] = b[k];
-            if (b[3 + k] > all[3 + k]) all[3 + k] = b[3 + k];
+        for (uint32_t i = 0; i < toc->ntiles; i++) {
+            cc_tile t;
+            cc_tiles_get(toc, i, &t);
+            if (t.flags & CC_TILE_LEAF) s->leaf[s->nleaf][0] = k, s->leaf[s->nleaf][1] = i, s->nleaf++;
+        }
+        /* the elements' (finite) world boxes, the whole's */
+        for (uint32_t e = 0; e < n; e++) {
+            float *b = s->ebox[e0 + e], lb[6];
+            arena_trim(&scratch, (size_t)1 << 22);
+            if (!s->in[e0 + e] || cc_tiles_src_box(&p->src, e, lb, &scratch)) {
+                s->in[e0 + e] = 0;
+                continue;
+            }
+            int ok = 1;
+            for (int q = 0; q < 6; q++) ok &= lb[q] - lb[q] == 0.0f;
+            if (!ok || !(lb[0] <= lb[3] && lb[1] <= lb[4] && lb[2] <= lb[5])) { s->in[e0 + e] = 0; continue; }
+            if (identity(p)) memcpy(b, lb, sizeof lb);
+            else {
+                for (int q = 0; q < 3; q++) b[q] = 1e30f, b[3 + q] = -1e30f;
+                for (int c = 0; c < 8; c++) {
+                    float pt[3] = {c & 1 ? lb[3] : lb[0], c & 2 ? lb[4] : lb[1], c & 4 ? lb[5] : lb[2]}, w[3];
+                    to_world(p, pt, w);
+                    for (int q = 0; q < 3; q++) b[q] = w[q] < b[q] ? w[q] : b[q], b[3 + q] = w[q] > b[3 + q] ? w[q] : b[3 + q];
+                }
+            }
+            for (int q = 0; q < 3; q++) {
+                if (b[q] < all[q]) all[q] = b[q];
+                if (b[3 + q] > all[3 + q]) all[3 + q] = b[3 + q];
+            }
         }
     }
     arena_free(&scratch);
@@ -425,7 +468,7 @@ int cc_shell_start(cc_shell **out, const cc_tiles_src *src, const cc_tiles_toc *
         r2 += h * h;
     }
     s->radius = cc_sqrt(r2) + 1.0;
-    if (s->o.touch) /* the safeguard: an element reaching the link's box faces */
+    if (s->o.touch) /* the safeguard: an element reaching the whole's box faces */
         for (uint32_t e = 0; e < s->ne; e++) {
             if (!s->in[e]) continue;
             const float *b = s->ebox[e];
@@ -477,16 +520,30 @@ static int rel_add(cc_shell *s, uint32_t e) {
     return 0;
 }
 
-/* element e's triangles (placed) appended to the soup as run element `ri` */
-static int place_element(cc_shell *s, uint32_t e, uint32_t ri) {
-    size_t b = cc_tiles_src_el_block(&s->src, e);
-    if (b >= s->nblocks) return -1;
+static uint32_t part_of(const cc_shell *s, uint32_t g) { /* the part holding global element g */
+    uint32_t lo = 0, hi = s->nparts;
+    while (hi - lo > 1) {
+        uint32_t m = lo + (hi - lo) / 2;
+        if (s->pe0[m] <= g) lo = m;
+        else hi = m;
+    }
+    return lo;
+}
+
+/* global element g's triangles (placed, then into the world) appended to the soup as run element `ri` */
+static int place_element(cc_shell *s, uint32_t g, uint32_t ri) {
+    uint32_t k = part_of(s, g), e = g - s->pe0[k];
+    const cc_shell_part *p = &s->parts[k];
+    size_t bl = cc_tiles_src_el_block(&p->src, e);
+    if (bl == SIZE_MAX || s->pb0[k] + bl >= s->pb0[k + 1]) return -1;
+    size_t b = s->pb0[k] + bl;
     cc_mesh *m = &s->shapes[b];
     if (m->nv == UINT32_MAX) {
-        if (cc_tiles_src_block(&s->src, b, &s->dec, m)) return m->nv = UINT32_MAX, -1;
+        if (cc_tiles_src_block(&p->src, bl, &s->dec, m)) return m->nv = UINT32_MAX, -1;
         s->touched[s->ntouched++] = (uint32_t)b;
     }
-    const cc_placement32 *pl = cc_tiles_src_place(&s->src, e);
+    const cc_placement32 *pl = cc_tiles_src_place(&p->src, e);
+    int id = identity(p);
     uint32_t nt = m->ni / 3;
     if (soup_room(&s->soup, nt)) return -1;
     s->rng[ri][0] = (uint32_t)s->soup.nt;
@@ -496,9 +553,12 @@ static int place_element(cc_shell *s, uint32_t e, uint32_t ri) {
         float *o = s->soup.t[s->soup.nt];
         for (int c = 0; c < 3; c++) {
             const float *q = m->pos[ix[c]];
+            float w[3];
             if (pl)
-                for (int j = 0; j < 3; j++) o[3 * c + j] = pl->x[j] * q[0] + pl->y[j] * q[1] + pl->z[j] * q[2] + pl->t[j];
-            else memcpy(o + 3 * c, q, 12);
+                for (int j = 0; j < 3; j++) w[j] = pl->x[j] * q[0] + pl->y[j] * q[1] + pl->z[j] * q[2] + pl->t[j];
+            else memcpy(w, q, 12);
+            if (id) memcpy(o + 3 * c, w, 12);
+            else to_world(p, w, o + 3 * c);
         }
         s->soup.te[s->soup.nt++] = ri;
     }
@@ -517,14 +577,16 @@ static void run_reset(cc_shell *s) {
 static int gather(cc_shell *s, uint64_t *tris) {
     uint64_t acc = 0;
     while (s->at < s->nleaf) {
+        const cc_shell_part *p = &s->parts[s->leaf[s->at][0]];
+        uint32_t e0 = s->pe0[s->leaf[s->at][0]], n = s->pe0[s->leaf[s->at][0] + 1] - e0;
         cc_tile t;
-        cc_tiles_get(&s->toc, s->leaf[s->at], &t);
+        cc_tiles_get(&p->toc, s->leaf[s->at][1], &t);
         if (acc && acc + t.detail > CC_SHELL_RUN_TRIS) break;
         for (uint32_t i = 0; i < t.nel; i++) {
-            uint32_t e = cc_tiles_list(&s->toc, t.el0 + i);
-            if (e >= s->ne || !s->in[e]) continue;
-            if (s->pass == 1 ? !s->opq[e] : s->ext[e]) continue;
-            if (rel_add(s, e)) return -1;
+            uint32_t e = cc_tiles_list(&p->toc, t.el0 + i);
+            if (e >= n || !s->in[e0 + e]) continue;
+            if (s->pass == 1 ? !s->opq[e0 + e] : s->ext[e0 + e]) continue;
+            if (rel_add(s, e0 + e)) return -1;
         }
         acc += t.detail;
         s->at++;

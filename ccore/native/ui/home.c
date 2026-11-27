@@ -298,6 +298,8 @@ static void settings_dialog(App *a) {
  *                   every link's detail cell drawn)
  *   link_gpu_mb     the links' detail on the GPU (default 768 MB; 65536: off, no limit): past it the other
  *                   links keep their proxies
+ *   shell_mode      SHELL1: the outside walk over the links' exterior shell (tiles.h CC_TILES_SEL_SHELL; default auto,
+ *                   off: every tile the levels ask); read by the renderer's walk over tiles (NUI2)
  *   edges           (the View tab's Edges, the session's `edges` action, not a setting) screen-space edges
  *                   (default on; off: faces only)
  * The cull pass (frustum and screen-size cut of every element on the GPU) is how this renderer draws: no
@@ -349,6 +351,18 @@ void optimisations_ui(App *a) {
             for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].detail_state == 4) a->links_s[i].detail_state = 0;
         }
     }
+    { /* SHELL1: the exterior shell's walk */
+        const JrVal *sm = v ? jr_get(v, "shell_mode") : NULL;
+        const char *cur = sm && sm->type == JR_STR ? sm->s : "auto";
+        static const char *const SM[] = {"auto", "outside", "off"}, *const SMK[] = {"native.shellMode.auto", "native.shellMode.outside", "native.shellMode.off"};
+        igTextColored(col4(C_STONE), "%s", T(a, "native.shellMode"));
+        for (int k = 0; k < 3; k++) {
+            char q[16];
+            snprintf(q, sizeof q, "\"%s\"", SM[k]);
+            if (k) igSameLine(0, 10 * s);
+            if (igRadioButton_Bool(T(a, SMK[k]), !strcmp(cur, SM[k]))) set_setting(a, "shell_mode", q), optimisations_apply(a);
+        }
+    }
     bool ed = nv_render_edges(a->r) != NV_EDGES_NONE;
     if (igCheckbox(T(a, "native.edgesScreen"), &ed)) tool_run_action(a, "edges");
     igTextColored(col4(C_STONE), "%s", T(a, "native.cullAlways"));
@@ -356,7 +370,9 @@ void optimisations_ui(App *a) {
 
 static void optimisations_report(App *a, Buf *b) {
     char t[400];
-    snprintf(t, sizeof t, "optimisations: moving budget (moving_fps) %s; far parts as proxies (moving_proxies) %s; links' GPU budget (link_gpu_mb) %s; edges (action edges) %s; cull pass on the GPU (no setting) on\n",
+    const JrVal *sv = a->settings.root ? jr_get(a->settings.root, "values") : NULL, *sm = sv ? jr_get(sv, "shell_mode") : NULL;
+    buf_puts(b, "optimisations: exterior shell (shell_mode) "), buf_puts(b, sm && sm->type == JR_STR ? sm->s : "auto"), buf_puts(b, "; "); /* SHELL1 */
+    snprintf(t, sizeof t, "moving budget (moving_fps) %s; far parts as proxies (moving_proxies) %s; links' GPU budget (link_gpu_mb) %s; edges (action edges) %s; cull pass on the GPU (no setting) on\n",
              a->moving_fps > 0 ? (snprintf(t + 300, 40, "%d fps", a->moving_fps), t + 300) : "off", a->hlod ? "on" : "off",
              a->gpu_budget ? (snprintf(t + 340, 40, "%llu MB", (unsigned long long)(a->gpu_budget >> 20)), t + 340) : "off (no limit)",
              nv_render_edges(a->r) == NV_EDGES_SCREEN ? "screen" : nv_render_edges(a->r) == NV_EDGES_LINES ? "lines" : "off");

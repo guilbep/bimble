@@ -125,6 +125,9 @@ typedef struct {
     uint32_t leaf_tris, proxy_tris, root_tris, res, occ;
     /* SHELL1 (shell.h): the exterior shell's views (0: none), their resolution and the depth tolerance d (mm) */
     uint32_t shell_views, shell_res, shell_tol;
+    uint32_t shell_cross; /* SHELL1: the cross-link pass (session/xshell.h) on (1, the default) or off; a run-time setting, not
+                           * in the text below (a link's cache does not depend on it): "cross=0", "cross=1", "cross=<views>x<res>" */
+    uint32_t cross_views, cross_res; /* its views and resolution (0: the shell's) */
 } cc_tiles_opts;
 #define CC_TILES_SHELL_VIEWS 64u
 #define CC_TILES_SHELL_RES 1024u
@@ -172,6 +175,10 @@ typedef struct {
     const uint8_t *list, *eflags, *occ; /* occ NULL when only the table of contents was given */
     const uint8_t *shell; /* SHELL1: the shell table (TSH1) when baked and given (the whole section, or cc_tiles_shell_check) */
     uint32_t shell_n;
+    /* SHELL1: the cross-link shell (session/xshell.h), attached by the caller: per list entry 1 exterior (in place of element
+     * flag 4 in the outside walk and the exterior answers), per tile 1 when it holds one, and their triangles (NULL: none) */
+    const uint8_t *xmask, *xtile;
+    const uint32_t *xtris;
 } cc_tiles_toc;
 
 /* The table of contents at p[0..n) checked (n may stop at the toc bytes: `with_blobs` 0), every rule above. 0 ok,
@@ -215,6 +222,8 @@ typedef struct {
  * (toc->shell). 0 ok, -1 with err (toc->shell NULL). */
 int cc_tiles_shell_check(const uint8_t *p, size_t n, cc_tiles_toc *toc, cc_error *err);
 void cc_tiles_shell_get(const cc_tiles_toc *toc, uint32_t i, cc_tile_shell *out); /* zeros without a table */
+/* 1 when list entry i is exterior: the cross-link mask when attached, else element flag 4 */
+int cc_tiles_el_exterior(const cc_tiles_toc *toc, uint32_t i);
 typedef struct {
     uint32_t exterior, elements, mixed; /* elements exterior, elements listed, tiles with both kinds */
     int shell_build_ok;                 /* the exterior proxies were built (the same tree) */

@@ -95,6 +95,7 @@ typedef struct {
     int shell;     /* SHELL1: 0 off, 1 outside (the outside walk wherever baked), 2 auto (where the eye is outside the link's
                     * box grown by shell_margin mm) */
     double shell_margin;
+    int xshell;    /* SHELL1: 1 the cross-link marks (xshell.h) when ready (the default), 0 the links' own shells only */
     int truth;     /* SHELL1: a full-detail software render of every link at w x h (glazing not occluding): per link the
                     * elements seen and those the selection does not depict (missing), with the largest missing listed */
 } cc_tiles_frame_q;

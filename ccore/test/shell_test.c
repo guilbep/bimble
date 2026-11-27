@@ -457,6 +457,51 @@ static void raster(void) { /* the rasteriser: a square covers its pixels; a sliv
 }
 
 
+/* the cross-link pass: a room in one scene, a thing in another placed inside it (turned and moved): alone the thing is
+ * exterior, together interior; the room's walls stay exterior */
+static void cross(void) {
+    cc_scene a, b;
+    scene_new(&a);
+    room(&a, 0, 0, 0, 10000, 8000, 3500, 0, 1);
+    size_t na = a.nelements;
+    cc_scene_element *ae = a.elements;
+    ecap = 0;
+    scene_new(&b);
+    M m = {0};
+    THING(&b, -500, -500, 200, 500, 500, 1200); /* placed at (5000, 4000, 0), turned 90 degrees: inside the room */
+    THING(&b, 20000, 0, 0, 21000, 1000, 1000);  /* far outside it (turned: at (5000, 24000)) */
+    (void)ae;
+    cc_tiles_src sa = {&a, NULL}, sb = {&b, NULL};
+    cc_tiles ta, tb;
+    cc_error e;
+    cc_tiles_opts to;
+    cc_tiles_default(&to);
+    int ok = !cc_tiles_build(&ta, &sa, &to, &e) && !cc_tiles_build(&tb, &sb, &to, &e);
+    cc_shell_part pp[2];
+    memset(pp, 0, sizeof pp);
+    ok = ok && !cc_tiles_check((const uint8_t *)ta.out.p, ta.out.len, 1, (uint32_t)a.nelements, &pp[0].toc, &e) &&
+         !cc_tiles_check((const uint8_t *)tb.out.p, tb.out.len, 1, (uint32_t)b.nelements, &pp[1].toc, &e);
+    pp[0].src = sa, pp[0].c = 1;
+    pp[1].src = sb, pp[1].c = 0, pp[1].s = 1, pp[1].o[0] = 5000, pp[1].o[1] = 4000;
+    cc_shell_opts so = {64, 256, 100, 0};
+    cc_shell *x = NULL, *y = NULL;
+    ok = ok && !cc_shell_start_parts(&x, pp, 2, &so, &e) && !cc_shell_start(&y, &sb, &pp[1].toc, &so, &e);
+    while (ok && x && cc_shell_step(x, UINT64_MAX, &e) == 0) {}
+    while (ok && y && cc_shell_step(y, UINT64_MAX, &e) == 0) {}
+    check_true("cross: classified", ok && x && y);
+    if (ok && x && y) {
+        const uint8_t *xa = cc_shell_exterior_of(x, 0), *xb = cc_shell_exterior_of(x, 1), *yb = cc_shell_exterior(y);
+        int walls = 1;
+        for (size_t k = 0; k < na; k++) walls &= xa[k];
+        check_true("cross: alone the thing is exterior; with the room around it, interior", yb[0] && !xb[0]);
+        check_true("cross: the thing outside the room stays exterior, the room's walls too", xb[1] && walls);
+        check_true("cross: part 0's marks are the whole's start", cc_shell_exterior(x) == xa && !cc_shell_exterior_of(x, 2));
+    }
+    cc_shell_free(x), cc_shell_free(y);
+    cc_tiles_free(&ta), cc_tiles_free(&tb);
+    cc_scene_free(&a), cc_scene_free(&b);
+}
+
 int main(void) {
     raster();
     closed_box();
@@ -466,5 +511,6 @@ int main(void) {
     pyramid();
     hostile();
     determinism();
+    cross();
     return report("shell");
 }

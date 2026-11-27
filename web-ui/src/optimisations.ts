@@ -67,6 +67,12 @@ registerOptimisation(setting("link_detail", { // TESS1 (ADR 0085): off is "exact
   choices: [{ value: "exact", label: { fr: "exact", en: "exact" } }, { value: "standard", label: { fr: "standard", en: "standard" } },
     { value: "light", label: { fr: "léger", en: "light" } }, { value: "custom", label: { fr: "personnalisé", en: "custom" } }],
 }));
+registerOptimisation(setting("shell_mode", { // SHELL1 (ADR 0078 amendment 7): the exterior shell baked in each link's tiles
+  label: { fr: "Enveloppe extérieure", en: "Exterior shell" }, kind: "choice", default: "auto", off: "off",
+  hint: { fr: "Vu de l'extérieur, seuls les éléments visibles du dehors sont chargés et dessinés (pas de coupe ni d'élément extérieur masqué).",
+    en: "Seen from outside, only the elements visible from outside are fetched and drawn (no section, no exterior element hidden)." },
+  choices: [{ value: "auto", label: { fr: "automatique", en: "automatic" } }, { value: "outside", label: { fr: "toujours", en: "always" } }, { value: "off", label: { fr: "inactif", en: "off" } }],
+}));
 registerOptimisation(setting("gpu_cull", {
   label: { fr: "Tri des copies sur la carte", en: "GPU culling of copies" }, kind: "toggle", default: false, off: false,
   hint: { fr: "Avec WebGPU : les copies d'une forme testées par un compute shader.", en: "With WebGPU: a shape's copies tested by a compute shader." },

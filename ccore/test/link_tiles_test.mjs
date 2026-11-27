@@ -19,7 +19,7 @@
 //   - tiles.ts on damaged bytes: 2,000 damaged tables and answers throw or read, never hang.
 // Fails on the code before TILE1: no section TILE, no tiles route (404 / the link's mesh).
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -116,7 +116,7 @@ let g = await A.get("link=0&name=a.ifc&tiles=toc");
 check("while it indexes: its tiles answer 202 indexing", r?.indexing === true && g.status === 202 && text(g.bytes) === "indexing", `${g.status} ${text(g.bytes)}`);
 r = await until(async () => { const m = await A.row("a.ifc"); return m && !m.indexing ? m : null; });
 const cache = readFileSync(cacheOf("a.ifc"));
-check("indexed: its cache holds a section TILE, complete, format 8", text(cache).includes("TILE") && /"complete":true/.test(text(cache)) && text(cache).includes("bimble-link-cache 7"));
+check("indexed: its cache holds a section TILE, complete, format 8", text(cache).includes("TILE") && /"complete":true/.test(text(cache)) && text(cache).includes("bimble-link-cache 8"));
 g = await A.get("link=0&name=a.ifc&tiles=toc");
 let toc;
 try { toc = T.parseToc(g.bytes, 72); } catch (e) { toc = null; console.log(e.message); }
@@ -195,6 +195,28 @@ check("the walker's frame: far, the coarsest tile alone; close, every leaf", g.s
   const shown = await fr(`${at(0.7)}&shell=auto`);
   check("SHELL1: hiding exterior elements (the columns) makes the shell invalid; shown again, valid", !hid.links[0].shell && hid.links[0].shell_invalid && shown.links[0].shell,
     `hidden: ${hid.triangles}, shown: ${shown.triangles}`);
+  // the cross-link pass: a second link (the same frame, moved 3 m up: the first's slabs and columns hide some of it)
+  copyFileSync(join(CCORE, "golden/ifc/frame.ifc"), join(tmp, "b2.ifc"));
+  await A.call("action", "link_model", JSON.stringify({ path: join(tmp, "b2.ifc") }));
+  await until(async () => { const m = await A.row("b2.ifc"); return m?.state === "ready" && !m.indexing; }, 60000);
+  await A.call("action", "manage_links", JSON.stringify({ op: "unpin", name: "b2.ifc" }));
+  await A.call("action", "manage_links", JSON.stringify({ op: "place", name: "b2.ifc", move_mm: [0, 0, 3000] }));
+  let xg = await A.get("link=0&name=a.ifc&tiles=xshell");
+  const first = xg.status;
+  for (let i = 0; i < 400 && xg.status === 202; i++) await sleep(50), xg = await A.get("link=0&name=a.ifc&tiles=xshell");
+  const xb = await A.get("link=1&name=b2.ifc&tiles=xshell");
+  const files = (() => { try { return readdirSync(join(tmp, "cache", "links")).filter((f) => f.startsWith("xshell-")); } catch { return []; } })();
+  check("SHELL1: the cross-link pass (two links): 202 computing, then a mark a list entry per link, kept in the cache folder",
+    (first === 202 || first === 200) && xg.status === 200 && xg.bytes.length === 72 && xb.status === 200 && xb.bytes.length === 72 && [...xg.bytes, ...xb.bytes].every((v) => v <= 1) && files.length === 1,
+    `${first} -> ${xg.status}, ${xg.bytes.length} + ${xb.bytes.length} bytes, ${[...xg.bytes, ...xb.bytes].filter((v) => v).length} exterior, files ${files.length}`);
+  const xf = await fr(`${at(0.7)}&shell=auto`), xo = await fr(`${at(0.7)}&shell=auto&xshell=0`);
+  check("SHELL1: the frame walks with the cross-link marks (xshell=0: the links' own shells)", xf.links.every((l) => l.xshell) && xo.links.every((l) => !l.xshell) &&
+    xf.triangles <= xo.triangles && xf.xshell.state === 2, `cross ${xf.triangles}, own ${xo.triangles}`);
+  await A.call("action", "manage_links", JSON.stringify({ op: "place", name: "b2.ifc", move_mm: [0, 0, 6000] }));
+  const moved = (await A.get("link=0&name=a.ifc&tiles=xshell")).status;
+  const own = await fr(`${at(0.7)}&shell=auto`);
+  check("SHELL1: a link moved: the pass again (its marks not served meanwhile; the frame on the links' own shells)", (moved === 202 || moved === 200) && own.xshell.state >= 1, `${moved} ${own.xshell.state}`);
+  await A.call("action", "manage_links", JSON.stringify({ op: "remove", name: "b2.ifc" }));
   const rep = readFileSync(join(tmp, "a.ifc.log.txt"), "utf8");
   check("SHELL1: the report says the shell", /exterior shell \(in TILE, for views from outside\): \d+ of 72 elements/.test(rep), rep.match(/exterior shell[^\n]*/)?.[0]);
 }

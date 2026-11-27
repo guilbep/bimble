@@ -27,6 +27,7 @@ const SHELL = args.includes("--shell"); // SHELL1: the exterior shell's numbers 
 const SETS = (opt("--sets") ?? (SHELL ? "synth17,buildings" : "synth17,heavy,large,buildings")).split(",");
 const COMPARE = (opt("--shell-compare") ?? "").split(",").filter(Boolean).map(Number); // e.g. 64,256,1024: views against the last
 const SHELL_RES = Number(opt("--shell-res") ?? 1024);
+const XCOMPARE = (opt("--cross-compare") ?? "").split(",").filter(Boolean).map(Number); // the cross-link pass's views, against the last
 const TRUTH = !args.includes("--no-truth");
 const FOLDER = opt("--folder"), CACHE_DIR = opt("--cache-dir"), PROJECT = opt("--project"), PNG = opt("--png");
 const WORK = join(CCORE, "out/tiles");
@@ -256,21 +257,32 @@ async function shellReport(H, pys, bounds) {
     per.push({ name: p.name, elements: p.toc.nlist, exterior: extEl, detail: p.toc.detail[0], extTris: sh ? sh.ext[0] : 0, baked: !!(p.toc.bake & 1),
       tiles: p.toc.ntiles, extTiles: [...Array(p.toc.ntiles).keys()].filter((i) => p.toc.flags[i] & 16).length, shellProxyBytes: sh ? sh.len.reduce((a, x, i) => a + (sh.flags[i] & 1 && x && p.toc.len[i] !== x ? x : 0), 0) : 0 });
   }
+  // the cross-link pass (session/xshell.h): started by the first frame asking the shell, waited for
+  let xs = null;
+  const cams = shellCameras(bounds), q0 = `tiles_frame=1&eye=${cams[0].eye.join(",")}&at=${cams[0].at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=auto`;
+  const t0x = performance.now();
+  for (let i = 0; i < 36000; i++) {
+    xs = json((await H.get(q0)).bytes).xshell;
+    if (!xs || xs.state !== 1) break;
+    await sleep(100);
+  }
+  log(`cross-link pass: state ${xs?.state}, ${fmt(xs?.exterior ?? 0)} of ${fmt(xs?.elements ?? 0)} elements exterior, ${fmt(xs?.ms ?? 0)} ms (waited ${fmt(performance.now() - t0x)} ms), buffers ${MB(xs?.peak ?? 0)}`);
   const rows = [];
-  for (const cam of shellCameras(bounds)) {
+  for (const cam of cams) {
     const base = `tiles_frame=1&eye=${cam.eye.join(",")}&at=${cam.at.join(",")}&fov=60&w=1920&h=1080&err=1&leaf_bytes=1`;
     const r = { name: cam.name, path: cam.path };
-    for (const [k, q] of [["off", "shell=off&occ=0"], ["offOcc", "shell=off&occ=1"], ["on", "shell=auto&occ=0"], ["onOcc", `shell=auto&occ=1${TRUTH ? "&truth=1" : ""}`]]) {
+    for (const [k, q] of [["off", "shell=off&occ=0"], ["offOcc", "shell=off&occ=1"], ["on", "shell=auto&occ=0&xshell=0"], ["onOcc", "shell=auto&occ=1&xshell=0"],
+      ["x", "shell=auto&occ=0"], ["xOcc", `shell=auto&occ=1${TRUTH ? "&truth=1" : ""}`]]) {
       const t0 = performance.now(), g = await H.get(`${base}&${q}`), ms = performance.now() - t0;
       if (g.status !== 200) throw new Error(`tiles_frame ${q}: ${g.status}`);
       const j = json(g.bytes);
-      r[k] = { triangles: j.triangles, bytes: j.bytes, hidden: j.hidden_triangles, shellLinks: j.shell_links, ms };
-      if (k === "onOcc" && TRUTH) Object.assign(r, { seen: j.seen, missing: j.missing, missingOcc: j.missing_occ, missingTris: j.missing_triangles, missingList: j.missing_list });
+      r[k] = { triangles: j.triangles, bytes: j.bytes, hidden: j.hidden_triangles, shellLinks: j.shell_links, xLinks: j.links.filter((l) => l.xshell).length, ms };
+      if (k === "xOcc" && TRUTH) Object.assign(r, { seen: j.seen, missing: j.missing, missingOcc: j.missing_occ, missingTris: j.missing_triangles, missingList: j.missing_list });
     }
-    log(`${cam.name}: off ${fmt(r.off.triangles)}, off+occ ${fmt(r.offOcc.triangles)}, shell ${fmt(r.on.triangles)} (${r.on.shellLinks} links), shell+occ ${fmt(r.onOcc.triangles)}${TRUTH ? `; seen ${fmt(r.seen)}, missing ${r.missing} (with occ ${r.missingOcc}) [${r.onOcc.ms.toFixed(0)} ms]` : ""}`);
+    log(`${cam.name}: off ${fmt(r.off.triangles)}, off+occ ${fmt(r.offOcc.triangles)}, own shells ${fmt(r.on.triangles)} (${r.on.shellLinks} links), +occ ${fmt(r.onOcc.triangles)}; cross ${fmt(r.x.triangles)} (${r.x.xLinks} links), +occ ${fmt(r.xOcc.triangles)}${TRUTH ? `; seen ${fmt(r.seen)}, missing ${r.missing} (with occ ${r.missingOcc}) [${r.xOcc.ms.toFixed(0)} ms]` : ""}`);
     rows.push(r);
   }
-  return { per, rows };
+  return { per, rows, xshell: xs };
 }
 
 /** Each link indexed again with shell=<views>x<res> for each count asked, its exterior elements against the largest count's. */
@@ -316,6 +328,52 @@ async function shellCompare(label, files, cache, place) {
   return out;
 }
 
+/** The cross-link pass computed again with <views>x<res> for each count asked (a host each), its marks against the last's;
+ *  the outside walk's triangles for the site and half-site orbits at 0 deg. */
+async function crossCompare(label, nlinks, bounds) {
+  const out = [], sets = [];
+  const cams = shellCameras(bounds).filter((c) => c.name === "orbit1@0" || c.name === "orbit1/2@0" || c.name === "approach 20 m");
+  for (const v of XCOMPARE) {
+    const env = { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_CACHE_DIR: CUR.cache, BIMBLE_TILES: `cross=${v}x${SHELL_RES}` };
+    const H = await startHost(`tiles_tool_${label}_x${v}`, env, CUR.project ? [CUR.project] : []);
+    if (!CUR.project) { await H.call("action", "new"); await H.call("action", "link_model", { paths: CUR.files }); }
+    for (let i = 0; i < 24000; i++) {
+      const r = JSON.parse((await H.call("query", "links_panel", {})).text).models;
+      if (r.length >= nlinks && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed" || m.state === "refused")) break;
+      await sleep(100);
+    }
+    if (CUR.place) for (let k = 0; k < nlinks; k++) {
+      const nm = CUR.files[k].split("/").pop();
+      await H.call("action", "manage_links", { op: "unpin", name: nm });
+      await H.call("action", "manage_links", { op: "place", name: nm, move_mm: CUR.place(k) });
+    }
+    const q0 = `tiles_frame=1&eye=${cams[0].eye.join(",")}&at=${cams[0].at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=auto`;
+    let xs = null;
+    const t0 = performance.now();
+    for (let i = 0; i < 72000; i++) { xs = json((await H.get(q0)).bytes).xshell; if (!xs || xs.state !== 1) break; await sleep(100); }
+    const marks = [];
+    for (let k = 0; k < nlinks; k++) { const g = await H.get(`link=${k}&tiles=xshell`); marks.push(g.status === 200 ? g.bytes : null); }
+    const tris = {};
+    for (const c of cams) tris[c.name] = json((await H.get(`tiles_frame=1&eye=${c.eye.join(",")}&at=${c.at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=auto`)).bytes).triangles;
+    log(`cross ${v}x${SHELL_RES}: state ${xs?.state}, ${fmt(xs?.exterior ?? 0)} of ${fmt(xs?.elements ?? 0)} exterior, ${fmt(xs?.ms ?? 0)} ms (waited ${fmt(performance.now() - t0)}), triangles ${JSON.stringify(tris)}`);
+    out.push({ views: v, state: xs?.state, ms: xs?.ms, exterior: xs?.exterior, elements: xs?.elements, peak: xs?.peak, tris });
+    sets.push(marks);
+    H.kill();
+  }
+  const ref = sets[sets.length - 1];
+  for (let i = 0; i < out.length; i++) {
+    let missed = 0, extra = 0;
+    for (let k = 0; k < ref.length; k++) {
+      const a = sets[i][k], b = ref[k];
+      if (!a || !b || a.length !== b.length) continue;
+      for (let j = 0; j < a.length; j++) { if (b[j] && !a[j]) missed++; if (a[j] && !b[j]) extra++; }
+    }
+    Object.assign(out[i], { missed, extra });
+  }
+  return out;
+}
+let CUR = {}; // the linked set being measured (crossCompare starts hosts of its own)
+
 // ---- the sets ----
 async function setSynth17() {
   const dir = join(WORK, "synth17"), cache = join(WORK, "synth17-cache");
@@ -348,6 +406,7 @@ function convert(files, cache, env = {}) {
 }
 
 async function linkedSet(label, files, cache, place, project) {
+  CUR = { files, cache, place, project };
   const conv = convert(files, cache);
   if (SHELL && COMPARE.length) conv.compare = await shellCompare(label, files, cache, place);
   const H = await startHost(`tiles_tool_${label}`, { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_CACHE_DIR: cache }, project ? [project] : []);
@@ -361,6 +420,7 @@ async function linkedSet(label, files, cache, place, project) {
     if (r.length >= n && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed" || m.state === "refused")) break;
     await sleep(100);
   }
+  { const r = JSON.parse((await H.call("query", "links_panel", {})).text).models; log(`${label}: links ${r.map((m) => `${m.state}${m.indexing ? "+indexing" : ""}`).join(" ")}`); }
   if (place) for (let k = 0; k < n; k++) {
     const nm = files[k].split("/").pop();
     await H.call("action", "manage_links", { op: "unpin", name: nm });
@@ -404,6 +464,7 @@ async function report(label, H, nlinks, open, conv, buildMs) {
   log(`${label}: cameras on ${main.length} of ${boxes.length} pyramids (${outliers} far away), box ${bounds.map((x) => Math.round(x / 1000)).join(",")} m`);
   const fr = SHELL ? {} : await frames(H, bounds);
   const shellRes = SHELL ? await shellReport(H, pys, bounds) : null;
+  if (SHELL && XCOMPARE.length && nlinks) shellRes.xcompare = await crossCompare(label, nlinks, bounds, open);
   if (SHELL) { const pk = H.rss(); H.kill(); return { label, conv, shell: shellRes, hostPeak: pk, outliers, box: bounds.map((x) => Math.round(x / 1000)), buildMs }; }
   const formats = [];
   for (const p of pys) formats.push(await leafFormats(H, p));
@@ -475,21 +536,28 @@ function mdShell(rs) {
       L.push("| link | elements | exterior | exterior tris / detail | shell ms | peak (process) |", "|---|---|---|---|---|---|");
       r.conv.forEach((c, i) => c.shell && L.push(`| #${i + 1} | ${fmt(c.shell.elements)} | ${fmt(c.shell.exterior)} | ${fmt(c.shell.extTris)} / ${fmt(c.shell.detail)} | ${fmt(c.shell.ms)} | ${MB(c.indexPeak)} |`));
       L.push("");
+      if (r.shell.xcompare) {
+        L.push("| cross-link views | exterior elements | missed against the last | extra | pass ms | buffers | outside walk triangles |", "|---|---|---|---|---|---|---|");
+        for (const c of r.shell.xcompare) L.push(`| ${c.views} | ${fmt(c.exterior ?? 0)} | ${fmt(c.missed)} | ${fmt(c.extra)} | ${fmt(c.ms ?? 0)} | ${MB(c.peak ?? 0)} | ${Object.entries(c.tris).map(([k, t]) => `${k} ${fmt(t)}`).join(", ")} |`);
+        L.push("");
+      }
       if (r.conv.compare) {
         L.push("| views | exterior elements | missed against the last | extra | classification ms | buffers |", "|---|---|---|---|---|---|");
         for (const c of r.conv.compare) L.push(`| ${c.views} | ${fmt(c.exterior)} | ${fmt(c.missed)} | ${fmt(c.extra)} | ${fmt(c.classifyMs)} | ${MB(c.peak)} |`);
         L.push("");
       }
     }
-    L.push("| camera | off | off + occ | shell | shell + occ | bytes off / shell | links shelled | seen | missing (shell) | missing (shell + occ) |", "|---|---|---|---|---|---|---|---|---|---|");
-    for (const x of r.shell.rows) L.push(`| ${x.name} | ${fmt(x.off.triangles)} | ${fmt(x.offOcc.triangles)} | ${fmt(x.on.triangles)} | ${fmt(x.onOcc.triangles)} | ${MB(x.off.bytes)} / ${MB(x.on.bytes)} | ${x.on.shellLinks} | ${x.seen !== undefined ? fmt(x.seen) : "-"} | ${x.missing ?? "-"} | ${x.missingOcc ?? "-"} |`);
+    const xs = r.shell.xshell;
+    if (xs) L.push(`cross-link pass: state ${xs.state} (2 ready), ${fmt(xs.exterior)} of ${fmt(xs.elements)} elements exterior, ${fmt(xs.ms)} ms, buffers ${MB(xs.peak)}`, "");
+    L.push("| camera | off | off + occ | own shells | own + occ | cross-link | cross + occ | bytes off / own / cross | links shelled (cross) | seen | missing (cross) | missing (cross + occ) |", "|---|---|---|---|---|---|---|---|---|---|---|---|");
+    for (const x of r.shell.rows) L.push(`| ${x.name} | ${fmt(x.off.triangles)} | ${fmt(x.offOcc.triangles)} | ${fmt(x.on.triangles)} | ${fmt(x.onOcc.triangles)} | ${fmt(x.x.triangles)} | ${fmt(x.xOcc.triangles)} | ${MB(x.off.bytes)} / ${MB(x.on.bytes)} / ${MB(x.x.bytes)} | ${x.on.shellLinks} (${x.x.xLinks}) | ${x.seen !== undefined ? fmt(x.seen) : "-"} | ${x.missing ?? "-"} | ${x.missingOcc ?? "-"} |`);
     const ml = r.shell.rows.flatMap((x) => (x.missingList ?? []).map((m) => ({ ...m, cam: x.name })));
     if (ml.length) {
       L.push("", "Largest missing elements (shell): " + ml.sort((a, b) => b.size_mm - a.size_mm).slice(0, 20).map((m) => `${m.class} ${fmt(m.size_mm)} mm ${m.triangles} tris (link ${m.link + 1}, ${m.cam})`).join("; "));
     }
     L.push("");
   }
-  L.push("```json", JSON.stringify(rs.map((r) => ({ label: r.label, per: r.shell.per, rows: r.shell.rows, compare: r.conv?.compare })), null, 0), "```", "");
+  L.push("```json", JSON.stringify(rs.map((r) => ({ label: r.label, per: r.shell.per, rows: r.shell.rows, xshell: r.shell.xshell, xcompare: r.shell.xcompare, compare: r.conv?.compare })), null, 0), "```", "");
   return L.join("\n");
 }
 

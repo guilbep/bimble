@@ -42,6 +42,7 @@
 #include "meshcodec.h" /* SIZE3 */
 #include "tiles.h"     /* TILE1 */
 #include "shell.h"     /* SHELL1 */
+#include "xshell.h"    /* SHELL1 */
 #include "ifc_math.h"  /* SHELL1: cc_sin, cc_cos (the section box's turn) */
 #include "jobs.h"
 #include "json_w.h"
@@ -534,10 +535,12 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
 
 /* The answer to `req` ("toc", or tile ids "a,b,c") from the section sec[0..n) (checked here: untrusted) of a scene
  * whose leaves come from `src`. The HTTP status; `out` the bytes or the error text. */
-static int tiles_answer(const cc_tiles_src *src, const uint8_t *sec, size_t n, uint32_t ne, const char *req, size_t nreq, Buf *out) {
+static int tiles_answer(const cc_tiles_src *src, const uint8_t *sec, size_t n, uint32_t ne, const char *req, size_t nreq, Buf *out,
+                        const uint8_t *xmask, uint32_t nx) {
     cc_tiles_toc toc;
     cc_error err;
     if (cc_tiles_check(sec, n, 1, ne, &toc, &err)) return buf_puts(out, err.msg), 500;
+    if (xmask && nx == toc.nlist && (toc.bake & CC_TILES_BAKE_SHELL)) toc.xmask = xmask; /* SHELL1: the cross-link shell */
     if (nreq == 3 && !memcmp(req, "occ", 3)) { /* the occluders (after the table of contents) */
         buf_append(out, toc.occ, 36 * (size_t)toc.nocc);
         return out->oom ? (buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), 500) : 200;
@@ -574,7 +577,12 @@ static int tiles_answer(const cc_tiles_src *src, const uint8_t *sec, size_t n, u
         uint32_t kind = (t.flags & CC_TILE_LEAF) ? 1 : (t.flags & CC_TILE_PROXY) ? 2 : 0;
         cc_tile_shell sr;
         cc_tiles_shell_get(&toc, ids[i], &sr);
-        if (shell && !(t.flags & CC_TILE_EXTERIOR)) kind = 0; /* nothing seen from outside */
+        int has_ext = (t.flags & CC_TILE_EXTERIOR) != 0;
+        if (shell && toc.xmask) { /* the cross-link shell: its own marks */
+            has_ext = 0;
+            for (uint32_t k = 0; k < t.nel && !has_ext; k++) has_ext = toc.xmask[t.el0 + k] != 0;
+        }
+        if (shell && !has_ext) kind = 0; /* nothing seen from outside */
         else if (shell && kind == 2 && !(sr.flags & CC_TILE_SHELL_PROXY)) kind = 0;
         PUT32(ids[i]);
         PUT32(kind);
@@ -647,7 +655,15 @@ int cc_link_tiles(cc_session *s, uint64_t k, const char *name, size_t nname, int
                 cc_tiles_free(&t);
             }
         }
-        if (sec) st = tiles_answer(&src, sec, sn, ne, req, nreq, out);
+        uint32_t nx = 0;
+        const uint8_t *xm = cc_xshell_marks(s, l, &nx); /* SHELL1 */
+        if (sec && nreq == 6 && !memcmp(req, "xshell", 6)) { /* SHELL1: the cross-link shell's marks of this link */
+            int xs = cc_xshell_poll(s);
+            xm = cc_xshell_marks(s, l, &nx);
+            if (xs == 1) st = 202, buf_puts(out, "computing");
+            else if (!xm) st = 204;
+            else st = 200, buf_append(out, xm, nx);
+        } else if (sec) st = tiles_answer(&src, sec, sn, ne, req, nreq, out, xm, nx);
         buf_free(&rd);
     }
     *p = out->p ? out->p : "", *n = out->len;
@@ -679,7 +695,7 @@ int cc_mesh_tiles(cc_session *s, uint64_t budget, const char *req, size_t nreq, 
     }
     cc_tiles_src src = {sc, NULL};
     if (s->view == CC_VIEW_FILE && s->vf && s->view_tiles.len) { /* a view file opened with its pyramid: served as it is */
-        int st = tiles_answer(&src, (const uint8_t *)s->view_tiles.p, s->view_tiles.len, (uint32_t)sc->nelements, req, nreq, out);
+        int st = tiles_answer(&src, (const uint8_t *)s->view_tiles.p, s->view_tiles.len, (uint32_t)sc->nelements, req, nreq, out, NULL, 0);
         if (st != 500) {
             *p = out->p ? out->p : "", *n = out->len;
             return st;
@@ -736,7 +752,7 @@ int cc_mesh_tiles(cc_session *s, uint64_t budget, const char *req, size_t nreq, 
     int st = s->tiles_status;
     if (st == 202) buf_u64(out, s->tiles->done), buf_putc(out, ' '), buf_u64(out, s->tiles->total);
     else if (st == 500) buf_append(out, s->tiles_err.p, s->tiles_err.len);
-    else st = tiles_answer(&src, (const uint8_t *)s->tiles->out.p, s->tiles->out.len, (uint32_t)sc->nelements, req, nreq, out);
+    else st = tiles_answer(&src, (const uint8_t *)s->tiles->out.p, s->tiles->out.len, (uint32_t)sc->nelements, req, nreq, out, NULL, 0);
     *p = out->p ? out->p : "", *n = out->len;
     return st;
 }
@@ -789,6 +805,10 @@ typedef struct { /* one pyramid's part of a frame */
     double sel_ms;
     int shell, invalid;     /* SHELL1: the outside walk applied; or not, the bake made invalid by a section or a hidden element */
     const cc_scene *rows;   /* SHELL1: the pyramid's rows (their GlobalIds) */
+    const cc_link *link;    /* SHELL1: its link (the cross-link marks), NULL the open scene */
+    uint8_t *xtile;         /* SHELL1: the cross-link shell attached: per tile, holds an exterior element */
+    uint32_t *xtris;        /*         and their triangles */
+    int xs;                 /* SHELL1: the cross-link marks used */
     uint8_t *seen, *drawn;  /* SHELL1 truth: per element, seen in the full render; depicted by the selection */
     uint64_t vis, miss, miss_tris, miss_occ;
 } FrameP;
@@ -820,11 +840,42 @@ static int shell_valid(cc_session *s, const FrameP *f, const cc_scene *rows) {
     }
     if (rows && (v->hidden.n || v->isolated.n || v->has_temp || v->by_view.n))
         for (uint32_t i = 0; i < f->toc.nlist; i++) {
-            if (!(cc_tiles_el_flags(&f->toc, i) & CC_TILES_EL_EXTERIOR)) continue;
+            if (!cc_tiles_el_exterior(&f->toc, i)) continue;
             uint32_t e = cc_tiles_list(&f->toc, i);
             if (e < rows->nelements && cc_vis_hidden(v, &rows->elements[e].id)) return 0;
         }
     return 1;
+}
+
+/* SHELL1: the cross-link marks onto the pyramid: per tile whether it holds an exterior element and their triangles (prefix
+ * sums over the list: O(list + tiles)) */
+static int attach_cross(FrameP *f, const uint8_t *xm) {
+    uint32_t nl = f->toc.nlist, nt = f->toc.ntiles;
+    uint64_t *pc = malloc(((size_t)nl + 1) * sizeof *pc), *pt = malloc(((size_t)nl + 1) * sizeof *pt);
+    f->xtile = malloc((size_t)nt + 1), f->xtris = malloc(((size_t)nt + 1) * sizeof *f->xtris);
+    if (!pc || !pt || !f->xtile || !f->xtris) return free(pc), free(pt), -1;
+    pc[0] = pt[0] = 0;
+    for (uint32_t i = 0; i < nl; i++) {
+        uint32_t e = cc_tiles_list(&f->toc, i);
+        size_t b = cc_tiles_src_el_block(&f->src, e);
+        uint64_t tr = 0;
+        if (b != SIZE_MAX && e < f->ne) {
+            int sh = f->src.vf ? f->src.vf->elements[e].shape : f->src.scene->elements[e].shape;
+            const cc_mesh *cm = f->src.vf ? (sh >= 0 ? &f->src.vf->shapes[sh] : &f->src.vf->elements[e].mesh) : (sh >= 0 ? &f->src.scene->shapes[sh] : &f->src.scene->elements[e].mesh);
+            tr = cm->ni / 3;
+        }
+        pc[i + 1] = pc[i] + (xm[i] != 0), pt[i + 1] = pt[i] + (xm[i] ? tr : 0);
+    }
+    for (uint32_t i = 0; i < nt; i++) {
+        cc_tile t;
+        cc_tiles_get(&f->toc, i, &t);
+        f->xtile[i] = pc[t.el0 + t.nel] > pc[t.el0];
+        uint64_t x = pt[t.el0 + t.nel] - pt[t.el0];
+        f->xtris[i] = x > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)x;
+    }
+    free(pc), free(pt);
+    f->toc.xmask = xm, f->toc.xtile = f->xtile, f->toc.xtris = f->xtris;
+    return 0;
 }
 
 static int frame_select(cc_session *s, FrameP *f, const cc_tiles_frame_q *q) {
@@ -837,6 +888,11 @@ static int frame_select(cc_session *s, FrameP *f, const cc_tiles_frame_q *q) {
     if (!f->ids || !f->hid) return -1;
     double t0 = s->pf->now_ms(s->pf->ctx);
     f->shell = q->shell == 1 ? (f->toc.bake & CC_TILES_BAKE_SHELL) != 0 : q->shell == 2 ? cc_tiles_shell_outside(&f->toc, v.eye, q->shell_margin) : 0;
+    if (f->shell && q->xshell && f->link) { /* SHELL1: the cross-link marks, when ready, in place of the link's own */
+        uint32_t nx = 0;
+        const uint8_t *xm = cc_xshell_marks(s, f->link, &nx);
+        if (xm && nx == f->toc.nlist && attach_cross(f, xm) == 0) f->xs = 1;
+    }
     if (f->shell && q->shell == 2 && !shell_valid(s, f, f->rows)) f->shell = 0, f->invalid = 1;
     unsigned fl = (q->lod ? 0 : CC_TILES_SEL_LEAVES) | (f->shell ? CC_TILES_SEL_SHELL : 0);
     f->n = cc_tiles_select(&f->toc, &v, q->error_px, q->budget, fl, NULL, f->ids, f->toc.ntiles, &f->tris);
@@ -855,7 +911,7 @@ static void frame_write(FrameP *f, const cc_tiles_frame_q *q, JsonW *w, double t
         cc_tiles_get(&f->toc, f->ids[i], &t);
         cc_tiles_shell_get(&f->toc, f->ids[i], &sr);
         if (f->shell && f->toc.shell) { /* SHELL1: what the outside walk fetches and draws */
-            if (t.flags & CC_TILE_LEAF) t.tris = sr.ext;
+            if (t.flags & CC_TILE_LEAF) t.tris = f->xs ? f->xtris[f->ids[i]] : sr.ext;
             else t.tris = sr.tris, t.len = sr.len;
         }
         if (f->hid[i]) { hn++, ht += t.tris; continue; }
@@ -890,6 +946,7 @@ static void frame_write(FrameP *f, const cc_tiles_frame_q *q, JsonW *w, double t
     jw_key(w, "tiles"), jw_u64(w, np + nl);
     jw_key(w, "toc_bytes"), jw_u64(w, f->toc.toc);
     jw_key(w, "triangles"), jw_u64(w, tris);
+    jw_key(w, "xshell"), jw_bool(w, f->xs);
     jw_obj_end(w);
     tot[0] += (double)tris, tot[1] += (double)(np + nl), tot[2] += (double)pb, tot[3] += (double)lb, tot[4] += (double)f->toc.toc;
     tot[5] += f->toc.ntiles ? (double)r.detail : 0, tot[6] += (double)ht, tot[7] += (double)hn;
@@ -1023,7 +1080,7 @@ static int frame_truth(cc_session *s, FrameP *fp, size_t nf, const cc_tiles_fram
             cc_tile t;
             cc_tiles_get(&f->toc, f->ids[k], &t);
             for (uint32_t e = 0; e < t.nel; e++)
-                if (!f->shell || (cc_tiles_el_flags(&f->toc, t.el0 + e) & CC_TILES_EL_EXTERIOR)) {
+                if (!f->shell || cc_tiles_el_exterior(&f->toc, t.el0 + e)) {
                     uint32_t r = cc_tiles_list(&f->toc, t.el0 + e);
                     if (r < f->ne) f->drawn[r] = f->hid[k] ? 2 : 1;
                 }
@@ -1084,6 +1141,7 @@ int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
     if (!fp) return -1;
     TruthMiss miss[TRUTH_LIST];
     uint32_t nmiss = 0;
+    int xstate = q->shell && q->xshell ? cc_xshell_poll(s) : 0; /* SHELL1: the cross-link shell started, or taken when ready */
     size_t nf = 0;
     if (s->tiles_status == 200 && s->tiles && s->tiles_scene) { /* the open scene's pyramid, once built (cc_mesh_tiles) */
         FrameP *f = &fp[nf++];
@@ -1108,7 +1166,7 @@ int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
         cc_link_placement(s, l, &f->c, &f->si, t);
         const double *lo = cc_link_rows(l)->origin;
         f->o[0] = f->c * lo[0] - f->si * lo[1] + t[0], f->o[1] = f->si * lo[0] + f->c * lo[1] + t[1], f->o[2] = lo[2] + t[2];
-        f->name = l->name, f->ne = (uint32_t)cc_link_rows(l)->nelements, f->rows = cc_link_rows(l);
+        f->name = l->name, f->ne = (uint32_t)cc_link_rows(l)->nelements, f->rows = cc_link_rows(l), f->link = l;
         nf++;
     }
     jw_obj_begin(&w);
@@ -1135,14 +1193,14 @@ int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
             tot[7] += 0, (void)t0;
         }
         if (q->truth && frame_truth(s, fp, nf, q, miss, &nmiss)) {
-            for (size_t i = 0; i < nf; i++) free(fp[i].ids), free(fp[i].hid), free(fp[i].seen), free(fp[i].drawn);
+            for (size_t i = 0; i < nf; i++) free(fp[i].ids), free(fp[i].hid), free(fp[i].seen), free(fp[i].drawn), free(fp[i].xtile), free(fp[i].xtris);
             free(fp);
             return -1;
         }
         for (size_t i = 0; i < nf; i++)
             if (fp[i].ids) frame_write(&fp[i], q, &w, tot);
     }
-    for (size_t i = 0; i < nf; i++) free(fp[i].ids), free(fp[i].hid), free(fp[i].seen), free(fp[i].drawn);
+    for (size_t i = 0; i < nf; i++) free(fp[i].ids), free(fp[i].hid), free(fp[i].seen), free(fp[i].drawn), free(fp[i].xtile), free(fp[i].xtris);
     free(fp);
     jw_arr_end(&w);
     if (q->bounds_only) {
@@ -1177,6 +1235,18 @@ int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
         jw_key(&w, "tiles"), jw_u64(&w, (uint64_t)tot[1]);
         jw_key(&w, "toc_bytes"), jw_u64(&w, (uint64_t)tot[4]);
         jw_key(&w, "triangles"), jw_u64(&w, (uint64_t)tot[0]);
+        { /* SHELL1: the cross-link pass: 0 none, 1 computing, 2 ready, -1 failed; its numbers */
+            uint64_t xe, xel, xpk;
+            double xms;
+            cc_xshell_stats(s, &xe, &xel, &xms, &xpk);
+            jw_key(&w, "xshell"), jw_obj_begin(&w);
+            jw_key(&w, "elements"), jw_u64(&w, xel);
+            jw_key(&w, "exterior"), jw_u64(&w, xe);
+            jw_key(&w, "ms"), jw_f64(&w, xms);
+            jw_key(&w, "peak"), jw_u64(&w, xpk);
+            jw_key(&w, "state"), jw_i64(&w, xstate);
+            jw_obj_end(&w);
+        }
     }
     jw_obj_end(&w);
     return jw_finish(&w) == JW_OK && !out->oom ? 0 : -1;

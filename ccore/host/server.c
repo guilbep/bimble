@@ -663,6 +663,7 @@ static void handle_one(Conn *c, int *again) {
                 q.shell_margin = 2000;
                 if (query_param(query, "margin", &x)) ok &= parse_nums(x, &q.shell_margin, 1);
                 q.truth = query_param(query, "truth", &x) && str_eq(x, "1");
+                q.xshell = !(query_param(query, "xshell", &x) && str_eq(x, "0"));
                 double th = fov * 3.141592653589793 / 360.0; /* tan by its series: no libm here */
                 q.tan_half = th + th * th * th / 3 + 2 * th * th * th * th * th / 15 + 17 * th * th * th * th * th * th * th / 315;
                 Buf fb;

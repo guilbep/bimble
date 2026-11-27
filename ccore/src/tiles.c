@@ -21,7 +21,7 @@ void cc_tiles_default(cc_tiles_opts *o) {
     o->root_tris = CC_TILES_ROOT_TRIS;
     o->res = CC_TILES_RES;
     o->occ = CC_TILES_OCC;
-    o->shell_views = CC_TILES_SHELL_VIEWS, o->shell_res = CC_TILES_SHELL_RES, o->shell_tol = CC_TILES_SHELL_TOL;
+    o->shell_views = CC_TILES_SHELL_VIEWS, o->shell_res = CC_TILES_SHELL_RES, o->shell_tol = CC_TILES_SHELL_TOL, o->shell_cross = 1;
 }
 
 void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n) {
@@ -38,7 +38,7 @@ void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n) {
 
 void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t) {
     cc_tiles_default(o);
-    static const struct { const char *k; uint32_t lo, hi; } K[] = {{"leaf", 1000, 10000000}, {"proxy", 64, 1000000}, {"root", 16, 1000000}, {"res", 4, 1024}, {"occ", 0, CC_TILES_OCC_MAX}, {"shell", 0, 0}, {"shell_d", 0, 100000}};
+    static const struct { const char *k; uint32_t lo, hi; } K[] = {{"leaf", 1000, 10000000}, {"proxy", 64, 1000000}, {"root", 16, 1000000}, {"res", 4, 1024}, {"occ", 0, CC_TILES_OCC_MAX}, {"shell", 0, 0}, {"shell_d", 0, 100000}, {"cross", 0, 1}};
     for (const char *p = t; p && *p;) {
         while (*p == ' ') p++;
         for (size_t i = 0; i < sizeof K / sizeof *K; i++) {
@@ -48,6 +48,14 @@ void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t) {
             const char *q = p + kl + 1;
             int d = 0;
             while (*q >= '0' && *q <= '9' && d < 10) v = v * 10 + (uint64_t)(*q++ - '0'), d++;
+            if (i == 7 && d && v <= CC_SHELL_MAX_VIEWS_T && *q == 'x') { /* SHELL1: cross=<views>x<res> */
+                uint64_t r = 0;
+                int dr = 0;
+                q++;
+                while (*q >= '0' && *q <= '9' && dr < 10) r = r * 10 + (uint64_t)(*q++ - '0'), dr++;
+                if (v && dr && r >= 16 && r <= CC_SHELL_MAX_RES_T) o->shell_cross = 1, o->cross_views = (uint32_t)v, o->cross_res = (uint32_t)r;
+                continue;
+            }
             if (i == 5 && d && v <= CC_SHELL_MAX_VIEWS_T) { /* SHELL1: shell=<views>x<res> (0: none) */
                 uint64_t r = 0;
                 int dr = 0;
@@ -62,7 +70,7 @@ void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t) {
             }
             if (d && v >= K[i].lo && v <= K[i].hi) {
                 uint32_t x = (uint32_t)v;
-                if (i == 0) o->leaf_tris = x; else if (i == 1) o->proxy_tris = x; else if (i == 2) o->root_tris = x; else if (i == 3) o->res = x; else if (i == 4) o->occ = x; else o->shell_tol = x;
+                if (i == 0) o->leaf_tris = x; else if (i == 1) o->proxy_tris = x; else if (i == 2) o->root_tris = x; else if (i == 3) o->res = x; else if (i == 4) o->occ = x; else if (i == 5) {} else if (i == 6) o->shell_tol = x; else o->shell_cross = x;
             }
         }
         while (*p && *p != ' ') p++;
@@ -1601,6 +1609,7 @@ void cc_tiles_get(const cc_tiles_toc *toc, uint32_t i, cc_tile *o) {
 
 uint32_t cc_tiles_list(const cc_tiles_toc *toc, uint32_t i) { return rd32(toc->list + 4 * (size_t)i); }
 uint32_t cc_tiles_el_flags(const cc_tiles_toc *toc, uint32_t i) { return toc->eflags[i]; }
+int cc_tiles_el_exterior(const cc_tiles_toc *toc, uint32_t i) { return toc->xmask ? toc->xmask[i] != 0 : (toc->eflags[i] & CC_TILES_EL_EXTERIOR) != 0; }
 
 int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelements, cc_tiles_toc *toc, cc_error *err) {
     memset(toc, 0, sizeof *toc);
@@ -1775,12 +1784,12 @@ int cc_tiles_leaf_answer_ex(const cc_tiles_src *src, const cc_tiles_toc *toc, ui
     uint32_t nb = 0;
     size_t head = out->len;
     uint32_t nel = 0;
-    for (uint32_t i = 0; i < t.nel; i++) nel += !only || (cc_tiles_el_flags(toc, t.el0 + i) & CC_TILES_EL_EXTERIOR);
+    for (uint32_t i = 0; i < t.nel; i++) nel += !only || cc_tiles_el_exterior(toc, t.el0 + i);
     buf_append(out, "TLF1", 4);
     put32(out, id), put32(out, nel), put32(out, 0);
     static const float ID[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
     for (uint32_t i = 0; i < t.nel; i++) {
-        if (only && !(cc_tiles_el_flags(toc, t.el0 + i) & CC_TILES_EL_EXTERIOR)) continue;
+        if (only && !cc_tiles_el_exterior(toc, t.el0 + i)) continue;
         uint32_t el = cc_tiles_list(toc, t.el0 + i);
         if (el >= ne) return free(blk), free(order), fail(err, "tiles: an element");
         int sh = src_shape(src, el);
@@ -1968,7 +1977,16 @@ static int sel_cmp(const void *x, const void *y) {
  * shell table's (its exterior proxy), or none (descend) when the table says so */
 static void sel_get(const cc_tiles_toc *toc, uint32_t i, int shell, cc_tile *t) {
     cc_tiles_get(toc, i, t);
-    if (!shell || !toc->shell) return;
+    if (!shell) return;
+    if (toc->xmask && toc->xtile) { /* the cross-link shell: what a tile holds seen from outside */
+        if (toc->xtile[i]) t->flags |= CC_TILE_EXTERIOR;
+        else t->flags &= ~(uint32_t)CC_TILE_EXTERIOR;
+        if ((t->flags & CC_TILE_LEAF) && toc->xtris) {
+            t->tris = toc->xtris[i];
+            return;
+        }
+    }
+    if (!toc->shell) return;
     cc_tile_shell r;
     cc_tiles_shell_get(toc, i, &r);
     if (t->flags & CC_TILE_LEAF) t->tris = r.ext;

@@ -80,6 +80,13 @@ typedef struct {
 void cc_shell_dirs(uint32_t n, double *out);
 
 typedef struct cc_shell cc_shell;
+/* One pyramid of several classified together (the cross-link pass: the links of a project, each placed): world = R p + o,
+ * R the turn about Z of cosine c and sine s. A part's elements are its src's rows. */
+typedef struct {
+    cc_tiles_src src;
+    cc_tiles_toc toc;
+    double c, s, o[3];
+} cc_shell_part;
 typedef struct {
     uint64_t drawn, tested;       /* triangles drawn (pass 1, per view) and tested (pass 2) */
     uint64_t box_tests, box_hidden;
@@ -93,8 +100,11 @@ typedef struct {
 int cc_shell_start(cc_shell **out, const cc_tiles_src *src, const cc_tiles_toc *toc, const cc_shell_opts *o, cc_error *err);
 /* About `budget` triangles more (drawn or tested, per view). 1 done, 0 more, -1 err (out of memory, a mesh). */
 int cc_shell_step(cc_shell *s, uint64_t budget, cc_error *err);
+/* Several pyramids together (each part's opaque elements hide the others'); the views frame the union. */
+int cc_shell_start_parts(cc_shell **out, const cc_shell_part *parts, uint32_t nparts, const cc_shell_opts *o, cc_error *err);
 /* Per scene element (the src's rows): 1 exterior. Complete after the last step. */
 const uint8_t *cc_shell_exterior(const cc_shell *s);
+const uint8_t *cc_shell_exterior_of(const cc_shell *s, uint32_t part); /* part k's rows */
 void cc_shell_get_stats(const cc_shell *s, cc_shell_stats *st);
 void cc_shell_free(cc_shell *s);
 #endif
