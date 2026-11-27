@@ -78,6 +78,32 @@ registerOptimisation(setting("gpu_cull", {
   hint: { fr: "Avec WebGPU : les copies d'une forme testées par un compute shader.", en: "With WebGPU: a shape's copies tested by a compute shader." },
 }));
 
+// ---- VIS1 (ADR 0078 amendment 7): the 3D view's own; WebGL2 only for now (the WebGPU renderer draws everything, with
+// lines, and completes its picture on screen: ADR 0078 amendment 7, "What the WebGPU renderer needs") ----
+registerOptimisation(setting("draw_visible", {
+  label: { fr: "Dessiner seulement ce qui se voit", en: "Draw only what can be seen" }, kind: "toggle", default: false, off: false,
+  hint: { fr: "WebGL2 : une image au repos laisse de côté ce que l'image précédente montre caché (désactivé par défaut : en vérification sur de grands projets de liens).",
+    en: "WebGL2: a still picture leaves out what the previous one shows hidden (off by default: being checked on large projects of links)." },
+}));
+registerOptimisation(setting("edge_mode", {
+  label: { fr: "Arêtes en 3D", en: "Edges in 3D" }, kind: "choice", default: "screen", off: "lines",
+  hint: { fr: "WebGL2 : trouvées à l'écran (une passe) ; « lignes » : chaque arête de chaque élément (exact, 2 à 3 fois plus lent).",
+    en: "WebGL2: found on screen (one pass); \u201clines\u201d: every element's edges (exact, 2 to 3 times slower)." },
+  choices: [{ value: "screen", label: { fr: "à l'écran", en: "on screen" } }, { value: "lines", label: { fr: "lignes", en: "lines" } }, { value: "none", label: { fr: "aucune", en: "none" } }],
+}));
+registerOptimisation(setting("cull_back", {
+  label: { fr: "Faces arrière omises", en: "Back faces skipped" }, kind: "toggle", default: false, off: false,
+  hint: { fr: "WebGL2 : exact seulement pour des solides fermés ; désactivé par défaut.", en: "WebGL2: exact only for closed solids; off by default." },
+}));
+registerOptimisation(setting("still_px", {
+  label: { fr: "Seuil en pixels à l'arrêt", en: "Still pixel cut" }, kind: "number", default: 0, off: 0, min: 0, max: 8, step: 0.5, unit: "px",
+  hint: { fr: "WebGL2 : à l'arrêt, laisser de côté ce qui fait moins de ce nombre de pixels (0 : rien).", en: "WebGL2: when still, leave out what is smaller than this many pixels (0: nothing)." },
+}));
+registerOptimisation(setting("refill_offscreen", {
+  label: { fr: "Compléter hors écran", en: "Complete offscreen" }, kind: "toggle", default: true, off: false,
+  hint: { fr: "WebGL2 : après un mouvement, l'image est complétée hors écran et montrée entière.", en: "WebGL2: after a move the picture is completed offscreen and shown whole." },
+}));
+
 /** The report's lines: each row's value, and its default when it differs. */
 export function optimisationLines(): string[] {
   return rows.map((o) => {

@@ -217,6 +217,9 @@ async function main() {
     { name: "the budget at 0 (the far link released: its proxies)", on: "window.__bbGl.gpuBudget = 0", off: "delete window.__bbGl.gpuBudget", settle: true },
     { name: "a section box around a linked element", on: `b.selectLinked("link_4.ifc", ${JSON.stringify(hit4?.id ?? "")}); b.runAction('section_box')`, off: "b.runAction('section_box'); b.select([])" },
   ];
+  // VIS1 (ADR 0078 amendment 7): WebGL2 finds its 3D edges on screen; the WebGPU renderer draws lines (no offscreen target
+  // yet): WebGL2's pictures here are its line pass (the bench hook lineEdges), like for like
+  await evalJs("(window.__bbGl.lineEdges = true, 0)");
   const lists0 = (await gl()).listsBuilt, whole0 = meshRequests.filter((u) => !/proxies|[?&]link=/.test(u)).length;
   for (const st of STATES) {
     if (st.on) { await B(st.on); await sleep(900); }

@@ -39,7 +39,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port, vitePort } from "./ports.mjs";
 import { hostEnv } from "./lib/host_env.mjs";
-import { gpuFlags } from "./lib/chromium.mjs";
+import { chromiumEnv, gpuFlags } from "./lib/chromium.mjs";
 import { adapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -199,16 +199,14 @@ async function main() {
     await new Promise((r) => s.listen(p, p === PA ? "localhost" : "127.0.0.1", r));
   }
 
-  // One Chromium; its own short TMPDIR (its singleton socket's path must fit).
-  const shortTmp = mkdtempSync(join(existsSync("/tmp") ? "/tmp" : tmpdir(), "bbu-"));
+  // One Chromium; its own short TMPDIR (its singleton socket's path must fit: test/lib/chromium.mjs chromiumEnv, removed on exit).
   const chrome = spawn(CHROMIUM, ["--headless=new", ...gpuFlags(), "--remote-debugging-port=0", "--lang=en-US",
     `--user-data-dir=${join(tmp, "chromium")}`, "--no-first-run", "--no-default-browser-check", "about:blank"],
-  { stdio: ["ignore", "pipe", "pipe"], detached: true, env: { ...process.env, TMPDIR: shortTmp, HOME: tmp } });
+  { stdio: ["ignore", "pipe", "pipe"], detached: true, env: chromiumEnv({ ...process.env, HOME: tmp }) });
   chrome.out = "";
   chrome.stdout.on("data", (d) => (chrome.out += d));
   chrome.stderr.on("data", (d) => (chrome.out += d));
   procs.push(chrome);
-  process.on("exit", () => rmSync(shortTmp, { recursive: true, force: true }));
   const wsUrl = await waitFor("DevTools line", 60000, () => chrome.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1]);
   const cdp = await cdpConnect(wsUrl);
 

@@ -127,6 +127,27 @@ const check = (what, ok, more = "") => { if (ok) passed++; else failed++; consol
         }
         check(`budget ${budget}: the largest on screen first`, largest);
       }
+      // VIS1 (P0-c): the bucketed cut gives the same kind of answer: at most the budget, never empty, the largest
+      // first, and close to the bisection's (its threshold within two buckets: an eighth of an octave); and fast
+      for (const budget of [C.MIN_MOVING_TRIS, 4 * C.MIN_MOVING_TRIS, 1000000]) {
+        const cs = cutsOf(null), a = C.budgetCut(cs, budget), b = C.budgetCutFast(cs, budget, "k");
+        const drawn = cs.reduce((n, c) => n + c.b.cum[C.cutEnd(c, b.t)], 0);
+        let largest = true;
+        for (const c of cs) { const k = C.cutEnd(c, b.t); if (k < c.b.n) largest &&= c.b.size[k] / c.dist < b.t || c.b.size[k] === 0; }
+        check(`VIS1: budgetCutFast ${budget}: ${drawn} triangles (bisection ${a.tris}), threshold ${b.t.toPrecision(3)} against ${a.t.toPrecision(3)}`,
+          drawn > 0 && drawn <= Math.max(budget, a.tris) && drawn === b.tris && largest && (a.t === 0 ? b.t === 0 : b.t >= a.t / 1.0001 && b.t <= a.t * 2 ** (2 / 16)));
+      }
+      {
+        const cs = cutsOf(null), many = Array.from({ length: 5200 }, () => cs).flat(); // 5,200 times the batches: a project of links' count (46,800)
+        let t0 = performance.now();
+        C.budgetCut(many, C.MIN_MOVING_TRIS);
+        const slow = performance.now() - t0;
+        C.budgetCutFast(many, C.MIN_MOVING_TRIS, "warm");
+        t0 = performance.now();
+        C.budgetCutFast(many, C.MIN_MOVING_TRIS, "warm");
+        const fast = performance.now() - t0;
+        check(`VIS1: ${many.length} batches: the bucketed cut ${fast.toFixed(1)} ms against the bisection ${slow.toFixed(1)} ms`, fast < slow / 2);
+      }
       // slices of the budget from where the last stopped: every triangle once
       let k0s = batches.map(() => 0), sum = 0, slices = 0, over = 0;
       for (; slices < 1000; slices++) {
@@ -137,6 +158,17 @@ const check = (what, ok, more = "") => { if (ok) passed++; else failed++; consol
         if (cut.t === 0) break;
       }
       check(`slices of ${C.MIN_MOVING_TRIS}: ${slices + 1} slices draw every triangle once (${sum} of ${total}), ${over} over the budget (a single item larger)`, sum === total && k0s.every((k, i) => k === batches[i].n));
+      { // VIS1: the fill's slices through the bucketed cut too: every triangle once, each slice within the budget
+        let k0f = batches.map(() => 0), sumF = 0, n = 0, overF = 0;
+        for (; n < 1000; n++) {
+          const cs = cutsOf(k0f), cut = C.budgetCutFast(cs, C.MIN_MOVING_TRIS, "s");
+          if (cut.tris > C.MIN_MOVING_TRIS) overF++;
+          sumF += cut.tris;
+          k0f = cs.map((c) => C.cutEnd(c, cut.t));
+          if (cut.t === 0) break;
+        }
+        check(`VIS1: slices through budgetCutFast: ${n + 1} slices draw every triangle once (${sumF} of ${total}), ${overF} over the budget`, sumF === total && k0f.every((k, i) => k === batches[i].n) && overF <= over);
+      }
       // ---- 3D2: the HLOD proxies of the same model, served in steps (GET /mesh?proxies=N) ----
       const X = await import(pathToFileURL(join(here, "../../web-ui/src/gl/proxies.ts")).href);
       let r, steps = 0, progress = "";

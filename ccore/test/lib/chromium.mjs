@@ -3,6 +3,7 @@
 //   spawn(CHROMIUM, ["--headless=new", ...gpuFlags(), ...(wantWebGpu ? webgpuFlags() : []), ...]);
 //   const r = await rendererInfo(evalJs);  // { renderer, hardware } once the page is up
 //   checkGpu(r);                           // throws when LAB_GPU asked a GPU and SwiftShader draws
+//   spawn(CHROMIUM, [...], { env: chromiumEnv() });  // VIS1: its own short TMPDIR (the singleton socket's folder)
 // LAB_GPU (environment) picks what draws the page:
 //   software (default; CI and every committed number before REAL1): SwiftShader, a CPU rasteriser;
 //     with webgpuFlags() Dawn's Vulkan backend on SwiftShader (a fallback adapter, ?gpuSoftware=1).
@@ -11,6 +12,9 @@
 //     adapter on the same GPU (Dawn's Vulkan backend).
 // Flags found by spike NAT1 on Chromium 153 (DEV.md, "3D timings on the machine's GPU"). Headless
 // only: no window is ever shown. Lives in test/lib/, not test/: ci/run.sh runs every test/*.mjs.
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CHROMIUM } from "../ports.mjs";
 
 export { CHROMIUM };
@@ -55,4 +59,26 @@ export function checkGpu(info, mode = LAB_GPU) {
   if (mode !== "software" && !info.hardware) throw new Error(`LAB_GPU=${mode} but the page draws with ${info.renderer} (a software rasteriser)`);
   if (mode === "software" && info.hardware) throw new Error(`LAB_GPU=software but the page draws with ${info.renderer}`);
   return info;
+}
+
+// ---- VIS1: Chromium's TMPDIR. Chromium puts its singleton socket (a Unix socket: sun_path holds 107 bytes and a
+// NUL) under TMPDIR, about 60 characters below it ("org.chromium.Chromium.XXXXXX/SingletonSocket"); a caller whose
+// TMPDIR is a deep scratch folder made Chromium abort at start ("Socket path too long", 113 characters). Each
+// launch gets a short folder of its own directly under the system's temp folder (only the socket and small files
+// go there: the profile, downloads and large outputs stay where the caller puts them), removed on exit. ----
+export const SOCKET_PATH_MAX = 104;
+/** Throws when Chromium's singleton socket would not fit under `dir`. */
+export function checkTmpdir(dir) {
+  if (dir.length + 60 >= SOCKET_PATH_MAX) throw new Error(`TMPDIR=${dir} (${dir.length} characters) is too long for Chromium's singleton socket (a Unix socket path holds ${SOCKET_PATH_MAX} characters, about 60 go below TMPDIR): give Chromium a shorter TMPDIR (test/lib/chromium.mjs chromiumEnv)`);
+  return dir;
+}
+const shortDirs = [];
+let cleaning = false;
+/** The environment for a Chromium launch: `env` with TMPDIR a new short folder (/tmp/bbc-XXXXXX). */
+export function chromiumEnv(env = process.env) {
+  const base = existsSync("/tmp") ? "/tmp" : tmpdir();
+  const dir = checkTmpdir(mkdtempSync(join(base, "bbc-")));
+  shortDirs.push(dir);
+  if (!cleaning) { cleaning = true; process.on("exit", () => { for (const d of shortDirs) try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } }); }
+  return { ...env, TMPDIR: dir };
 }

@@ -104,6 +104,7 @@
   "error": {
    "back": "back",
    "home": "toHome",
+   "open": "open",
    "opened": "opened",
    "closed": "toHome",
    "failed": "failedAgain",

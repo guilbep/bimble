@@ -112,7 +112,7 @@ const close = () => { currentDialog.value = null; };
           <select class="inp" :value="v.moving_fps" data-bb="settings-moving-fps" data-setting="moving_fps" @change="set({ moving_fps: Number(($event.target as HTMLSelectElement).value) })">
             <option v-for="f in [0, 15, 30, 60, 120, 240]" :key="f" :value="f">{{ f === 0 ? tx('settings.moving.0') : tx('settings.moving.fps', { fps: f }) }}</option>
           </select></label>
-        <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ tx('settings.movingNote') }}</p>
+        <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ v.moving_fps === 0 ? tx('settings.moving.0Note') : tx('settings.movingNote') }}</p>
         <!-- 3D2 (ADR 0078): HLOD proxies (moving_proxies, Rust's setting): far cells drawn as stand-ins -->
         <label v-if="s?.applies.moving_proxies" class="row"><span>{{ tx('settings.proxies') }}</span>
           <input type="checkbox" :checked="v.moving_proxies" data-bb="settings-moving-proxies" data-setting="moving_proxies" @change="set({ moving_proxies: ($event.target as HTMLInputElement).checked })"></label>
@@ -136,6 +136,24 @@ const close = () => { currentDialog.value = null; };
             <option v-for="mb in linkGpuChoices" :key="mb" :value="mb">{{ tx('settings.linkGpu.mb', { mb }) }}</option>
           </select></label>
         <p v-if="s?.applies.link_gpu_mb" class="note" data-bb="settings-link-gpu-note">{{ tx('settings.linkGpuNote') }}</p>
+        <!-- VIS1 (ADR 0078 amendment 7): draw only what can be seen (draw_visible, not Rust's) -->
+        <label v-if="s?.applies.draw_visible" class="row"><span>{{ tx('settings.visible') }}</span>
+          <input type="checkbox" :checked="v.draw_visible === true" data-bb="settings-draw-visible" data-setting="draw_visible" @change="set({ draw_visible: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.draw_visible" class="note" data-bb="settings-visible-note">{{ tx('settings.visibleNote') }}</p>
+        <!-- VIS1: the 3D view's other optimisations, each with an exact value -->
+        <label v-if="s?.applies.edge_mode" class="row"><span>{{ tx('settings.edgeMode') }}</span>
+          <select class="inp" :value="v.edge_mode ?? 'screen'" data-bb="settings-edge-mode" data-setting="edge_mode" @change="set({ edge_mode: ($event.target as HTMLSelectElement).value as 'screen' | 'lines' | 'none' })">
+            <option v-for="m in ['screen', 'lines', 'none']" :key="m" :value="m">{{ tx(`settings.edgeMode.${m}`) }}</option>
+          </select></label>
+        <label v-if="s?.applies.still_px" class="row"><span>{{ tx('settings.stillPx') }}</span>
+          <select class="inp" :value="v.still_px ?? 0" data-bb="settings-still-px" data-setting="still_px" @change="set({ still_px: Number(($event.target as HTMLSelectElement).value) })">
+            <option v-for="p in [0, 0.5, 1, 2, 4]" :key="p" :value="p">{{ p === 0 ? tx('settings.stillPx.0') : tx('settings.stillPx.px', { px: p }) }}</option>
+          </select></label>
+        <label v-if="s?.applies.cull_back" class="row"><span>{{ tx('settings.cullBack') }}</span>
+          <input type="checkbox" :checked="v.cull_back === true" data-bb="settings-cull-back" data-setting="cull_back" @change="set({ cull_back: ($event.target as HTMLInputElement).checked })"></label>
+        <label v-if="s?.applies.refill_offscreen" class="row"><span>{{ tx('settings.refill') }}</span>
+          <input type="checkbox" :checked="v.refill_offscreen !== false" data-bb="settings-refill" data-setting="refill_offscreen" @change="set({ refill_offscreen: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.edge_mode" class="note" data-bb="settings-optim-note">{{ tx('settings.optimNote') }}</p>
         <!-- GPU1 (ADR 0083): the 3D renderer (automatic is WebGL2 for now); GPU culling of copies applies with WebGPU -->
         <label v-if="s?.applies.renderer" class="row"><span>{{ tx('settings.renderer') }}</span>
           <select class="inp" :value="v.renderer ?? 'auto'" data-bb="settings-renderer" data-setting="renderer" @change="set({ renderer: ($event.target as HTMLSelectElement).value as 'auto' | 'webgl2' | 'webgpu' })">

@@ -1013,6 +1013,10 @@ export interface SettingsValues {
   /** SHELL1 (ADR 0078 amendment 7): exterior-first fetch and draw order (not Rust's; absent from an older core: priority);
    *  "filter" is experimental (can hide visible elements). */
   shell_mode?: "off" | "priority" | "filter";
+  /** VIS1 (ADR 0078 amendment 7): "Draw only what can be seen" (not Rust's; absent from an older core: off). */
+  draw_visible?: boolean;
+  /** VIS1: the 3D view's edges, back faces culled, the still frame's pixel cut, the refill offscreen (not Rust's). */
+  edge_mode?: "screen" | "lines" | "none"; cull_back?: boolean; still_px?: number; refill_offscreen?: boolean;
 }
 /** `query settings`. */
 export interface UserSettings {
@@ -1020,6 +1024,8 @@ export interface UserSettings {
   note: string | null; text_sizes: [number, number]; themes: string[]; values: SettingsValues;
 }
 export const userSettings = shallowRef<UserSettings | null>(null);
+// VIS1: the stored values the performance report names (its optimisations in force), read without an import cycle
+(window as unknown as { __bbSettings?: () => SettingsValues | null }).__bbSettings = () => userSettings.value?.values ?? null;
 let settingsAsked = false;
 /** Reads the settings (the file may have changed: the Rust app shares it) and applies the look. */
 export function loadSettings(): void {

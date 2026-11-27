@@ -40,6 +40,17 @@ typedef struct {
     unsigned moving_fps;  /* 0..=240, 30 */
     int moving_proxies;   /* true */
     int gpu_cull;         /* false */
+    /* VIS1 (ADR 0078 amendment 7): the lab's 3D view leaves out what the last picture hides ("Draw only what can be
+     * seen", false: exact on the synthetic sweep, not yet on a real project of links). Not one of Rust's fields: not in to_json, written to the file only once set (as renderer). */
+    int draw_visible;
+    /* VIS1 (the owner: every optimisation a setting, a good default and an exact value): the 3D view's edges
+     * ("screen": found on screen, "lines": every element's edge lines, "none"); back faces culled (false: a shape
+     * may be open or wound either way); a still frame leaves out what is under still_px pixels (0..8, 0: off); the
+     * fill after a stop drawn offscreen and shown when complete (refill_offscreen, true). Not Rust's: written once set. */
+    char edge_mode[8];
+    int cull_back;
+    double still_px;
+    int refill_offscreen;
     char theme[24];       /* ui_theme.rs THEMES ids, "grey" */
     char ui_font[12];     /* "roboto" | "ubuntu" */
     float text_size;      /* f32, 10..=16, 12 */
