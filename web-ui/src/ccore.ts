@@ -56,6 +56,7 @@ interface Exports {
   change_json(res: number): number;
   host_mesh(flags: number, res: number): number;
   host_proxies(budget: number, res: number): number; // 3D2
+  host_tiles?(link: number, budget: number, rp: number, rn: number, res: number): number; // TILE1
   host_saved(res: number): number;
   host_saved_path(res: number): number;
   host_open(flags: number, np: number, nn: number, bp: number, bn: number, res: number): number;
@@ -201,6 +202,17 @@ export function ccoreMesh(): { bytes: ArrayBuffer; rev: number } {
 export function ccoreProxies(budget: number): { status: number; bytes: ArrayBuffer; rev: number } {
   if (!module) throw new Error("ccore: not loaded");
   const r = run(module.X.host_proxies.bind(module.X), [], [budget]);
+  return { status: r.status, bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
+}
+
+/** TILE1 (ADR 0078 amendment 6, ccore/src/tiles.h): the tile pyramid (host_tiles, session/mesh.h): `link` >= 0 that
+ *  link's (cc_link_tiles), -1 the open scene's built in steps of `budget` triangles (cc_mesh_tiles: 202 "done total" until
+ *  built); `req` "toc" (the table of contents) or "a,b,c" (a "TILS" answer). Decode with gl/tiles.ts. */
+export function ccoreTiles(link: number, req: string, budget = 200000): { status: number; bytes: ArrayBuffer; rev: number } {
+  if (!module) throw new Error("ccore: not loaded");
+  const X = module.X;
+  if (!X.host_tiles) return { status: 404, bytes: new ArrayBuffer(0), rev: 0 };
+  const r = run(X.host_tiles.bind(X), [enc.encode(req)], [link, budget]);
   return { status: r.status, bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
 }
 

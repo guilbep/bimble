@@ -1773,3 +1773,17 @@ export function noteRemove(link: string, index: number): string | null {
   try { actionWith("manage_links", { op: "note_remove", name: link, index }); return null; } catch (e) { return message(e); }
 }
 // ---- end M1LINKS ----
+
+// ---- TILE1 (ADR 0078 amendment 6, ccore/src/tiles.h): a link's tile pyramid from the native host ----
+/** The answer of GET /mesh?link=k&name=&key=&tiles=toc (`req` "toc") or …&tile=a,b,c (`req` the ids), or, with `link` < 0,
+ *  the open scene's (GET /mesh?tiles=toc&step=N: 202 "done total" while it is built). `status` 200 with the bytes (decode
+ *  with gl/tiles.ts parseToc / parseTils); 202 building or indexing; 204 superseded (`superseded`) or no tiles (`none`). */
+export async function fetchTiles(base: string, token: string, link: number, req: string, opts: { name?: string; key?: number; step?: number } = {}):
+  Promise<{ status: number; bytes: ArrayBuffer; superseded: boolean; none: boolean }> {
+  const q = req === "toc" ? "tiles=toc" : `tile=${req}`;
+  const who = link >= 0
+    ? `&link=${link}${opts.name !== undefined ? `&name=${encodeURIComponent(opts.name)}` : ""}${opts.key !== undefined ? `&key=${opts.key}` : ""}`
+    : opts.step ? `&step=${opts.step}` : "";
+  const r = await fetch(`${base}/mesh?t=${token}&${q}${who}`, { cache: "no-store" });
+  return { status: r.status, bytes: r.status === 200 ? await r.arrayBuffer() : new ArrayBuffer(0), superseded: r.headers.get("X-Superseded") === "1", none: r.headers.get("X-Tiles") === "none" };
+}

@@ -57,6 +57,7 @@ void cc_session_free(cc_session *s) {
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
     cc_mesh_proxies_free(s); /* 3D2 */
+    buf_free(&s->view_tiles); /* TILE1 */
     buf_free(&s->link_prx_out); /* LNK3D */
     buf_free(&s->link_mesh_out); /* SIZE2 */
     cc_paper_cache_free(s);
@@ -209,6 +210,7 @@ static void drop_model(cc_session *s) {
     memset(&s->wp, 0, sizeof s->wp); /* WAVE1B: the storey's level again, the plane tool off */
     cc_session_mboxes_free(s); /* MEAS1: the boxes are the old scenes' */
     cc_mesh_proxies_free(s); /* 3D2: so are the proxies */
+    buf_free(&s->view_tiles); /* TILE1: the opened view file's pyramid */
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;
     s->ntabs = 0, s->has_active = 0, s->tab_open = 0;
@@ -438,14 +440,20 @@ int cc_session_open_file(cc_session *s, const char *path, cc_error *err) {
         rc = cc_viewfile_read((const uint8_t *)text, n, vf, err);
         if (!rc) rc = cc_view_scene(&vs, vf, err);
     }
+    Buf vt; /* TILE1: a view file's own pyramid (a link cache opened as it is), kept: served by cc_mesh_tiles */
+    buf_init(&vt);
+    if (!rc && vf && vf->has_tiles && vf->tiles_off <= n && vf->tiles_len <= n - vf->tiles_off) buf_append(&vt, text + vf->tiles_off, (size_t)vf->tiles_len);
+    if (vt.oom) buf_free(&vt), buf_init(&vt);
     free(text);
     if (rc) {
         if (is) cc_ifc_scene_free(is), free(is);
         if (vf) cc_scene_free(&vs), cc_viewfile_free(vf), free(vf);
+        buf_free(&vt);
         return -1;
     }
     drop_model(s);
     set_path(s, path);
+    s->view_tiles = vt;
     s->view = ifc ? CC_VIEW_IFC : CC_VIEW_FILE;
     s->ifc = is, s->vf = vf, s->vscene = vs;
     s->rev++, s->draw_gen++; /* LNK3D */

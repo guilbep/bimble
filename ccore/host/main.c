@@ -454,10 +454,11 @@ static char **utf8_argv(int *argc) {
  * then the totals (all of them loaded together). Exit 1 when one failed. */
 static int link_convert_main(int argc, char **argv) {
     const cc_platform *pf = cc_platform_native();
-    int keep = 0, no_beside = 0, bad = 0;
+    int keep = 0, no_beside = 0, bad = 0, index = 0;
     int i = 1;
     for (; i < argc && !strncmp(argv[i], "--", 2); i++) {
         if (!strcmp(argv[i], "--keep")) keep = 1;
+        else if (!strcmp(argv[i], "--index")) index = 1; /* TILE1 */
         else if (!strcmp(argv[i], "--cache-dir") && i + 1 < argc) {
 #ifndef _WIN32
             setenv("BIMBLE_CACHE_DIR", argv[++i], 1);
@@ -466,7 +467,7 @@ static int link_convert_main(int argc, char **argv) {
 #endif
             no_beside = 1;
         } else {
-            fprintf(stderr, "usage: bimble-ccore link-convert [--cache-dir DIR] [--keep] FILE...\n");
+            fprintf(stderr, "usage: bimble-ccore link-convert [--cache-dir DIR] [--keep] [--index] FILE...\n");
             return 2;
         }
     }
@@ -493,6 +494,31 @@ static int link_convert_main(int argc, char **argv) {
                (unsigned long long)j->bytes, j->ms, ne, ns, (unsigned long long)nt, (unsigned long long)j->cache_bytes,
                j->from_cache ? "from-cache" : "read");
         fflush(stdout);
+        if (index && j->incomplete && j->cache[0]) { /* TILE1: the indexing job (proxies, tiles) run here, timed */
+            cc_link_job *x = cc_link_job_new(pf, argv[i]);
+            if (!x) return 1;
+            x->index_only = 1;
+            snprintf(x->cache, sizeof x->cache, "%s", j->cache);
+            snprintf(x->log, sizeof x->log, "%s", j->log);
+            cc_link_job_free(j); /* its mapping goes before the cache is rewritten */
+            j = NULL;
+            cc_link_job_run(x);
+            long pk = 0;
+#ifndef _WIN32
+            struct rusage ru2;
+            if (!getrusage(RUSAGE_SELF, &ru2)) pk = (long)ru2.ru_maxrss;
+#endif
+            printf("file %d: indexed %s ms %.0f hlod_ms %.0f tiles %llu levels %llu proxy_tris %llu tiles_bytes %llu tiles_ms %.0f cache_bytes %llu peak_rss_kB %ld%s%s\n",
+                   k + 1, x->rc ? "failed" : "ok", x->ms, x->hlod_ms, (unsigned long long)x->tiles_count, (unsigned long long)x->tiles_levels,
+                   (unsigned long long)x->tiles_proxy_tris, (unsigned long long)x->tiles_bytes, x->tiles_ms, (unsigned long long)x->cache_bytes, pk,
+                   x->tiles_why[0] ? " " : "", x->tiles_why);
+            fflush(stdout);
+            if (x->rc) bad = 1;
+            if (keep) kept[k] = x;
+            else cc_link_job_free(x);
+            te += ne, ts += ns, tt += nt;
+            continue;
+        }
         te += ne, ts += ns, tt += nt;
         if (keep) kept[k] = j;
         else cc_link_job_free(j);

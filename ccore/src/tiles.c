@@ -1,4 +1,7 @@
 /* The tile pyramid (tiles.h; ticket TILE1, ADR 0078 amendment 6). */
+#ifdef __clang__
+#pragma clang fp contract(off) /* the same bytes from every build (native, wasm): no fused multiply-add */
+#endif
 #include <stdlib.h>
 #include <string.h>
 

@@ -71,6 +71,10 @@
  *                                           cached only, no bytes answered, ticket 3D2); value = rev
  *   host_proxies(budget, res) -> status     3D2: the HLOD proxies in steps (session/mesh.h
  *                                           cc_mesh_proxies): 202 "read total", then 200 BPRX
+ *   host_tiles(link, budget, req, req_len, res) -> status   TILE1: the tile pyramid (session/mesh.h): link
+ *                                           >= 0 link k's (cc_link_tiles), -1 the open scene's in steps
+ *                                           of `budget` triangles (cc_mesh_tiles: 202 "done total"
+ *                                           until built); req "toc" or "a,b,c"; value = rev
  *   host_saved(res) -> status               the bytes of the last write (the module has no files:
  *                                           `action save`, `save_as`, `export_ifc4`/`export_ifc2x3`,
  *                                           `share_for_viewing` keep them here: a .bimble is v2

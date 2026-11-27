@@ -64,4 +64,29 @@ int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int 
  * read in place is decoded one mesh at a time into a scratch, nothing kept. The same rule as cc_link_mesh for `name`
  * and `key` (204 superseded, never 404 with either). The native host serves it as GET /mesh?link=k&rows=1&name=&key=. */
 int cc_link_rows_answer(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n);
+/* TILE1 (ADR 0078 amendment 6, src/tiles.h): link k's tile pyramid. `req` "toc": its table of contents (the section's
+ * bytes [0, toc)); "a,b,c" (at most 4,096 ids): "TILS" u32 count, then per tile u32 id, u32 kind (1 leaf: TLF1 gathered
+ * from the cache's ELEM blocks; 2 proxy: its TPX1 blob), u32 bytes, the bytes padded to 4. From the mapped cache (its
+ * section TILE checked on each call), else a small link's pyramid built at once (kept for one link). The rule of
+ * cc_link_mesh for `name` and `key` (204 superseded); 202 "indexing" while its indexing job runs; 204 no tiles (a large
+ * link whose cache has none: indexed again at its next open); 400 bad ids; 500 a damaged section. The native host
+ * serves it as GET /mesh?link=k&name=&key=&tiles=toc (or &tile=a,b,c). */
+int cc_link_tiles(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char *req, size_t nreq,
+                  const char **p, size_t *n);
+/* TILE1: the open model's pyramid (the session's scene: a model, an IFC, a view file), built in steps after the open as
+ * 3D2's proxies were: each call clusters about `budget` triangles more and answers 202 "done total" until built, then
+ * `req` as cc_link_tiles; a view file opened with a section TILE is served at once. 404 nothing open. */
+int cc_mesh_tiles(cc_session *s, uint64_t budget, const char *req, size_t nreq, const char **p, size_t *n, uint32_t *rev);
+void cc_mesh_tiles_free(cc_session *s);
+/* TILE1: what the reference walker (tiles.h cc_tiles_select) draws for one camera in the host's world mm, per link (its
+ * eye and frustum moved into the link's frame by its placement): tiles, triangles, proxy bytes and (leaf_bytes) the
+ * leaves' answers' bytes, the tables' bytes; or (bounds_only) the world box of every link's root. JSON into `out`.
+ * The native host serves it as GET /mesh?tiles_frame=1&eye=x,y,z&at=x,y,z&fov=deg&w=&h=&err=px&budget=&leaf_bytes=1
+ * (tiles_frame=bounds: the box). Tools and tests (ccore/tools/tiles.mjs). */
+typedef struct {
+    double eye[3], at[3], tan_half, w, h, error_px;
+    uint64_t budget;
+    int leaf_bytes, bounds_only;
+} cc_tiles_frame_q;
+int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out);
 #endif

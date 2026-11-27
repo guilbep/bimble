@@ -28,7 +28,10 @@
 #include "hlod.h"
 
 #define CC_LINK_CACHE_MIN ((uint64_t)1 << 20) /* bytes; below, no cache (ADR 0079) */
-#define CC_LINK_CACHE_FORMAT "bimble-link-cache 6" /* 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD; 5 (SIZE2): HLOD gzipped within a budget, PRPZ; 6 (SIZE3): SRCE says "complete" (the proxies baked after the link was ready) */
+#define CC_LINK_CACHE_FORMAT "bimble-link-cache 7" /* TILE1 7: a section TILE (the tile pyramid, tiles.h) baked by the indexing job. 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD; 5 (SIZE2): HLOD gzipped within a budget, PRPZ; 6 (SIZE3): SRCE says "complete" (the proxies baked after the link was ready) */
+/* TILE1: a cache of the previous format matches (its geometry sections are format 7's): served, then re-indexed (its
+ * SRCE turned complete and current, its TILE baked), not read again from the IFC. */
+#define CC_LINK_CACHE_FORMAT_PREV "bimble-link-cache 6"
 /* SIZE2: the proxies' byte budget per link (cc_link_hlod_cap): 15 % of its geometry, within these. */
 #define CC_LINK_HLOD_MIN ((uint64_t)256 << 10)
 #define CC_LINK_HLOD_MAX ((uint64_t)32 << 20)
@@ -66,7 +69,11 @@ typedef struct cc_link_job {
     /* SIZE2: the geometry section's bytes (the proxies' budget), the cells left without a proxy, the HLOD's
      * stored (gzipped) bytes, the property sets' bytes as read, each section's bytes (HEAD, META, GEOR, ELEM,
      * SRCE, HLOD, PROP, PRPZ) */
-    uint64_t geom_bytes, hlod_stored, psets_raw, sections[8];
+    uint64_t geom_bytes, hlod_stored, psets_raw, sections[9]; /* TILE1: and TILE */
+    /* TILE1: the tile pyramid baked by the indexing job (section TILE) */
+    uint64_t tiles_count, tiles_levels, tiles_proxy_tris, tiles_bytes;
+    double tiles_ms;
+    char tiles_why[160];
     uint32_t hlod_dropped;
     /* SIZE3: the cache mapped (pf->map_file) and `vf` read in place over it (viewfile.h
      * cc_viewfile_read_mapped): the link takes the mapping with the view file and unmaps it after

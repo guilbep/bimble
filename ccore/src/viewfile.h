@@ -105,6 +105,10 @@ typedef struct {
      * Not checked here: the session checks the bytes it reads back (cc_hlod_bprx_check). */
     int has_hlod;
     uint64_t hlod_off, hlod_len;
+    /* TILE1 (ADR 0078 amendment 6): a section TILE (the link's tile pyramid, tiles.h), kept on disk as HLOD: its
+     * bytes' place in the raw file, when has_tiles. Checked when served (cc_tiles_check). */
+    int has_tiles;
+    uint64_t tiles_off, tiles_len;
     cc_mesh *shapes; /* shared shapes, own coordinates (malloc) */
     size_t nshapes;
     cc_view_element *elements; /* malloc */
@@ -171,6 +175,9 @@ int cc_viewfile_append_psets_packed(Buf *out, const char *t, size_t n);
 /* LNK3D: appends a section HLOD holding BPRX bytes `t` (before PROP: both stay on disk when read). 0 ok, -1 out of memory.
  * SIZE2: the bytes may be one gzip member of BPRX (cache format 5); its reader inflates them, bounded. */
 int cc_viewfile_append_hlod(Buf *out, const char *t, size_t n);
+
+/* TILE1: appends a section TILE holding the pyramid `t` (tiles.h), after HLOD and before PRPZ / PROP. */
+int cc_viewfile_append_tiles(Buf *out, const char *t, size_t n);
 
 /* Reads a view file. Always initializes `out` (free it with cc_viewfile_free either way).
  * 0 ok, -1 with err->msg. */

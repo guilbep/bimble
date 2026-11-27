@@ -109,6 +109,16 @@ typedef struct cc_session {
     Buf link_mesh_out; /* SIZE2: the last link mesh answered (mesh.h cc_link_mesh) */
     double links_retry_at; /* SIZE2: when refused links were last checked against the free memory */
     double hlod_ms;  /* build time so far */
+    /* TILE1 (ADR 0078 amendment 6): the open scene's tile pyramid (mesh.h cc_mesh_tiles), built in steps per (scene, rev);
+     * an opened view file's own section TILE (view_tiles); one small link's pyramid built at once (link_tiles). */
+    struct cc_tiles *tiles;
+    const cc_scene *tiles_scene;
+    uint32_t tiles_rev;
+    int tiles_status;
+    double tiles_ms;
+    Buf tiles_out, tiles_err, view_tiles, link_tiles;
+    uint64_t link_tiles_uid, link_tiles_gen;
+    int link_tiles_none; /* the last cc_link_tiles' 204 meant "no tiles", not superseded */
     cc_persist *persist;
     /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link
      * order; dropped with the open model (lib.rs:1668). links_gen + 1 on every change to them

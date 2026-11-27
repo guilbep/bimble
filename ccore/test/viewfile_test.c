@@ -724,6 +724,16 @@ static void link_cache_source(void) {
         int none = 1;
         for (size_t i = 0; i < sizeof hostile / sizeof *hostile; i++) none &= !cc_link_cache_complete(hostile[i], strlen(hostile[i]));
         check_true("SIZE3: hostile markers are not complete", none);
+        /* TILE1: a format 6 cache, complete (no TILE): it matches (its geometry is format 7's), is not complete, and is
+         * marked complete in format 7 by the re-indexing */
+        char six[512], up[512];
+        snprintf(six, sizeof six, "%s", done);
+        char *f = strstr(six, CC_LINK_CACHE_FORMAT);
+        if (f) memcpy(f, CC_LINK_CACHE_FORMAT_PREV, strlen(CC_LINK_CACHE_FORMAT_PREV));
+        check_true("TILE1: a format 6 cache matches but is not complete", f && cc_link_cache_matches(six, strlen(six), 68059, 1795696594, "", 0) &&
+                                                                       !cc_link_cache_complete(six, strlen(six)));
+        check_true("TILE1: re-indexed, it says complete in format 7", cc_link_cache_mark_complete(six, strlen(six), up, sizeof up) == 0 &&
+                                                                      cc_link_cache_complete(up, strlen(up)) && strstr(up, CC_LINK_CACHE_FORMAT));
     }
     static const char other[] = "{\"bytes\":1,\"ends\":\"\",\"format\":\"x\",\"mtime_s\":1}";
     check_true("another format: no", !cc_link_cache_matches(other, sizeof other - 1, 1, 1, "", 0));

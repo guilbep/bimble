@@ -103,7 +103,7 @@ typedef struct {
 } cc_tiles_opts;
 void cc_tiles_default(cc_tiles_opts *o);
 
-typedef struct {
+typedef struct cc_tiles {
     Buf out;            /* the TILE section's payload once built */
     cc_tiles_work *work;
     uint64_t done, total; /* triangles clustered so far, of `total` (progress) */

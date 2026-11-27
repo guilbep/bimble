@@ -750,6 +750,16 @@ int cc_viewfile_append_hlod(Buf *out, const char *t, size_t n) {
     return bad ? -1 : 0;
 }
 
+int cc_viewfile_append_tiles(Buf *out, const char *t, size_t n) { /* TILE1 */
+    Buf p;
+    buf_init(&p);
+    buf_append(&p, t, n);
+    section(out, "TILE", &p);
+    int bad = p.oom || out->oom;
+    buf_free(&p);
+    return bad ? -1 : 0;
+}
+
 int cc_viewfile_append_psets_packed(Buf *out, const char *t, size_t n) {
     Buf p;
     buf_init(&p);
@@ -795,32 +805,40 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
         rc = copy ? read_raw(copy, len, out, &e) : fail(&e, E_OOM, NULL);
         out->has_psets = 0; /* M1LINKS: offsets in the inflated stream, not the file: not read lazily */
         out->has_hlod = 0;  /* LNK3D: the same */
+        out->has_tiles = 0; /* TILE1: the same */
     } else {
         /* M1LINKS: a last section PROP stays out of the copy (read lazily from the file, ifc_psets.h):
          * the sections' heads walked, the copy cut where it starts. LNK3D: so does a section HLOD (a link
          * cache's baked proxies, BPRX; served from the file and checked then: hlod.h
          * cc_hlod_bprx_check), when only HLOD and PROP sections follow it. */
-        size_t cut = n, at = 12, pset = 0, lazy = 0, hlod = 0;
+        size_t cut = n, at = 12, pset = 0, lazy = 0, hlod = 0, tile = 0;
         while (n >= 12 && at + 12 <= n) {
             uint64_t len = 0;
             for (int i = 0; i < 8; i++) len |= (uint64_t)p[at + 4 + i] << (8 * i);
             if (len > n - at - 12) break;
             int is_prop = !memcmp(p + at, "PROP", 4) || !memcmp(p + at, "PRPZ", 4), is_hlod = !memcmp(p + at, "HLOD", 4); /* SIZE2: PRPZ */
+            int is_tile = !memcmp(p + at, "TILE", 4); /* TILE1: kept on disk as HLOD */
             if (is_prop && at + 12 + len == n) pset = at;
             if (is_hlod && !hlod) hlod = at;
-            if ((is_prop || is_hlod) && !lazy) lazy = at;
-            else if (!is_prop && !is_hlod) lazy = 0, hlod = 0;
+            if (is_tile && !tile) tile = at;
+            if ((is_prop || is_hlod || is_tile) && !lazy) lazy = at;
+            else if (!is_prop && !is_hlod && !is_tile) lazy = 0, hlod = 0, tile = 0;
             at += 12 + (size_t)len;
         }
         if (at == n && lazy) cut = lazy;
         else if (pset && at == n) cut = pset;
-        if (at != n || !lazy) hlod = 0;
+        if (at != n || !lazy) hlod = 0, tile = 0;
         uint8_t *copy = arena_dup(&out->arena, p, cut);
         rc = copy ? read_raw(copy, cut, out, &e) : fail(&e, E_OOM, NULL);
         if (!rc && hlod) { /* LNK3D: where it is in the file; its bytes checked when served */
             uint64_t len = 0;
             for (int i = 0; i < 8; i++) len |= (uint64_t)p[hlod + 4 + i] << (8 * i);
             out->has_hlod = 1, out->hlod_off = hlod + 12, out->hlod_len = len;
+        }
+        if (!rc && tile) { /* TILE1: where it is in the file; its bytes checked when served (tiles.h cc_tiles_check) */
+            uint64_t len = 0;
+            for (int i = 0; i < 8; i++) len |= (uint64_t)p[tile + 4 + i] << (8 * i);
+            out->has_tiles = 1, out->tiles_off = tile + 12, out->tiles_len = len;
         }
         if (!rc && pset && cut < n && !memcmp(p + pset, "PRPZ", 4)) { /* SIZE2: the packed head checked */
             const uint8_t *q = p + pset + 12;
@@ -856,21 +874,23 @@ int cc_viewfile_read_mapped(const uint8_t *p, size_t n, cc_viewfile *out, cc_err
     arena_init(&scratch, 0);
     out->lazy = 1, out->base = p, out->base_len = n, out->lazy_scratch = &scratch;
     /* the sections HLOD and PROP after the others stay out of the read (cc_viewfile_read's cut) */
-    size_t cut = n, at = 12, lazy = 0, pset = 0, hlod = 0;
+    size_t cut = n, at = 12, lazy = 0, pset = 0, hlod = 0, tile = 0;
     while (n >= 12 && at + 12 <= n) {
         uint64_t len = 0;
         for (int i = 0; i < 8; i++) len |= (uint64_t)p[at + 4 + i] << (8 * i);
         if (len > n - at - 12) break;
         int is_prop = !memcmp(p + at, "PROP", 4) || !memcmp(p + at, "PRPZ", 4), is_hlod = !memcmp(p + at, "HLOD", 4);
+        int is_tile = !memcmp(p + at, "TILE", 4); /* TILE1 */
         if (is_prop && at + 12 + len == n) pset = at;
         if (is_hlod && !hlod) hlod = at;
-        if ((is_prop || is_hlod) && !lazy) lazy = at;
-        else if (!is_prop && !is_hlod) lazy = 0, hlod = 0;
+        if (is_tile && !tile) tile = at;
+        if ((is_prop || is_hlod || is_tile) && !lazy) lazy = at;
+        else if (!is_prop && !is_hlod && !is_tile) lazy = 0, hlod = 0, tile = 0;
         at += 12 + (size_t)len;
     }
     if (at == n && lazy) cut = lazy;
     else if (pset && at == n) cut = pset;
-    if (at != n || !lazy) hlod = 0, pset = at == n ? pset : 0;
+    if (at != n || !lazy) hlod = 0, tile = 0, pset = at == n ? pset : 0;
     Err e = {0, 0, NULL, NULL};
     int rc = read_raw(p, cut, out, &e);
     out->lazy_scratch = NULL;
@@ -897,6 +917,11 @@ int cc_viewfile_read_mapped(const uint8_t *p, size_t n, cc_viewfile *out, cc_err
         uint64_t len = 0;
         for (int i = 0; i < 8; i++) len |= (uint64_t)p[hlod + 4 + i] << (8 * i);
         out->has_hlod = 1, out->hlod_off = hlod + 12, out->hlod_len = len;
+    }
+    if (!rc && tile) { /* TILE1 */
+        uint64_t len = 0;
+        for (int i = 0; i < 8; i++) len |= (uint64_t)p[tile + 4 + i] << (8 * i);
+        out->has_tiles = 1, out->tiles_off = tile + 12, out->tiles_len = len;
     }
     if (!rc && pset && cut < n) {
         const uint8_t *q = p + pset + 12;

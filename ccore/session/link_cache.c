@@ -5,6 +5,7 @@
 
 #include "guid.h"
 #include "hlod.h"
+#include "tiles.h"
 #include "ifc_psets.h"
 #include "inflate.h"
 #include "links.h"
@@ -101,7 +102,8 @@ int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mti
     if (v && v->type == JR_OBJ) {
         const JrVal *b = jr_get(v, "bytes"), *m = jr_get(v, "mtime_s"), *f = jr_get(v, "format"), *e = jr_get(v, "ends");
         ok = b && b->type == JR_NUM && b->num == (double)bytes && m && m->type == JR_NUM && m->num == (double)mtime_s &&
-             f && f->type == JR_STR && !strcmp(f->s, CC_LINK_CACHE_FORMAT) && e && e->type == JR_STR && e->n == 64;
+             f && f->type == JR_STR && (!strcmp(f->s, CC_LINK_CACHE_FORMAT) || !strcmp(f->s, CC_LINK_CACHE_FORMAT_PREV)) && e && e->type == JR_STR &&
+             e->n == 64; /* TILE1: a format 6 cache's geometry is format 7's: re-indexed, not read again from the IFC */
         if (ok && ends_known) ok = !memcmp(e->s, ends_hex, 64);
     }
     arena_free(&a);
@@ -113,23 +115,34 @@ int cc_link_cache_complete(const char *src, size_t n) {
     arena_init(&a, 0);
     JrError je;
     const JrVal *v = jr_parse(&a, src, n, &je), *c = v && v->type == JR_OBJ ? jr_get(v, "complete") : NULL;
-    int ok = c && c->type == JR_BOOL && c->b;
+    const JrVal *f = v && v->type == JR_OBJ ? jr_get(v, "format") : NULL;
+    int ok = c && c->type == JR_BOOL && c->b && f && f->type == JR_STR && !strcmp(f->s, CC_LINK_CACHE_FORMAT); /* TILE1: a format 6 one is not */
     arena_free(&a);
     return ok;
 }
 
 int cc_link_cache_mark_complete(const char *src, size_t n, char *out, size_t cap) {
-    static const char F[] = "\"complete\":false";
+    static const char F[] = "\"complete\":false", T[] = "\"complete\":true";
     const size_t fl = sizeof F - 1;
-    size_t at = n;
+    size_t at = n, tat = n;
     for (size_t i = 0; i + fl <= n; i++)
         if (!memcmp(src + i, F, fl)) { at = i; break; }
-    if (at == n || n + 1 > cap) return -1;
-    memcpy(out, src, at);
-    memcpy(out + at, "\"complete\":true", 15);
-    memcpy(out + at + 15, src + at + fl, n - at - fl);
-    out[n - 1] = 0; /* one byte shorter */
-    return cc_link_cache_complete(out, n - 1) ? 0 : -1;
+    for (size_t i = 0; i + sizeof T - 1 <= n; i++) /* TILE1: a format 6 cache complete without tiles: re-indexed */
+        if (!memcmp(src + i, T, sizeof T - 1)) { tat = i; break; }
+    if ((at == n && tat == n) || n + 1 > cap) return -1;
+    size_t m;
+    if (at < n) {
+        memcpy(out, src, at);
+        memcpy(out + at, T, sizeof T - 1);
+        memcpy(out + at + 15, src + at + fl, n - at - fl);
+        m = n - 1; /* one byte shorter */
+    } else memcpy(out, src, n), m = n;
+    out[m] = 0;
+    /* the format: the previous one (the same length) turned current */
+    static const char P[] = "\"format\":\"" CC_LINK_CACHE_FORMAT_PREV "\"", C[] = "\"format\":\"" CC_LINK_CACHE_FORMAT "\"";
+    for (size_t i = 0; i + sizeof P - 1 <= m; i++)
+        if (!memcmp(out + i, P, sizeof P - 1)) { memcpy(out + i, C, sizeof C - 1); break; }
+    return cc_link_cache_complete(out, m) ? 0 : -1;
 }
 
 cc_link_job *cc_link_job_new(const cc_platform *pf, const char *path) {
@@ -286,8 +299,14 @@ static void report_tail(Buf *b, const cc_link_job *j, uint64_t cache_bytes, cons
         buf_puts(b, "\nproxies' budget: "), buf_u64(b, cc_link_hlod_cap(j->geom_bytes)), buf_puts(b, " bytes (15 % of the geometry), ");
         buf_u64(b, j->hlod_dropped), buf_puts(b, " finer cells left without; stored gzipped: "), buf_u64(b, j->hlod_stored), buf_puts(b, " bytes");
     }
+    buf_puts(b, "\ntile pyramid (TILE, for drawing by tiles): "); /* TILE1 */
+    if (j->tiles_bytes) {
+        buf_u64(b, j->tiles_count), buf_puts(b, " tiles in "), buf_u64(b, j->tiles_levels), buf_puts(b, " levels, ");
+        buf_u64(b, j->tiles_proxy_tris), buf_puts(b, " proxy triangles, "), buf_u64(b, j->tiles_bytes), buf_puts(b, " bytes, built in ");
+        buf_u64(b, (uint64_t)(j->tiles_ms + 0.5)), buf_puts(b, " ms");
+    } else buf_puts(b, j->tiles_why[0] ? j->tiles_why : "none");
     buf_puts(b, "\ncache sections (bytes):");
-    static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ"};
+    static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ", "TILE"};
     for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) {
         uint64_t x = j->sections[q];
         if (x) buf_puts(b, " "), buf_puts(b, KINDS[q]), buf_puts(b, " "), buf_u64(b, x);
@@ -379,6 +398,37 @@ static void bake_hlod(cc_link_job *j, Buf *vb) {
     j->hlod_ms = pf->now_ms(pf->ctx) - t0;
 }
 
+/* TILE1 (ADR 0078 amendment 6): the tile pyramid, from the cache's bytes read in place (nothing decoded but one mesh
+ * at a time: tiles.h), built in steps (cancellable between them), appended as a section TILE. A failure leaves the
+ * cache without (the page draws as before), said in the report. */
+static void bake_tiles(cc_link_job *j, Buf *vb) {
+    const cc_platform *pf = j->pf;
+    double t0 = pf->now_ms(pf->ctx);
+    cc_viewfile vf;
+    cc_error e;
+    if (cc_viewfile_read_mapped((const uint8_t *)vb->p, vb->len, &vf, &e)) {
+        snprintf(j->tiles_why, sizeof j->tiles_why, "none (%s)", e.msg);
+        return;
+    }
+    cc_tiles t;
+    cc_tiles_opts o;
+    cc_tiles_default(&o);
+    cc_tiles_src src = {NULL, &vf};
+    int rc = cc_tiles_start(&t, &src, &o, &e);
+    while (rc == 0 && !cc_atomic_load(&j->pg.cancel)) {
+        int st = cc_tiles_step(&t, 1000000, &e);
+        if (st < 0) rc = -1;
+        if (st != 0) break;
+    }
+    if (rc == 0 && t.work) snprintf(j->tiles_why, sizeof j->tiles_why, "none (cancelled)"), rc = 1;
+    cc_viewfile_free(&vf); /* before vb grows (it reads vb's bytes) */
+    if (rc == 0 && cc_viewfile_append_tiles(vb, t.out.p, t.out.len) == 0) {
+        j->tiles_count = t.ntiles, j->tiles_levels = t.levels, j->tiles_proxy_tris = t.proxy_tris, j->tiles_bytes = t.out.len;
+    } else if (rc < 0) snprintf(j->tiles_why, sizeof j->tiles_why, "none (%s)", e.msg);
+    cc_tiles_free(&t);
+    j->tiles_ms = pf->now_ms(pf->ctx) - t0;
+}
+
 /* ---- SIZE3 (E): the proxies baked after the link is ready ----
  * The cache at j->cache (written by the conversion with SRCE "complete": false, read untrusted again here) rebuilt as
  * its sections but the lazy ones, SRCE marked complete, its proxies baked (HLOD), then its property sets (PRPZ, PROP:
@@ -423,7 +473,7 @@ static void index_run(cc_link_job *j) {
             if (!src || sn + 1 > sizeof out || cc_link_cache_mark_complete(src, sn, out, sizeof out)) bad = 1;
             else if (cc_viewfile_append_source(&vb, out, strlen(out))) bad = 1;
             have_src = 1;
-        } else if (!memcmp(kind, "HLOD", 4)) { /* (none expected: dropped, baked again) */
+        } else if (!memcmp(kind, "HLOD", 4) || !memcmp(kind, "TILE", 4)) { /* (none expected: dropped, baked again) */
         } else if (!memcmp(kind, "PROP", 4) || !memcmp(kind, "PRPZ", 4)) buf_append(&tail, p + at, 12 + (size_t)len);
         else buf_append(&vb, p + at, 12 + (size_t)len);
         at += 12 + (size_t)len;
@@ -435,6 +485,7 @@ static void index_run(cc_link_job *j) {
     }
     j->geom_bytes = section_bytes(&vb, "ELEM");
     bake_hlod(j, &vb);
+    if (!cc_atomic_load(&j->pg.cancel)) bake_tiles(j, &vb); /* TILE1 */
     if (cc_atomic_load(&j->pg.cancel)) {
         buf_free(&vb), buf_free(&tail);
         return fail(j, CC_JOB_CANCELLED, NULL);
@@ -446,7 +497,7 @@ static void index_run(cc_link_job *j) {
         return fail(j, CC_JOB_FAILED, "the completed cache cannot be written");
     }
     { /* its report: the proxies' lines appended */
-        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ"};
+        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ", "TILE"};
         for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) j->sections[q] = section_bytes(&vb, KINDS[q]);
         j->cache_bytes = vb.len;
         char *old = NULL;
@@ -620,7 +671,7 @@ static void run(cc_link_job *j) {
         snprintf(j->note, sizeof j->note, "no cache written (neither the IFC's folder nor the cache folder could be written)");
     }
     {
-        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ"};
+        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ", "TILE"};
         for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) j->sections[q] = section_bytes(&vb, KINDS[q]);
     }
     if (j->cache[0]) {
