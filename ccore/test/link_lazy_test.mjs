@@ -112,5 +112,37 @@ check("Box to selection again: the same box (decoded again)", JSON.stringify(vis
 const svg2 = plan ? JSON.parse((await call("query", "view_svg", JSON.stringify({ view: plan.id, bare: true }))).text).svg : "";
 check("the plan again: the same drawing", svg2 === svg1 && svg2.length > 0);
 void vis0;
+
+// ---- every entry point that reads a link's geometry, on a cold link (nothing decoded) and again after its meshes
+// were dropped: each answers (no crash: the host is checked alive after each), and the same answer both times. On
+// the code of 60d1afd the element query (its volume) and GET /mesh (version 1) read a mesh whose arrays were NULL. ----
+const dropped = () => count(/its meshes dropped/g);
+async function cold() { // until every decode of the link was followed by its drop (budget 0, keep 1.5 s)
+  const t0 = Date.now();
+  while (Date.now() - t0 < 8000 && count(/its meshes decoded/g) > dropped()) await sleep(100);
+}
+const alive = async () => (await call("query", "state")).status === 200;
+const plan2 = (await q("open_views")).views.find((v) => v.type === "plan");
+const points = [
+  ["element query (its volume)", async () => { const r = await call("query", "element", JSON.stringify({ id, link: "a.ifc" })); return `${r.status} ${r.text}`; }],
+  ["measure through the link", async () => { await call("action", "measure"); const r = await call("tool", "measure_pointer", JSON.stringify({ ray: [10, 20, 100000, 0, 0, -1], ray_tol: [20, 20, 100000, 0, 0, -1] })); await call("action", "measure"); return `${r.status} ${r.text.replace(/"items".*$/, "")}`; }],
+  ["Box to selection", async () => { await call("select", "-", JSON.stringify({ link: "a.ifc", ids: [id] })); const r = await call("action", "box_to_selection"); const v = await q("visibility"); return `${r.status} ${JSON.stringify(v.section_box)}`; }],
+  ["a plan through the link (SVG)", async () => { const r = await call("query", "view_svg", JSON.stringify({ view: plan2.id, bare: true })); return `${r.status} ${(JSON.parse(r.text).svg.match(/<path/g) ?? []).length}`; }],
+  ["the plan's PDF", async () => { const r = await fetch(`http://127.0.0.1:${p}/query/view_pdf?t=${TOKEN}`, { method: "POST", body: JSON.stringify({ view: plan2.id }) }); const b = Buffer.from(await r.arrayBuffer()); return `${r.status} ${b.subarray(0, 5).toString("latin1")} ${b.length > 1000}`; }],
+  ["GET /mesh (version 1, the links in its trailer)", async () => { const r = await fetch(`http://127.0.0.1:${p}/mesh?t=${TOKEN}`); const b = Buffer.from(await r.arrayBuffer()); return `${r.status} ${b.length}`; }],
+  ["GET /mesh?shapes=1 (version 3, the links in its trailer)", async () => { const r = await fetch(`http://127.0.0.1:${p}/mesh?shapes=1&t=${TOKEN}`); const b = Buffer.from(await r.arrayBuffer()); return `${r.status} ${b.length}`; }],
+  ["GET /mesh?link=0", async () => { const r = await fetch(`http://127.0.0.1:${p}/mesh?link=0&t=${TOKEN}`); const b = Buffer.from(await r.arrayBuffer()); return `${r.status} ${b.length}`; }],
+  ["GET /mesh?link_proxies=0", async () => { const r = await fetch(`http://127.0.0.1:${p}/mesh?link_proxies=0&t=${TOKEN}`); return `${r.status}`; }],
+];
+for (const [what, run] of points) {
+  await cold();
+  let a = null, b = null;
+  try { a = await run(); } catch (e) { a = `threw ${e.message}`; }
+  const ok1 = await alive().catch(() => false);
+  await cold();
+  try { b = await run(); } catch (e) { b = `threw ${e.message}`; }
+  const ok2 = await alive().catch(() => false);
+  check(`cold link, then after its meshes were dropped: ${what}: answered, the same both times`, ok1 && ok2 && a === b && /^20\d/.test(a), `${a} | ${b}`);
+}
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

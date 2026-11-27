@@ -15,6 +15,7 @@ static const char *const FAMILY[CC_CAT_COUNT] = {"Concrete", "Steel", "Timber", 
                                                  "Insulation", "Earth", "Glass", "Other"}; /* MaterialCategory::label */
 
 static void keep_settings(cc_link *k, const cc_link *old);
+static int link_rows_view(cc_link *k); /* SIZE3 */
 static void cc_links_undo_free(cc_session *s);
 
 /* SIZE3: link k's decoded meshes dropped (a lazy link: its view file keeps their counts and places). */
@@ -22,7 +23,7 @@ static void link_evict(cc_link *k) {
     if (!k->resident) return;
     if (k->placed) cc_scene_free(&k->pscene), k->placed = 0;
     cc_viewfile_dematerialize(k->vf);
-    for (size_t i = 0; i < k->scene.nelements && i < k->vf->nelements; i++) k->scene.elements[i].mesh = k->vf->elements[i].mesh;
+    link_rows_view(k); /* empty meshes again (the counts stay in the view file) */
     arena_free(&k->marena);
     k->resident = 0, k->mbytes = 0;
 }
@@ -53,6 +54,34 @@ static uint64_t link_use_tick; /* SIZE3: the order links' meshes were last asked
 
 const cc_scene *cc_link_rows(const cc_link *k) { return k->ifc ? &k->ifc->scene : &k->scene; }
 
+/* SIZE3: a link read in place and not decoded shows a scene of EMPTY meshes (counts 0, arrays NULL; its shapes a
+ * zeroed array of the scene's own): no structure reachable through a cc_scene ever holds counts without arrays, so
+ * code that reads geometry from a scene it was not meant to have sees nothing, never a NULL array. The counts live
+ * in the view file only (cc_link_triangles, mesh.c's served blocks). */
+static int link_rows_view(cc_link *k) {
+    if (!k->zshapes && k->vf->nshapes) {
+        k->zshapes = arena_alloc(&k->scene.arena, k->vf->nshapes * sizeof *k->zshapes, 8);
+        if (!k->zshapes) return -1;
+    }
+    if (k->zshapes) memset(k->zshapes, 0, k->vf->nshapes * sizeof *k->zshapes);
+    k->scene.shapes = k->zshapes;
+    for (size_t i = 0; i < k->scene.nelements; i++) memset(&k->scene.elements[i].mesh, 0, sizeof(cc_mesh));
+    return 0;
+}
+
+uint64_t cc_link_triangles(const cc_link *k) {
+    uint64_t tris = 0;
+    if (k->vf && k->vf->lazy) { /* the counts the mapped read kept */
+        for (size_t e = 0; e < k->vf->nelements; e++) tris += k->vf->elements[e].shape < 0 ? k->vf->elements[e].mesh.ni / 3 : 0;
+        for (size_t e = 0; e < k->vf->nshapes; e++) tris += k->vf->shapes[e].ni / 3;
+        return tris;
+    }
+    const cc_scene *sc = cc_link_rows(k);
+    for (size_t e = 0; e < sc->nelements; e++) tris += sc->elements[e].shape < 0 ? sc->elements[e].mesh.ni / 3 : 0;
+    for (size_t e = 0; e < sc->nshapes; e++) tris += sc->shapes[e].ni / 3; /* each shared shape once */
+    return tris;
+}
+
 int cc_link_resident(cc_link *k) {
     if (!k->vf || !k->vf->lazy) return 0;
     k->mused = ++link_use_tick;
@@ -65,10 +94,11 @@ int cc_link_resident(cc_link *k) {
             arena_free(&k->marena);
             for (size_t i = 0; i < k->vf->nelements; i++) memset(&k->vf->elements[i].mesh, 0, sizeof(cc_mesh));
             for (size_t i = 0; i < k->vf->nshapes; i++) memset(&k->vf->shapes[i], 0, sizeof(cc_mesh));
-            for (size_t i = 0; i < k->scene.nelements; i++) memset(&k->scene.elements[i].mesh, 0, sizeof(cc_mesh));
+            link_rows_view(k);
             return -1; /* draws nothing from now on: its counts are 0 */
         }
         for (size_t i = 0; i < k->scene.nelements && i < k->vf->nelements; i++) k->scene.elements[i].mesh = k->vf->elements[i].mesh;
+        k->scene.shapes = k->vf->shapes; /* decoded */
         k->resident = 1, k->mbytes = b;
         if (pf) cc_log(pf, "bimble-ccore: link %s: its meshes decoded (%.1f MB in %.0f ms)", k->path, (double)b / 1e6, pf->now_ms(pf->ctx) - t0);
     }
@@ -342,7 +372,7 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
         buf_puts(out, "no element with this id");
         return -1;
     }
-    const cc_scene *sc = cc_link_rows(k); /* SIZE3: its texts only */
+    const cc_scene *sc = cc_link_scene(k); /* SIZE3: decoded (its volume below reads its mesh) */
     const cc_scene_element *e = &sc->elements[i];
     cc_str cls = e->class_name, nm = {0}, storey = {0}, material = {0};
     if (k->kind == CC_LINK_IFC) {
@@ -844,6 +874,11 @@ static void take(cc_session *s, cc_link *k, cc_link_job *j) {
         }
         k->vf = j->vf, j->vf = NULL, k->kind = CC_LINK_VIEW;
         k->map = j->map, k->map_pf = j->pf, j->map = NULL; /* SIZE3: read in place over its mapped cache */
+        k->zshapes = NULL;
+        if (k->vf->lazy && link_rows_view(k)) { /* SIZE3: its scene empty until decoded */
+            k->state = CC_LS_FAILED, k->msg = dup_z("out of memory");
+            return;
+        }
     } else k->ifc = j->ifc, j->ifc = NULL, k->kind = CC_LINK_IFC;
     k->psets = j->psets, k->npsets = j->npsets, j->psets = NULL, j->npsets = 0; /* M1LINKS: a small IFC's */
     k->state = CC_LS_READY;

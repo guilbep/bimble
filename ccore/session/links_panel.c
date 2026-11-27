@@ -28,13 +28,8 @@ int cc_links_panel_json(struct cc_session *s, Buf *out) {
         char ext[32];
         ext_of(k->name, ext);
         /* LINKF: the conversion's state and the link's numbers (links.h) */
-        const cc_scene *sc = cc_link_rows(k); /* SIZE3: counts only (a link read in place is not decoded for it) */
-        uint64_t tris = 0;
-        for (size_t e = 0; e < sc->nelements; e++) {
-            const cc_mesh *lm = cc_scene_local_mesh(sc, e);
-            if (lm && (sc->elements[e].shape < 0)) tris += lm->ni / 3;
-        }
-        for (size_t e = 0; e < sc->nshapes; e++) tris += sc->shapes[e].ni / 3; /* each shared shape once */
+        const cc_scene *sc = cc_link_rows(k); /* SIZE3: rows only (a link read in place is not decoded for it) */
+        uint64_t tris = cc_link_triangles(k); /* SIZE3: from the counts */
         jw_obj_begin(&w);
         jw_key(&w, "bytes"), jw_u64(&w, k->bytes);
         jw_key(&w, "cache"), k->cache ? jw_str(&w, k->cache) : jw_null(&w);

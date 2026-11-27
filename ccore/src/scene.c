@@ -1417,12 +1417,19 @@ const cc_mesh *cc_scene_local_mesh(const cc_scene *s, size_t k) {
 }
 
 /* Placement32::mesh. Not covered by the goldens (they hold local meshes). */
+/* SIZE3: a mesh whose counts promise arrays it does not have (never made by the core; a scene not decoded) */
+static int mesh_hollow(const cc_mesh *m) {
+    return (m->nv && !m->pos) || (m->ni && !m->idx) || (m->ne && !m->edges) || (m->nn && !m->normals);
+}
+
 int cc_scene_world_mesh(const cc_scene *s, size_t k, Arena *a, cc_mesh *out) {
     const cc_scene_element *e = &s->elements[k];
     if (e->shape < 0) {
+        if (mesh_hollow(&e->mesh)) return memset(out, 0, sizeof *out), -1; /* SIZE3: refused, never read */
         *out = e->mesh;
         return 0;
     }
+    if ((size_t)e->shape >= s->nshapes || mesh_hollow(&s->shapes[e->shape])) return memset(out, 0, sizeof *out), -1; /* SIZE3 */
     const cc_mesh *sh = &s->shapes[e->shape];
     const cc_placement32 *p = &e->to_scene;
     *out = *sh;

@@ -57,7 +57,7 @@ static int bmsh_of(const cc_scene *sp, uint32_t rev, Buf *out, cc_error *err) {
     if (ne && !w) { fail(err, "out of memory"); goto done; }
     uint64_t nv = 0, ni = 0, ns = 0;
     for (size_t k = 0; k < ne; k++) {
-        if (cc_scene_world_mesh(&s, k, &tmp, &w[k]) != 0) { fail(err, "out of memory"); goto done; }
+        if (cc_scene_world_mesh(&s, k, &tmp, &w[k]) != 0) { fail(err, "out of memory or a mesh not decoded"); goto done; }
         /* nn == ne for meshes built by the C core; a segment without normals gets zeros. */
         nv += w[k].nv, ni += w[k].ni, ns += w[k].ne;
     }
@@ -361,8 +361,22 @@ int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int 
     if ((!l || !l->kind) && (name || has_key)) st = 204;
     else if (!l || !l->kind) st = 404, buf_puts(out, "no such link");
     else if (l->vf && l->vf->lazy && !l->resident) { /* SIZE3: its cache's own codec bytes, no mesh decoded */
-        if (cc_scene_bmsh4_blocks(cc_link_rows(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, link_block, l->vf, out, &err))
-            buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+        /* the rows with the view file's counts (the link's scene shows empty meshes until decoded); the blocks
+         * appended from the file, never read from these arrays (NULL) */
+        const cc_scene *rs = cc_link_rows(l);
+        cc_scene cs = *rs;
+        cs.elements = malloc((rs->nelements + 1) * sizeof *cs.elements);
+        if (!cs.elements) buf_puts(out, "out of memory"), st = 500;
+        else {
+            for (size_t i = 0; i < rs->nelements; i++) {
+                cs.elements[i] = rs->elements[i];
+                cs.elements[i].mesh = i < l->vf->nelements ? l->vf->elements[i].mesh : (cc_mesh){0};
+            }
+            cs.shapes = l->vf->shapes, cs.nshapes = l->vf->nshapes;
+            if (cc_scene_bmsh4_blocks(&cs, link_bmsh_id, l, (uint32_t)s->links_mesh_gen, link_block, l->vf, out, &err))
+                buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+            free(cs.elements);
+        }
     } else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
         buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
     *p = out->p ? out->p : "", *n = out->len;
