@@ -81,13 +81,13 @@ void tool_run_action(App *a, const char *action) {
         int st = core_call(a, action, NULL, "", &o);
         if (st != CC_OK) snprintf(a->notice, sizeof a->notice, "%.*s", (int)(o.len < 300 ? o.len : 300), o.p ? o.p : ""), a->notice_t = app_now();
     } else if (!strcmp(action, "new")) app_new(a);
-    else if (!strcmp(action, "open")) fs_open(a, NULL, "open"), a->dialog = DLG_OPEN;
-    else if (!strcmp(action, "link_model")) fs_open(a, NULL, "link_model"), a->dialog = DLG_LINK;
-    else if (!strcmp(action, "link_folder")) fs_open(a, NULL, "link_folder"), a->dialog = DLG_LINK;
+    else if (!strcmp(action, "open")) desk_dialog(a, "open"); /* NUI3: the system's dialog (the portal), else the app's */
+    else if (!strcmp(action, "link_model")) desk_dialog(a, "link_model");
+    else if (!strcmp(action, "link_folder")) desk_dialog(a, "link_folder");
     else if (!strcmp(action, "manage_links")) a->links_panel = !a->links_panel;
     else if (!strcmp(action, "settings")) core_query(a, "settings", NULL, &a->settings), a->dialog = DLG_SETTINGS;
     else if (!strcmp(action, "save")) {
-        if (core_action(a, "save", NULL) != CC_OK && strstr(a->notice, "save_as")) fs_open(a, NULL, "save_as"), a->dialog = DLG_SAVEAS, a->notice[0] = 0;
+        if (core_action(a, "save", NULL) != CC_OK && strstr(a->notice, "save_as")) desk_dialog(a, "save_as"), a->notice[0] = 0;
     } else if (!strcmp(action, "orthographic")) {
         core_action(a, action, NULL);
         core_refresh(a);
@@ -188,7 +188,7 @@ static void file_menu(App *a) {
     if (menu_row(a, T(a, "filemenu.open"), "Ctrl O", 1, 1)) tool_run_action(a, "open"), a->file_menu = 0;
     menu_row(a, T(a, "filemenu.importIfc"), NULL, 1, 0);
     if (menu_row(a, T(a, "filemenu.save"), "Ctrl S", loaded && jb(a->state.root, "editable"), 1)) tool_run_action(a, "save"), a->file_menu = 0;
-    if (menu_row(a, T(a, "filemenu.saveAs"), NULL, loaded && jb(a->state.root, "editable"), 1)) fs_open(a, NULL, "save_as"), a->dialog = DLG_SAVEAS, a->file_menu = 0;
+    if (menu_row(a, T(a, "filemenu.saveAs"), NULL, loaded && jb(a->state.root, "editable"), 1)) desk_dialog(a, "save_as"), a->file_menu = 0;
     if (menu_row(a, T(a, "filemenu.close"), NULL, loaded, 1)) app_close(a), a->file_menu = 0;
     igSeparator();
     igTextColored(col4(C_STONE), "%s", T(a, "nav.links"));

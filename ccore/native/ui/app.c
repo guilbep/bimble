@@ -140,14 +140,23 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
         a->lx = ev->motion.x, a->ly = ev->motion.y;
         a->moving = 1, a->last_move = app_now(), a->dirty = 1;
         break;
-    case SDL_EVENT_MOUSE_WHEEL: {
+    case SDL_EVENT_MOUSE_WHEEL: { /* NUI3: a mouse's wheel and Ctrl + wheel zoom, a touchpad's two fingers pan (desktop.c) */
         float mx = ev->wheel.mouse_x, my = ev->wheel.mouse_y;
         if (ui_wants_mouse || !in_view(a, mx, my)) break;
         input_start(a, ev, "wheel");
-        nv_cam_zoom_at(&a->cam, ev->wheel.y > 0 ? 1 : -1, mx - a->vx, my - a->vy, a->vw, a->vh);
+        desk_wheel(a, &ev->wheel, mx, my);
         a->moving = 1, a->last_move = app_now(), a->dirty = 1;
         break;
     }
+    case SDL_EVENT_PINCH_UPDATE: /* NUI3: a touchpad's pinch zooms */
+        if (ui_wants_mouse) break;
+        input_start(a, ev, "pinch");
+        desk_pinch(a, ev->pinch.scale);
+        a->moving = 1, a->last_move = app_now(), a->dirty = 1;
+        break;
+    case SDL_EVENT_DROP_FILE: /* NUI3: a file or folder dropped on the window */
+        desk_drop(a, ev->drop.data);
+        break;
     case SDL_EVENT_KEY_DOWN: /* the key table, data/keys.json (keys.ts KEYS) */
         if (!ev->key.repeat) {
             char kw[48];
@@ -159,6 +168,23 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
         break;
     default: break;
     }
+}
+
+/* NUI3: the UI's clipboard calls logged (desktop.c's neighbours; the Copy report logs its own) */
+static void (*clip_set0)(ImGuiContext *, const char *);
+static const char *(*clip_get0)(ImGuiContext *);
+static void clip_set(ImGuiContext *c, const char *t) {
+    SDL_ClearError();
+    if (clip_set0) clip_set0(c, t);
+    const char *e = SDL_GetError();
+    slog("clipboard: write of %zu bytes%s%s", t ? strlen(t) : 0, e && *e ? ": " : " ok", e && *e ? e : "");
+}
+static const char *clip_get(ImGuiContext *c) {
+    SDL_ClearError();
+    const char *t = clip_get0 ? clip_get0(c) : NULL;
+    const char *e = SDL_GetError();
+    slog("clipboard: read %zu bytes%s%s", t ? strlen(t) : 0, e && *e ? ": " : "", e && *e ? e : "");
+    return t;
 }
 
 /* ---- the open, on a thread of its own (an IFC read for display takes seconds): the UI shows its
@@ -348,6 +374,7 @@ static int truth_compare(App *a) {
 static void frame(App *a) {
     double t0 = app_now();
     if (a->screen_kind == SCR_OPENING) opening_tick(a);
+    desk_tick(a); /* NUI3: the system dialog's answer, the title */
     core_poll(a);
     core_refresh(a);
     if (a->screen_kind == SCR_MAIN) {
@@ -434,6 +461,8 @@ static void frame(App *a) {
             view_cube(a, fg, mp.x, mp.y, 0);
         }
         panel_links(a);
+        panel_section_box(a); /* NUI3 */
+        palette_ui(a);        /* NUI3 */
         shell_context_menu(a);
         shell_status(a);
     }
@@ -776,6 +805,9 @@ int main(int argc, char **argv) {
 
     /* the window and the GPU */
     if (a->offscreen) SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+    /* NUI3: the app id (Wayland's app_id, X11's class: a compositor's window rules; the .desktop file's name) */
+    SDL_SetHint(SDL_HINT_APP_ID, "ch.bimble.bimble");
+    SDL_SetAppMetadata("Bimble", CC_RELEASE_VERSION, "ch.bimble.bimble");
     if (!SDL_Init(SDL_INIT_VIDEO)) { no_gpu("no video", model); return 3; }
     sdl_base = app_now() - SDL_GetTicksNS() / 1e6;
     a->dev = nv_gpu_device(&a->gpu_name, &a->gpu_driver);
@@ -808,6 +840,12 @@ int main(int argc, char **argv) {
     theme_set(a, dark);
     if (theme_apply(a) != 0) fprintf(stderr, "bimble: the lab's fonts did not load: the default font\n");
     if (nui_backend_init(a->win, a->dev, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM) != 0) { no_gpu("the UI's renderer", model); return 3; }
+    { /* NUI3: every clipboard write and read of the UI (Ctrl+C / Ctrl+V in a field) in the session log, with SDL's answer:
+       * Wayland's clipboard needs a focused window and the data device; an offscreen run logs what SDL says */
+        ImGuiPlatformIO *pio = igGetPlatformIO_Nil();
+        clip_set0 = pio->Platform_SetClipboardTextFn, clip_get0 = pio->Platform_GetClipboardTextFn;
+        pio->Platform_SetClipboardTextFn = clip_set, pio->Platform_GetClipboardTextFn = clip_get;
+    }
     if (icons_build(a) != 0) fprintf(stderr, "bimble: no icons\n");
     a->cut_live = a->moving_cut;
     a->cam.yaw = -55 * NV_PI / 180, a->cam.pitch = 28 * NV_PI / 180, a->cam.dist = 20000;

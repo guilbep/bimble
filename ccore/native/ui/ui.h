@@ -175,6 +175,7 @@ struct App {
     char sel_id[23], sel_link[256];
     int box_on, box_drag;      /* the section box (scene mm) and its handle held */
     double box_min[3], box_max[3];
+    double box_org[3];         /* NUI3: the core's frame of the box (its origin_mm, world mm) */
     char view_name[128];       /* the view shown ("" the 3D view) */
     double view_lo[3], view_hi[3]; /* the view's clip (scene mm) while a plan or section is shown */
     int view_clip;
@@ -353,6 +354,17 @@ int slog_last(void);
 int slog_save_report(App *a, char *path, size_t n);
 /* nset.c: the native app's own settings (native.json) */
 void nset_load(App *a);
+/* NUI3 (desktop.c): the system's file dialogs, drops, the title, the touchpad, the box by numbers, the palette */
+void desk_dialog(App *a, const char *purpose);
+void desk_tick(App *a);
+void desk_drop(App *a, const char *path);
+int desk_wheel(App *a, const SDL_MouseWheelEvent *w, float mx, float my);
+void desk_pinch(App *a, float scale);
+void panel_section_box(App *a);
+int desk_box_set(App *a, const double v[6]); /* min x y z, max x y z: metres, the project's frame */
+void palette_toggle(App *a);
+int palette_shown(void);
+void palette_ui(App *a);
 const char *nset_get(const char *key);
 double nset_num(const char *key, double dflt);
 void nset_set(const char *key, const char *json, int run);

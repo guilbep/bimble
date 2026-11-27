@@ -151,8 +151,14 @@ try {
   check("THIRD-PARTY.txt gives their SPDX identifiers", spdx.length === 0, spdx.join(", "));
   const ttf = list.filter((p) => /\.(ttf|otf)$/i.test(p) || /\/fonts\//.test(p));
   check("SIZE1: no font file in the archive", ttf.length === 0, ttf.join(" "));
-  const rest = list.filter((p) => !(WIN ? /^[^/]+\/(bimble-ccore\.exe|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/ : /^[^/]+\/(bimble-ccore|bimble|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/).test(p));
+  const rest = list.filter((p) => !(WIN ? /^[^/]+\/(bimble-ccore\.exe|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/ : /^[^/]+\/(bimble-ccore|bimble|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*|desktop\/.*)?$/).test(p));
   check("nothing else in the archive", rest.length === 0, rest.join(" "));
+  // NUI3: with the native app, its desktop parts (the menu entry, the file types, the icons, the install script)
+  if (list.some((p) => /^[^/]+\/bimble$/.test(p))) {
+    const want = ["ch.bimble.bimble.desktop", "ch.bimble.bimble.xml", "install.sh", "icon-32.png", "icon-128.png", "icon-256.png", "icon-512.png"];
+    const miss = want.filter((f) => !list.some((p) => p.endsWith(`/desktop/${f}`)));
+    check("NUI3: the native app's desktop parts in desktop/", miss.length === 0, miss.join(" "));
+  }
 
   execFileSync(TAR, [WIN ? "xf" : "xzf", ARCHIVE, "-C", tmp]);
   const root = join(tmp, NAME), bin = join(root, EXE), web = join(root, "web");

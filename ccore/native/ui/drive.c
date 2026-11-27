@@ -21,6 +21,10 @@
  *   ctrl_click_world x y z | expect_nselected <n>     a Ctrl-click (the selection grows) / how many are selected
  *   expect_selected <GlobalId> | expect_link <name> | expect_none
  *   expect_measure <mm> <tol> | expect_hidden <n> | expect_parts <n> | expect_text <key> <text>
+ *   swheel fx fy dx dy [ctrl] | pinch scale        NUI3: a touchpad's smooth scroll (pans; with Ctrl zooms), its pinch
+ *   drop <path> | expect_title <text>               NUI3: a file or folder dropped on the window; the window's title
+ *   expect_cam zoomed|panned                        NUI3: since the last swheel or pinch
+ *   box_numbers x0 y0 z0 x1 y1 z1 | expect_box_top m   NUI3: the section box by numbers (metres, the project's frame)
  *   quit
  * Out: <dir>/frames.csv (t_ms, kind, frame_ms, ui_ms, triangles, draws), inputs.csv (t_ms, what,
  * app_ms: event -> the frame's UI and core work done, frame_ms: event -> that frame's GPU fence),
@@ -256,6 +260,67 @@ static int run_step(App *a, Step *s, double now) {
         int n = 1;
         sscanf(arg, "%f %f %d", &fx, &fy, &n), vxy(a, fx, fy, &x, &y);
         push_mouse(a, SDL_EVENT_MOUSE_WHEEL, x, y, (float)n, 0);
+        return 1;
+    }
+    /* NUI3: the desktop's inputs */
+    if (!strcmp(op, "swheel")) { /* swheel fx fy dx dy [ctrl]: a touchpad's smooth scroll (fractional steps) */
+        float dx = 0, dy = 0;
+        sscanf(arg, "%f %f %f %f", &fx, &fy, &dx, &dy), vxy(a, fx, fy, &x, &y);
+        SDL_SetModState(strstr(arg, "ctrl") ? SDL_KMOD_LCTRL : SDL_KMOD_NONE);
+        SDL_Event e;
+        memset(&e, 0, sizeof e);
+        e.type = SDL_EVENT_MOUSE_WHEEL, e.wheel.windowID = SDL_GetWindowID(a->win), e.wheel.x = dx, e.wheel.y = dy, e.wheel.mouse_x = x, e.wheel.mouse_y = y;
+        SDL_PushEvent(&e);
+        cam_before = a->cam;
+        return 1;
+    }
+    if (!strcmp(op, "pinch")) { /* pinch scale: a touchpad's pinch (the pointer where it is) */
+        float sc = 1;
+        sscanf(arg, "%f", &sc);
+        SDL_Event e;
+        memset(&e, 0, sizeof e);
+        e.type = SDL_EVENT_PINCH_UPDATE, e.pinch.scale = sc, e.pinch.windowID = SDL_GetWindowID(a->win);
+        SDL_PushEvent(&e);
+        cam_before = a->cam;
+        return 1;
+    }
+    if (!strcmp(op, "drop")) { /* drop <path>: a file or folder dropped on the window */
+        static char dropped[1024];
+        snprintf(dropped, sizeof dropped, "%s", arg);
+        SDL_Event e;
+        memset(&e, 0, sizeof e);
+        e.type = SDL_EVENT_DROP_FILE, e.drop.windowID = SDL_GetWindowID(a->win), e.drop.data = dropped;
+        SDL_PushEvent(&e);
+        a->t_complete = 0;
+        return 1;
+    }
+    if (!strcmp(op, "box_numbers")) { /* box_numbers xmin ymin zmin xmax ymax zmax (m, the project's frame): the panel's fields */
+        double v[6] = {0};
+        sscanf(arg, "%lf %lf %lf %lf %lf %lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
+        desk_box_set(a, v);
+        return 1;
+    }
+    if (!strcmp(op, "expect_box_top")) { /* expect_box_top <m>: the box's top face, the project's frame, to the mm */
+        char what[300];
+        double want = atof(arg), got = (a->box_max[2] + a->origin0[2]) / 1000.0;
+        snprintf(what, sizeof what, "the section box's top at %.3f m (got %.4f m, box %s)", want, got, a->box_on ? "on" : "off");
+        expect(a, a->box_on && fabs(got - want) < 0.0015, what);
+        return 1;
+    }
+    if (!strcmp(op, "expect_title")) {
+        char what[700];
+        const char *t = a->win ? SDL_GetWindowTitle(a->win) : "";
+        snprintf(what, sizeof what, "the window's title holds \"%s\" (got \"%s\")", arg, t ? t : "");
+        expect(a, t && strstr(t, arg) != NULL, what);
+        return 1;
+    }
+    if (!strcmp(op, "expect_cam")) { /* expect_cam zoomed|panned: since the last swheel or pinch */
+        char what[700];
+        double d0 = cam_before.dist, d1 = a->cam.dist, mv = 0;
+        for (int i = 0; i < 3; i++) mv += fabs(a->cam.target[i] - cam_before.target[i]);
+        int zoomed = fabs(d1 - d0) > d0 * 1e-4, panned = mv > 1e-3 && !zoomed;
+        snprintf(what, sizeof what, "the camera %s (distance %.0f -> %.0f mm, target moved %.1f mm)", arg, d0, d1, mv);
+        expect(a, !strcmp(arg, "zoomed") ? zoomed : panned, what);
         return 1;
     }
     if (!strcmp(op, "key")) {
