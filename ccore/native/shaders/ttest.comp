@@ -2,7 +2,8 @@
 // NUI2: each selected tile's box against the depth pyramid of pass 1. Hidden when its nearest point (reverse Z: the
 // largest depth) is behind the farthest depth over every texel its screen rectangle covers (the level where that
 // rectangle spans at most 2 x 2 texels); a box reaching behind the near plane is never hidden. Writes its gate (its
-// draws in pass 2, its answer read back) and, when it is visible and not loaded, its stand-in's gate.
+// draws in pass 2, its answer read back) and, when it is visible and not loaded, its stand-in's gate. The level is the
+// finest where the rectangle spans at most 4 x 4 texels (16 reads).
 layout(local_size_x = 64) in;
 layout(set = 0, binding = 0, r32f) uniform readonly image2D hiz;
 struct Test { vec4 lo; vec4 hi; uvec4 g; }; // g.x own gate, g.y its stand-in's gate (0 none)
@@ -30,7 +31,7 @@ void main() {
         else {
             ivec2 a = ivec2(clamp(floor(mn), vec2(0.0), px.xy - 1.0)) / 4, b = ivec2(clamp(floor(mx), vec2(0.0), px.xy - 1.0)) / 4;
             int L = 0;
-            while (L < n.y - 1 && max((b.x >> L) - (a.x >> L), (b.y >> L) - (a.y >> L)) > 1) L++;
+            while (L < n.y - 1 && max((b.x >> L) - (a.x >> L), (b.y >> L) - (a.y >> L)) > 3) L++; // NUI2: up to 4 x 4 texels (tighter than 2 x 2)
             float far = 3.0e38;
             for (int y = a.y >> L; y <= (b.y >> L); y++)
                 for (int x = a.x >> L; x <= (b.x >> L); x++) far = min(far, imageLoad(hiz, ivec2(lv[L].x + min(x, lv[L].y - 1), min(y, lv[L].z - 1))).r);

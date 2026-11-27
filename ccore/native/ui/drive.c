@@ -324,6 +324,11 @@ static int run_step(App *a, Step *s, double now) {
         app_shot(a, p);
         nv_render_stats st = nv_render_get_stats(a->r); /* NUI2: what that picture drew (per view: the A/B against what is visible) */
         fprintf(stderr, "drive: shot %s: %llu triangles, %u tiles, %u draws, %u commands\n", arg, (unsigned long long)st.tris, st.tiles, st.draws, st.commands);
+        double sp[8];
+        nv_tiles_surplus(sp);
+        if (sp[7] > 0)
+            fprintf(stderr, "drive: shot %s: leaves %.2f M triangles: of elements shown %.2f M; pass 1 %.2f M, pass 2 %.2f M; of elements not shown: same group as a shown one %.2f M, a group passing the box test alone %.2f M, drawn in pass 1 (shown before) %.2f M\n",
+                    arg, sp[6] / 1e6, sp[0] / 1e6, sp[1] / 1e6, sp[2] / 1e6, sp[3] / 1e6, sp[4] / 1e6, sp[5] / 1e6);
         return 1;
     }
     if (!strcmp(op, "copy_report")) { /* Performance › Copy, as the button does: the clipboard and a file; stderr says where */

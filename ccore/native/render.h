@@ -160,7 +160,10 @@ void nv_tileset_attach(nv_render *r, nv_tileset *ts, uint32_t tile, nv_gtile *g)
 void nv_tileset_queued(nv_tileset *ts, uint32_t tile, int queued);
 void nv_render_tiles_opts(nv_render *r, const nv_tiles_opts *o);
 void nv_render_tiles_squeeze(nv_render *r);
-void nv_tiles_group_size(uint32_t n); /* occlusion_group: elements a group (default 16) */ /* a tile found no room in the budget's pages: release the unused */
+void nv_tiles_group_size(uint32_t n);
+/* BIMBLE_TILES_SURPLUS=1: the last frame's leaf triangles: [0] of elements shown (the need), [1] pass 1, [2] pass 2, of elements
+ * not shown: [3] in a group with one shown, [4] a group passing the box test alone, [5] drawn in pass 1 (seen before); [6] all */
+void nv_tiles_surplus(double out[8]); /* occlusion_group: elements a group (default 16) */ /* a tile found no room in the budget's pages: release the unused */
 nv_tiles_opts nv_render_get_tiles_opts(const nv_render *r);
 /* after nv_render_collect: the tiles to load next, nearest and coarsest first (at most cap) */
 uint32_t nv_render_tiles_want(nv_render *r, nv_tile_want *out, uint32_t cap);

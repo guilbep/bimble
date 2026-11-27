@@ -213,6 +213,11 @@ struct nv_tileset {
     uint32_t resident;
     uint8_t *sec_all;
     size_t sec_n;
+    /* the last walk's inputs (a frame with the same ones reuses its tiles) */
+    cc_tiles_view last_view;
+    double last_err;
+    uint64_t last_budget, last_gen;
+    int last_lod, last_ok;
 };
 void nv_tileset_keep_section(nv_tileset *ts, uint8_t *sec, size_t n) { free(ts->sec_all), ts->sec_all = sec, ts->sec_n = n; }
 void nv_tileset_section(const nv_tileset *ts, const uint8_t **sec, size_t *n) { *sec = ts->sec_all, *n = ts->sec_n; }
@@ -816,11 +821,13 @@ static void add_cmd(int pass, int page, int kind, uint32_t nidx, uint32_t ninst,
 
 /* an element's size on screen (px) from its sphere; cut 0: everything */
 typedef struct { double eye[3], k; int ortho; float cut; } Cut;
-static int small(const Cut *c, const float ctr[3], float r) {
+static int small(const Cut *c, const float ctr[3], float r) { /* r k / (dist - r) < cut, without a square root */
     if (c->cut <= 0) return 0;
     if (c->ortho) return r * c->k < c->cut;
-    double dx = ctr[0] - c->eye[0], dy = ctr[1] - c->eye[1], dz = ctr[2] - c->eye[2], d = sqrt(dx * dx + dy * dy + dz * dz) - r;
-    return d > 1 && r * c->k / d < c->cut;
+    float dx = ctr[0] - (float)c->eye[0], dy = ctr[1] - (float)c->eye[1], dz = ctr[2] - (float)c->eye[2];
+    float lim = r + r * (float)c->k / c->cut; /* small when farther than this (and farther than r + 1) */
+    float d2 = dx * dx + dy * dy + dz * dz;
+    return d2 > lim * lim && d2 > (r + 1) * (r + 1);
 }
 
 /* tile t's commands (pass 1 or 2, under `gate`): its triangles */
@@ -880,6 +887,27 @@ static uint64_t emit(nv_tiles_r *T, nv_tileset *ts, nv_gtile *g, int pass, uint3
  * box (its members' spheres) against pass 1's depth and drawn in pass 2 when visible. */
 #define CL 8
 static uint64_t lastc; /* the frame last collected (serial: this one's previous; frames in flight: the one before) */
+/* NUI2, where the triangles go (BIMBLE_TILES_SURPLUS=1 or nv_tiles_surplus_on): each group drawn recorded, its elements
+ * checked against the elements the frame showed (seen) when the frame is collected */
+typedef struct { nv_gtile *g; uint32_t a, b, gate; int32_t shape; uint8_t pass; } GRec;
+static GRec *grec[2];
+static uint32_t ngrec[2], cgrec[2];
+static int surplus_on = -1;
+static double surplus[8]; /* need, pass 1, pass 2, not seen: same group as a seen one, box passed alone, drawn in pass 1 but hidden now; leaves' total; frames */
+void nv_tiles_surplus(double out[8]) { memcpy(out, surplus, sizeof surplus); }
+static void grec_add(int slot, nv_gtile *g, uint32_t a, uint32_t b, int32_t shape, int pass, uint32_t gate) {
+    if (surplus_on < 0) surplus_on = getenv("BIMBLE_TILES_SURPLUS") != NULL;
+    if (!surplus_on) return;
+    if (ngrec[slot] == cgrec[slot]) {
+        uint32_t c = cgrec[slot] ? cgrec[slot] * 2 : 4096;
+        GRec *n2 = realloc(grec[slot], c * sizeof *n2);
+        if (!n2) return;
+        grec[slot] = n2, cgrec[slot] = c;
+    }
+    grec[slot][ngrec[slot]++] = (GRec){g, a, b, gate, shape, (uint8_t)pass};
+}
+static int cur_slot;
+static Cut slot_cut[2];
 static int seen_last(uint32_t e, uint64_t fr) { (void)fr; return e < nseen_cpu && lastc && seen_cpu[e] == (uint32_t)lastc; }
 static uint32_t group_test(float lo[3], float hi[3]) {
     uint32_t g = new_gate();
@@ -911,6 +939,7 @@ static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut 
                 grow_sphere(lo, hi, g->el[i].c, g->el[i].r);
             }
             if (!any) continue;
+            grec_add(cur_slot, g, c0, c1, -1, seen ? 1 : 2, 0);
             if (seen) { /* pass 1, ungated: runs joined with the previous groups' */
                 for (uint32_t i = c0; i < c1; i++) {
                     const GElem *e = &g->el[i];
@@ -927,6 +956,7 @@ static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut 
                 continue;
             }
             uint32_t gate = group_test(lo, hi);
+            if (surplus_on > 0 && ngrec[cur_slot]) grec[cur_slot][ngrec[cur_slot] - 1].gate = gate;
             uint64_t tris = 0;
             uint32_t run0 = 0, runn = 0;
             for (uint32_t i = c0; i < c1; i++) {
@@ -968,6 +998,7 @@ static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut 
                 uint32_t kept = F.ninst - i0;
                 if (!kept) continue;
                 uint32_t gate = seen ? 0 : group_test(lo, hi);
+                grec_add(cur_slot, g, c0, c1, (int32_t)s2, seen ? 1 : 2, gate);
                 add_cmd(seen ? 1 : 2, pgi, kind, sh->n, kept, g->off[B_I] + first, (int32_t)g->off[B_SV], i0, gate);
                 if (seen) F.tris1 += (uint64_t)sh->n / 3 * kept;
                 else F.gate_tris[gate] += (uint64_t)sh->n / 3 * kept;
@@ -1031,6 +1062,7 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
     uint64_t fr = T->frame;
     new_gate(); /* gate 0: always */
     T->ms_walk = 0;
+    if (!ref) cur_slot = r->slot, ngrec[cur_slot] = 0, slot_cut[cur_slot] = (Cut){{eye[0], eye[1], eye[2]}, kpx, ortho, cut_px};
     Cut cut = {{eye[0], eye[1], eye[2]}, kpx, ortho, cut_px};
     uint32_t nmap = 0;
     uint32_t want_n = 0;
@@ -1052,7 +1084,13 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
         if (ortho) v.px_per_mm = kpx;
         else v.k = kpx;
         double tw = nv_now_ms();
-        ts->nsel = nv_tiles_walk(ts, &v, &T->o);
+        /* the same view, options and marks as this set's last walk: the same tiles (still frames while tiles arrive) */
+        int same = ts->last_ok && !memcmp(&ts->last_view, &v, sizeof v) && ts->last_err == T->o.error_px && ts->last_budget == T->o.tri_budget &&
+                   ts->last_lod == T->o.lod && ts->last_gen == ts->desc_gen;
+        if (!same) {
+            ts->nsel = nv_tiles_walk(ts, &v, &T->o);
+            ts->last_view = v, ts->last_err = T->o.error_px, ts->last_budget = T->o.tri_budget, ts->last_lod = T->o.lod, ts->last_gen = ts->desc_gen, ts->last_ok = 1;
+        }
         T->ms_walk += nv_now_ms() - tw;
         for (uint32_t k = 0; k < ts->nsel; k++) {
             uint32_t t = ts->sel[k];
@@ -1417,6 +1455,37 @@ uint64_t nv_tiles_collect(R *r, int slot) {
             if (seen_cpu) memcpy(seen_cpu, sv, (nseen_cpu < r->ncolour ? nseen_cpu : r->ncolour) * 4ull);
             SDL_UnmapGPUTransferBuffer(r->dev, T->seen_downs[slot]);
         }
+    }
+    if (surplus_on > 0 && p->read_vis && seen_cpu) { /* where the triangles went (before the tiles released are freed) */
+        const uint32_t *gv = T->downs[slot] ? SDL_MapGPUTransferBuffer(r->dev, T->downs[slot], false) : NULL;
+        double s[8] = {0};
+        const Cut *cut = &slot_cut[slot];
+        uint32_t fr32 = (uint32_t)p->frame;
+        for (uint32_t i = 0; gv && i < ngrec[slot]; i++) {
+            const GRec *q = &grec[slot][i];
+            int drawn = q->pass == 1 || (q->gate < p->ngates && gv[q->gate]);
+            if (!drawn) continue;
+            int any_seen = 0;
+            for (uint32_t k = q->a; k < q->b; k++) {
+                uint32_t e = q->shape < 0 ? q->g->el[k].elem : q->g->cp[k].elem;
+                any_seen |= e < nseen_cpu && seen_cpu[e] == fr32;
+            }
+            for (uint32_t k = q->a; k < q->b; k++) {
+                const float *c = q->shape < 0 ? q->g->el[k].c : q->g->cp[k].c;
+                float rr = q->shape < 0 ? q->g->el[k].r : q->g->cp[k].r;
+                if (small(cut, c, rr)) continue;
+                uint32_t e = q->shape < 0 ? q->g->el[k].elem : q->g->cp[k].elem;
+                double t = q->shape < 0 ? q->g->el[k].n / 3.0 : q->g->sh[q->shape].n / 3.0;
+                s[q->pass == 1 ? 1 : 2] += t, s[6] += t;
+                if (e < nseen_cpu && seen_cpu[e] == fr32) s[0] += t;
+                else if (q->pass == 1) s[5] += t;
+                else if (any_seen) s[3] += t;
+                else s[4] += t;
+            }
+        }
+        if (gv) SDL_UnmapGPUTransferBuffer(r->dev, T->downs[slot]);
+        s[7] = 1;
+        memcpy(surplus, s, sizeof s);
     }
     bury(r);
     T->tiles_drawn = tiles;
