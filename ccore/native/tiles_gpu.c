@@ -111,6 +111,11 @@ enum { B_V, B_I, B_SV, B_PL, B_P, B_TT, NBUF };
 static const uint32_t UNIT[NBUF] = {16, 4, 12, 64, 12, 64};
 /* page 0: about 26 MB, in the measured ratio of a leaf (0.5 vertex and 3 indices a triangle) and a proxy */
 static const uint32_t CAP0[NBUF] = {1u << 19, 3u << 20, 1u << 17, 1u << 15, 1u << 17, 1u << 12};
+/* NUI3: page_grow: a page at most 2^page_grow times the first (26 MB): a 202 MB page made while tiles arrive cost the GPU
+ * tens of ms that frame (a real project: the spikes fell on the frames where pages were made); 1 (51 MB pages) measured no
+ * better there (more GPU memory reserved, still p95 within the noise): 3 kept */
+static uint32_t page_grow = 3;
+void nv_tiles_page_grow(uint32_t g) { page_grow = g > 3 ? 3 : g; }
 static uint64_t page_limit; /* the pages' bytes at most (the GPU budget's 1.25: ranges are not always contiguous), 0 none */
 static const SDL_GPUBufferUsageFlags PUSE[NBUF] = {SDL_GPU_BUFFERUSAGE_VERTEX, SDL_GPU_BUFFERUSAGE_INDEX, SDL_GPU_BUFFERUSAGE_VERTEX,
                                                    SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
@@ -163,8 +168,8 @@ static int page_alloc(SDL_GPUDevice *dev, const uint32_t n[NBUF], uint32_t off[N
     pthread_mutex_lock(&pmu);
     for (int k = 0; k <= npg && k < NPAGE; k++) {
         Page *p = &pg[k];
-        if (k == npg) { /* a new page, twice the last (to 8 times the first), or the tile's own size */
-            uint32_t f = 1u << (k < 3 ? k : 3);
+        if (k == npg) { /* a new page, twice the last (to page_grow times the first), or the tile's own size */
+            uint32_t f = 1u << (k < (int)page_grow ? k : (int)page_grow);
             uint64_t want = 0;
             for (int b = 0; b < NBUF; b++) want += (uint64_t)CAP0[b] * f * UNIT[b];
             if (page_limit && pg_bytes + want > page_limit && npg > 0) { pthread_mutex_unlock(&pmu); return -2; } /* the budget's pages full */
@@ -189,6 +194,11 @@ static int page_alloc(SDL_GPUDevice *dev, const uint32_t n[NBUF], uint32_t off[N
                 pg_bytes += (uint64_t)p->cap[b] * UNIT[b];
             }
             npg++;
+            if (getenv("BIMBLE_TILES_DEBUG")) {
+                uint64_t pb = 0;
+                for (int b2 = 0; b2 < NBUF; b2++) pb += (uint64_t)p->cap[b2] * UNIT[b2];
+                fprintf(stderr, "tiles: page %d made, %.0f MB, at %.1f ms\n", k, pb / 1048576.0, SDL_GetTicksNS() / 1e6);
+            }
         }
         int b = 0;
         for (; b < NBUF; b++)
@@ -343,6 +353,7 @@ void nv_tileset_queued(nv_tileset *ts, uint32_t tile, int q) {
 #define USE_S SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ
 
 /* a tile's arrays into its page's ranges: one transfer buffer, one command buffer (any thread). 0 ok. */
+static uint64_t up_bytes, up_n; /* NUI3: bytes uploaded since the last frame collected (BIMBLE_TILES_DEBUG) */
 static int upload(SDL_GPUDevice *dev, nv_gtile *g, const void *data[NBUF], const size_t bytes[NBUF]) {
     for (int b = 0; b < NBUF; b++) g->n[b] = (uint32_t)((bytes[b] + UNIT[b] - 1) / UNIT[b]);
     g->page = page_alloc(dev, g->n, g->off);
@@ -351,6 +362,7 @@ static int upload(SDL_GPUDevice *dev, nv_gtile *g, const void *data[NBUF], const
     for (int b = 0; b < NBUF; b++) tot += (bytes[b] + 15) & ~(size_t)15, g->bytes += (uint64_t)g->n[b] * UNIT[b];
     if (!tot) return 0;
     if (tot > 0xF0000000u) return -1;
+    __atomic_add_fetch(&up_bytes, tot, __ATOMIC_RELAXED), __atomic_add_fetch(&up_n, 1, __ATOMIC_RELAXED);
     SDL_GPUTransferBufferCreateInfo tci = {.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, .size = (Uint32)tot};
     SDL_GPUTransferBuffer *tb = SDL_CreateGPUTransferBuffer(dev, &tci);
     if (!tb) return -1;
@@ -1789,8 +1801,9 @@ uint64_t nv_tiles_collect(R *r, int slot) {
     if (dbg && !T->o.reference) {
         uint32_t sel = 0, res = 0;
         for (uint32_t si = 0; si < T->nsets; si++) sel += T->sets[si]->nsel, res += T->sets[si]->resident;
-        fprintf(stderr, "tiles: prepare %.2f ms (walk %.2f), draws %.2f ms; frame %llu: %u sets, %u selected, %u resident, %u tests, %u pass 1, %u drawn, %llu tris, %u gates, %u commands, want %u, read %d, leaves under their box %u\n",
-                T->ms_prepare, T->ms_walk, T->ms_draw, (unsigned long long)p->frame, T->nsets, sel, res, T->ntests, p->tiles1, tiles, (unsigned long long)tris, p->ngates, F.ncmd, T->want_n, p->read_vis, F.tiles_cold);
+        fprintf(stderr, "tiles: prepare %.2f ms (walk %.2f), draws %.2f ms; frame %llu: %u sets, %u selected, %u resident, %u tests, %u pass 1, %u drawn, %llu tris, %u gates, %u commands, want %u, read %d, leaves under their box %u, uploads %llu (%.1f MB), at %.1f ms\n",
+                T->ms_prepare, T->ms_walk, T->ms_draw, (unsigned long long)p->frame, T->nsets, sel, res, T->ntests, p->tiles1, tiles, (unsigned long long)tris, p->ngates, F.ncmd, T->want_n, p->read_vis, F.tiles_cold, (unsigned long long)__atomic_exchange_n(&up_n, 0, __ATOMIC_RELAXED),
+                __atomic_exchange_n(&up_bytes, 0, __ATOMIC_RELAXED) / 1048576.0, SDL_GetTicksNS() / 1e6);
     }
     return tris;
 }
