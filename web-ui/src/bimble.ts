@@ -1001,6 +1001,8 @@ export interface SettingsValues {
   recent: string[]; text_size: number; theme: string; ui_font: string; user_email: string; user_name: string;
   /** GPU1 (ADR 0083): the lab's 3D renderer (not Rust's; absent from an older core). */
   renderer?: "auto" | "webgl2" | "webgpu";
+  /** SIZE3 (ADR 0078 amendment 5): the GPU memory the links' detail may take, MB (not Rust's; absent from an older core: 768). */
+  link_gpu_mb?: number;
 }
 /** `query settings`. */
 export interface UserSettings {

@@ -11,6 +11,7 @@
 // Inputs: a press, a drag move, a wheel step, a click or a key on the viewport; its time to the end
 // of the next frame drawn (dropped when no frame comes within 2 s: it changed nothing on screen).
 // Nothing here is sent anywhere; file names leave the page only in the copied text, when asked.
+import { linkGpu } from "./gl/linkmem"; // SIZE3 (C)
 
 /** One frame drawn: when it started (performance.now), what it took (ms), moving or still, what it drew. */
 export interface PerfFrame { at: number; ms: number; moving: boolean; tris: number; draws: number; synced: boolean }
@@ -213,6 +214,7 @@ export function perfReport(names: boolean, file: string | null): string {
   L.push(`  still:  ${fline(s.still)}`);
   L.push(`last frame: ${num(s.tris)} triangles, ${num(s.draws)} draw calls; batches ${num(s.batches)}, culled ${num(s.culled)}; proxies drawn ${num(s.proxiesDrawn)} (${num(s.proxyTris)} triangles)`);
   L.push(`memory: GPU buffers ${mb(s.gpuBytes)}, JS heap ${mb(s.jsHeap)}, wasm ${mb(s.wasmBytes)}`);
+  if (linkGpu.value) L.push(`linked files on the GPU: ${mb(linkGpu.value.used)} of a ${mb(linkGpu.value.budget)} budget`); // SIZE3 (C)
   L.push(`model${names && file ? ` ${file}` : ""}: ${num(s.elements)} elements, ${num(s.triangles)} triangles; open -> first frame ${ms(s.openToFirst)}, -> complete picture ${ms(s.openToComplete)}`);
   if (s.links.length) {
     L.push(`links (${s.links.length}):`);

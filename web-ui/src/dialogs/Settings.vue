@@ -52,6 +52,8 @@ const fonts = computed(() => s.value?.fonts ?? []);
 /** DEAD1: a font this computer lacks cannot be chosen (it would change nothing): disabled with where its files go. */
 const installed = computed(() => new Map(fonts.value.map((f) => [f, fontInstalled(f)])));
 const sizes = computed<[number, number]>(() => s.value?.text_sizes ?? [10, 16]);
+/** SIZE3: the links' GPU budget's choices (MB), the stored value among them. */
+const linkGpuChoices = computed(() => [...new Set([256, 512, 768, 1024, 1536, 2048, 4096, v.value?.link_gpu_mb ?? 768])].sort((a, b) => a - b));
 const isDefaultLook = computed(() => !v.value || (v.value.theme === "grey" && v.value.ui_font === "roboto" && v.value.text_size === TEXT_SIZE));
 const close = () => { currentDialog.value = null; };
 </script>
@@ -115,6 +117,12 @@ const close = () => { currentDialog.value = null; };
         <label v-if="s?.applies.moving_proxies" class="row"><span>{{ tx('settings.proxies') }}</span>
           <input type="checkbox" :checked="v.moving_proxies" data-bb="settings-moving-proxies" data-setting="moving_proxies" @change="set({ moving_proxies: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s?.applies.moving_proxies" class="note" data-bb="settings-proxies-note">{{ tx('settings.proxiesNote') }}</p>
+        <!-- SIZE3 (ADR 0078 amendment 5): the links' GPU budget, MB -->
+        <label v-if="s?.applies.link_gpu_mb" class="row"><span>{{ tx('settings.linkGpu') }}</span>
+          <select class="inp" :value="v.link_gpu_mb ?? 768" data-bb="settings-link-gpu" data-setting="link_gpu_mb" @change="set({ link_gpu_mb: Number(($event.target as HTMLSelectElement).value) })">
+            <option v-for="mb in linkGpuChoices" :key="mb" :value="mb">{{ tx('settings.linkGpu.mb', { mb }) }}</option>
+          </select></label>
+        <p v-if="s?.applies.link_gpu_mb" class="note" data-bb="settings-link-gpu-note">{{ tx('settings.linkGpuNote') }}</p>
         <!-- GPU1 (ADR 0083): the 3D renderer (automatic is WebGL2 for now); GPU culling of copies applies with WebGPU -->
         <label v-if="s?.applies.renderer" class="row"><span>{{ tx('settings.renderer') }}</span>
           <select class="inp" :value="v.renderer ?? 'auto'" data-bb="settings-renderer" data-setting="renderer" @change="set({ renderer: ($event.target as HTMLSelectElement).value as 'auto' | 'webgl2' | 'webgpu' })">

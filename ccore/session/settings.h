@@ -49,7 +49,12 @@ typedef struct {
      * fields (its viewer chose wgpu's backend itself): not in to_json, written to the file only once
      * set (a file without it keeps its bytes); query settings lists it in `values`. */
     char renderer[8];
+    /* SIZE3 (ADR 0078 amendment 5): the GPU memory the links' detail may take in the lab's 3D view, MB
+     * (64..=65536, 768). Not Rust's (its viewer had no budget across links): as `renderer`, written to the
+     * file only once set, listed in query settings' `values`. */
+    unsigned link_gpu_mb;
 } cc_settings;
+#define CC_LINK_GPU_MB_DEFAULT 768u
 
 /* Settings::default(). */
 void cc_settings_default(cc_settings *s);

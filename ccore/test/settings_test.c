@@ -476,6 +476,41 @@ int main(void) {
         reset_dir();
     }
 
+    /* ---- SIZE3 (ADR 0078 amendment 5): the links' GPU budget in MB, not one of Rust's fields: written only once set.
+     * Fails on the code before SIZE3: an unknown field. ---- */
+    {
+        reset_dir();
+        cc_session *s = session_on_file();
+        free(ask(s, "action", "set_settings", "{\"moving_fps\":60}", &st));
+        size_t n = 0;
+        char *f = read_all(FILE_, &n);
+        check_true("link_gpu_mb: a file written before it is set has none", st == CC_OK && f && !strstr(f, "link_gpu_mb"));
+        free(f);
+        char *q = ask(s, "query", "settings", "", &st);
+        check_true("link_gpu_mb: 768 by default, applies", strstr(q, "\"link_gpu_mb\":768") && strstr(q, "\"link_gpu_mb\":true") != NULL);
+        free(q);
+        free(ask(s, "action", "set_settings", "{\"link_gpu_mb\":512}", &st));
+        f = read_all(FILE_, &n);
+        check_true("link_gpu_mb: set to 512, written in its sorted place", st == CC_OK && f && strstr(f, "\"gpu_cull\":false,\"link_gpu_mb\":512,\"memory_share\":"));
+        free(f);
+        q = ask(s, "query", "settings", "", &st);
+        check_true("link_gpu_mb: 512 read back", strstr(q, "\"link_gpu_mb\":512") != NULL);
+        free(q);
+        char *e = ask(s, "action", "set_settings", "{\"link_gpu_mb\":10}", &st);
+        check_true("link_gpu_mb: under 64 refused", st != CC_OK && strstr(e, "`link_gpu_mb`: a whole number of MB from 64 to 65536"));
+        free(e);
+        cc_settings d;
+        cc_settings_default(&d);
+        Buf b;
+        buf_init(&b);
+        cc_settings_to_json(&d, NULL, 0, &b);
+        buf_append(&b, "", 1);
+        check_true("link_gpu_mb: not in Rust's to_json", b.p && !strstr(b.p, "link_gpu_mb"));
+        buf_free(&b);
+        cc_session_free(s);
+        reset_dir();
+    }
+
     /* ---- the actions, the capabilities, query about ---- */
     {
         cc_session *s = cc_session_new(cc_platform_native());

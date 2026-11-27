@@ -126,3 +126,55 @@ export async function bmsh4ToBmsh3(ab: ArrayBuffer, maxBytes = 2 ** 31, yieldTo?
   if (at !== n) throw new Error("BMSH 4: trailing bytes");
   return out;
 }
+
+// ---- SIZE3 (B): the decode in a Web Worker when the page can start one (gl/bmsh4.worker.ts), else here in
+// slices (the wasm lab without workers, a test page) ----
+let worker: Worker | null | undefined;
+let nextId = 1;
+const pending = new Map<number, { res: (b: ArrayBuffer) => void; rej: (e: Error) => void }>();
+function decoder(): Worker | null {
+  if (worker !== undefined) return worker;
+  try {
+    worker = typeof Worker === "undefined" ? null : new Worker(new URL("./bmsh4.worker.ts", import.meta.url), { type: "module" });
+    if (worker) {
+      worker.onmessage = (e: MessageEvent) => {
+        const m = e.data as { id: number; out?: ArrayBuffer; error?: string };
+        const p = pending.get(m.id);
+        pending.delete(m.id);
+        if (!p) return;
+        if (m.out) p.res(m.out);
+        else p.rej(new Error(m.error ?? "BMSH 4: the decoder failed"));
+      };
+      worker.onerror = () => { // a worker that cannot start (a blocked script): here from now on
+        for (const p of pending.values()) p.rej(new Error("BMSH 4: the decoder failed"));
+        pending.clear();
+        worker?.terminate();
+        worker = null;
+      };
+    }
+  } catch { worker = null; }
+  return worker;
+}
+/** Stats of the decodes (performance panel, tests): in a worker or on the page's thread. */
+export const bmsh4Stats = { worker: 0, page: 0, maxPageSliceMs: 0 };
+
+/** bmsh4ToBmsh3 off the page's thread when it can be (the bytes `ab` are transferred: unusable after). */
+export async function bmsh4Decode(ab: ArrayBuffer, maxBytes = 2 ** 31): Promise<ArrayBuffer> {
+  const w = decoder();
+  if (w) {
+    const id = nextId++;
+    try {
+      const out = await new Promise<ArrayBuffer>((res, rej) => { pending.set(id, { res, rej }); w.postMessage({ id, ab, max: maxBytes }, [ab]); });
+      bmsh4Stats.worker++;
+      return out;
+    } catch (e) {
+      if (!ab.byteLength) throw e; // the bytes went to the worker: its error stands (else: decoded here)
+    }
+  }
+  bmsh4Stats.page++;
+  let t0 = performance.now();
+  return bmsh4ToBmsh3(ab, maxBytes, () => new Promise<void>((res) => {
+    bmsh4Stats.maxPageSliceMs = Math.max(bmsh4Stats.maxPageSliceMs, performance.now() - t0);
+    setTimeout(() => { t0 = performance.now(); res(); }, 0);
+  }));
+}

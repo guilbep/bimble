@@ -13,6 +13,7 @@ import { state } from "../bimble";
 import { t } from "../i18n";
 import { currentPanel } from ".";
 import { adapterNames, perfRecord, perfReport, perfSnapshot, perfWait, type FrameStats, type PerfSnapshot } from "../perf";
+import { linkGpu } from "../gl/linkmem"; // SIZE3 (C)
 
 const snap = shallowRef<PerfSnapshot>(perfSnapshot());
 const names = shallowRef(false);
@@ -85,6 +86,7 @@ function record() {
     <div class="sec">{{ t('perf.memory') }}</div>
     <dl class="kv two">
       <dt>{{ t('perf.gpuBytes') }}</dt><dd class="mono" data-bb="perf-gpu-bytes">{{ mb(snap.gpuBytes) }}</dd>
+      <template v-if="linkGpu"><dt>{{ t('perf.linkGpu') }}</dt><dd class="mono" data-bb="perf-link-gpu">{{ mb(linkGpu.used) }} / {{ mb(linkGpu.budget) }}</dd></template>
       <dt>{{ t('perf.jsHeap') }}</dt><dd class="mono">{{ mb(snap.jsHeap) }}</dd>
       <dt>{{ t('perf.wasm') }}</dt><dd class="mono">{{ mb(snap.wasmBytes) }}</dd>
     </dl>

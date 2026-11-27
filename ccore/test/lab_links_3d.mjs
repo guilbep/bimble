@@ -437,6 +437,42 @@ async function main() {
   await waitFor("the far link back", 10000, async () => ((await gl()).farLinks ?? []).length === 0).catch(() => null);
   await evalJs(`window.__bbGl.bench.look(${JSON.stringify(near)}, 140000)`);
 
+  // ---- SIZE3 (B): an open that keeps no link's arrays (the open's decoded budget at 0): each link read in the
+  // worker, its boxes kept and its arrays dropped; the links in view asked again one at a time, largest first:
+  // the same picture once every link the frame wants is on the GPU. Fails on the code before SIZE3: every link's
+  // arrays read before the first upload (no openKeepBytes, no linksDetailedAt). ----
+  // (both pictures after a reload of every link: the first with the open's default budget, the second with 0)
+  const reloadAll = async (keep) => {
+    const f0 = (await gl()).meshFetches;
+    await evalJs(keep === null ? "delete window.__bbGl.openKeepBytes" : `window.__bbGl.openKeepBytes = ${keep}`);
+    await hcall("action", "manage_links", { op: "reload_all" });
+    await waitFor("the mesh asked again", 30000, async () => (await gl()).meshFetches > f0);
+    await waitFor("every link ready again", 60000, async () => JSON.parse((await hcall("query", "links_panel")).text).models.every((m) => m.state === "ready"));
+    await sleep(1500); // (the last conversion's change reaches the page, which asks the mesh once more)
+    await waitFor("the links in view detailed", 60000, async () => { const g = await gl(); return typeof g.linksDetailedAt === "number" && g.linksDetailedAt > g.meshAt; });
+    await calm();
+    await evalJs(`window.__bbGl.bench.look(${JSON.stringify(near)}, 140000)`);
+    await calm();
+    return { st: await gl(), pic: await evalJs("Array.from(window.__bbGl.bench.read().rgba)") };
+  };
+  const { pic: refPic } = await reloadAll(null);
+  const { st: st5, pic: pic5 } = await reloadAll(0);
+  let d5 = 0;
+  for (let i = 0; i < refPic.length; i += 4) if (Math.max(Math.abs(refPic[i] - pic5[i]), Math.abs(refPic[i + 1] - pic5[i + 1]), Math.abs(refPic[i + 2] - pic5[i + 2])) > 40) d5++;
+  check("SIZE3: an open keeping no link's arrays: each read off the page's thread, none kept; the same picture once the links in view are back",
+    st5.openKeptBytes === 0 && st5.decodes?.worker > 0 && st5.decodes.page === 0 && d5 === 0 && (st5.partBytes ?? []).slice(1).every((b) => b === 0),
+    `kept ${st5.openKeptBytes}, peak ${st5.openPeakDecoded}, decodes ${JSON.stringify(st5.decodes)}, ${d5} pixels differ, refetches ${st5.linkRefetches}`);
+  await evalJs("delete window.__bbGl.openKeepBytes");
+
+  // ---- SIZE3 (C): the links' GPU budget is a setting in MB (768 by default), shown in the performance panel ----
+  const b0 = (await gl()).linkGpuBudget;
+  await evalJs("(async () => (await import('/src/bimble.ts')).setSettings({ link_gpu_mb: 1024 }))()");
+  const b1 = await waitFor("the budget follows the setting", 10000, async () => { const b = (await gl()).linkGpuBudget; return b === 1024 * 2 ** 20 ? b : null; }).catch(() => null);
+  check("SIZE3: the links' GPU budget: 768 MB by default, the setting link_gpu_mb in MB", b0 === 768 * 2 ** 20 && b1 === 1024 * 2 ** 20, `${b0} -> ${b1}`);
+  const panelLine = await evalJs("(async () => { const p = await import('/src/perf.ts'); return p.perfReport ? String(p.perfReport()).split('\\n').find((l) => l.startsWith('linked files on the GPU')) ?? null : null; })()").catch(() => null);
+  check("SIZE3: the performance report says the links' use against the budget", /linked files on the GPU: .* of a 1024\.0 MB budget/.test(panelLine ?? ""), String(panelLine));
+  await evalJs("(async () => (await import('/src/bimble.ts')).setSettings({ link_gpu_mb: 768 }))()");
+
   // ---- the numbers ----
   const st2 = await gl();
   console.log(`GPU ${(st2.gpuBytes / 1e6).toFixed(1)} MB (links' proxies ${(st2.linkProxies.reduce((a, x) => a + x.bytes, 0) / 1e6).toFixed(2)} MB); state upload: ${JSON.stringify(st2.stateUpload)}, visibility in the page ${st2.visApplyMs?.toFixed(1)} ms`);
