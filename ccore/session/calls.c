@@ -4026,6 +4026,65 @@ static int opening_at(cc_session *s, const char *body, size_t n, const cc_mview 
 
 /* The measure tool (ticket T1, measure.h): the shown scene and its visible links, the box that
  * cuts (a plan's range, else the section box when on). */
+/* SIZE3: the measure body's ray (and the ray one pixel aside, and the pixels of tolerance): 0 none, 1 the ray,
+ * 2 both. */
+static int body_ray(const char *body, size_t n, double ray[6], double rtol[6], double *tol_px) {
+    if (!body || !n) return 0;
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, body, n, &je), *r = v && v->type == JR_OBJ ? jr_get(v, "ray") : NULL;
+    const JrVal *t = v && v->type == JR_OBJ ? jr_get(v, "ray_tol") : NULL, *p = v && v->type == JR_OBJ ? jr_get(v, "tol_px") : NULL;
+    int got = 0;
+    if (r && r->type == JR_ARR && r->n == 6) {
+        got = 1;
+        for (int k = 0; k < 6; k++) got &= r->items[k].type == JR_NUM, ray[k] = r->items[k].num;
+        if (got && t && t->type == JR_ARR && t->n == 6) {
+            int ok = 1;
+            for (int k = 0; k < 6; k++) ok &= t->items[k].type == JR_NUM, rtol[k] = t->items[k].num;
+            if (ok) got = 2;
+        }
+        if (p && p->type == JR_NUM && p->num > 0 && p->num <= 1000) *tol_px = p->num;
+    }
+    arena_free(&a);
+    return got;
+}
+
+/* SIZE3: whether the ray passes within the pick tolerance of a box (the box grown by the gap to the ray one pixel
+ * aside, times the pixels of tolerance, at the box's far side: generous). */
+static int ray_near_box(const double ray[6], const double *rtol, double tol_px, const double lo[3], const double hi[3]) {
+    double d[3] = {ray[3], ray[4], ray[5]}, l = cc_sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (!(l > 0)) return 1;
+    for (int k = 0; k < 3; k++) d[k] /= l;
+    double far = 0;
+    for (int c = 0; c < 8; c++) {
+        double q[3] = {c & 1 ? hi[0] : lo[0], c & 2 ? hi[1] : lo[1], c & 4 ? hi[2] : lo[2]}, e = 0;
+        for (int k = 0; k < 3; k++) e += (q[k] - ray[k]) * (q[k] - ray[k]);
+        if (e > far) far = e;
+    }
+    far = cc_sqrt(far);
+    double m = 1.0;
+    if (rtol) {
+        double d2[3] = {rtol[3], rtol[4], rtol[5]}, l2 = cc_sqrt(d2[0] * d2[0] + d2[1] * d2[1] + d2[2] * d2[2]), go = 0, gd = 0;
+        if (!(l2 > 0)) return 1;
+        for (int k = 0; k < 3; k++) go += (rtol[k] - ray[k]) * (rtol[k] - ray[k]), gd += (d2[k] / l2 - d[k]) * (d2[k] / l2 - d[k]);
+        m += (cc_sqrt(go) + cc_sqrt(gd) * far) * (tol_px + 1.0);
+    }
+    double t0 = -1.0 / 0.0, t1 = 1.0 / 0.0;
+    for (int k = 0; k < 3; k++) {
+        double a = lo[k] - m, b = hi[k] + m;
+        if (d[k] == 0.0) {
+            if (ray[k] < a || ray[k] > b) return 0;
+            continue;
+        }
+        double u = (a - ray[k]) / d[k], w = (b - ray[k]) / d[k];
+        if (u > w) { double x = u; u = w, w = x; }
+        if (u > t0) t0 = u;
+        if (w < t1) t1 = w;
+    }
+    return t1 >= t0 && t1 >= 0.0;
+}
+
 static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     const cc_scene *sc = loaded(s) ? scene_now(s) : NULL;
     cc_mlayer layers[1 + CC_MAX_LINKS];
@@ -4035,7 +4094,12 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
     if (sc) {
         memset(layers, 0, sizeof layers);
         layers[nl].sc = sc, layers[nl].vis = &s->vis, memset(layers[nl].off, 0, sizeof layers[nl].off), nl++;
+        double ray[6], rtol[6], tol_px = 12.0;
+        int has_ray = body_ray(body, n, ray, rtol, &tol_px);
         for (size_t i = 0; i < s->nlinks && nl < 1 + CC_MAX_LINKS; i++) { /* lib.rs snap_at `theirs` */
+            double blo[3], bhi[3]; /* SIZE3: a link not decoded whose box the pointer's ray misses is not decoded for it */
+            if (has_ray && s->links[i].visible && cc_link_box_lazy(&s->links[i], sc->origin, blo, bhi) && !ray_near_box(ray, has_ray > 1 ? rtol : NULL, tol_px, blo, bhi))
+                continue;
             const cc_scene *ls = s->links[i].visible ? cc_link_scene(&s->links[i]) : NULL;
             if (!ls) continue;
             layers[nl].sc = ls, layers[nl].vis = NULL;

@@ -79,6 +79,22 @@ int cc_link_resident(cc_link *k) {
     return 0;
 }
 
+int cc_link_box_lazy(const cc_link *k, const double org[3], double lo[3], double hi[3]) {
+    if (!k->kind || !k->vf || !k->vf->lazy || k->resident || !(k->vf->box[0] <= k->vf->box[3])) return 0;
+    const double *O = k->vf->origin;
+    double c = k->pwant ? k->pc : 1.0, sn = k->pwant ? k->ps : 0.0, t[3] = {0, 0, 0};
+    if (k->pwant) memcpy(t, k->pt, sizeof t);
+    double P[3] = {c * O[0] - sn * O[1] + t[0], sn * O[0] + c * O[1] + t[1], O[2] + t[2]}; /* place_scene's origin */
+    for (int q = 0; q < 3; q++) lo[q] = 1.0 / 0.0, hi[q] = -1.0 / 0.0;
+    for (int i = 0; i < 4; i++) {
+        double x = i & 1 ? k->vf->box[3] : k->vf->box[0], y = i & 2 ? k->vf->box[4] : k->vf->box[1];
+        double w[2] = {c * x - sn * y + P[0] - org[0], sn * x + c * y + P[1] - org[1]};
+        for (int q = 0; q < 2; q++) lo[q] = w[q] < lo[q] ? w[q] : lo[q], hi[q] = w[q] > hi[q] ? w[q] : hi[q];
+    }
+    lo[2] = k->vf->box[2] + P[2] - org[2], hi[2] = k->vf->box[5] + P[2] - org[2];
+    return 1;
+}
+
 const cc_scene *cc_link_raw_scene(const cc_link *k) {
     if (k->vf && k->vf->lazy) cc_link_resident((cc_link *)k); /* SIZE3: decoded on demand (the session's calls are serial) */
     return cc_link_rows(k);
@@ -145,7 +161,7 @@ int cc_links_add(cc_session *s, const char *path, cc_error *err) {
         k.uid = ++s->link_uid_next, k.pinned = 1, k.colour = -1; /* LINKF */
         s->links[s->nlinks++] = k;
     }
-    const cc_scene *sc = cc_link_scene(&k);
+    const cc_scene *sc = cc_link_rows(&k);
     cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, sc->nelements); /* lib.rs:1484 */
     s->links_gen++, s->links_mesh_gen++; /* LNK3D: the geometry changed */
     return 0;
@@ -228,7 +244,7 @@ void cc_links_draw_json(cc_session *s, JsonW *w) {
         const cc_link *k = &s->links[i];
         double c, sn, t[3], o[3];
         cc_link_placement(s, k, &c, &sn, t);
-        const double *lo = k->kind ? cc_link_raw_scene(k)->origin : (const double[3]){0, 0, 0};
+        const double *lo = k->kind ? cc_link_rows(k)->origin /* SIZE3: no mesh decoded */ : (const double[3]){0, 0, 0};
         o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
         jw_obj_begin(w);
         jw_key(w, "colour"), jw_i64(w, k->colour);
@@ -326,7 +342,7 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
         buf_puts(out, "no element with this id");
         return -1;
     }
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k); /* SIZE3: its texts only */
     const cc_scene_element *e = &sc->elements[i];
     cc_str cls = e->class_name, nm = {0}, storey = {0}, material = {0};
     if (k->kind == CC_LINK_IFC) {

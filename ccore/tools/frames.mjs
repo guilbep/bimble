@@ -732,12 +732,14 @@ async function linksMain() {
   out.cacheSections = sumSections(files.map((f) => `${f}.bimbleview`));
   out.meshServed = await ev("window.__bbGl.meshBytesServed ?? window.__bbGl.meshBytes ?? null");
   out.hostRssMb = rssMb(host.pid), out.hostAnonMb = anonMb(host.pid); // SIZE3: anonymous apart (the caches' mapped pages are file pages)
+  out.hostDecodes = (host.out.match(/its meshes decoded/g) ?? []).length, out.hostDrops = (host.out.match(/its meshes dropped/g) ?? []).length; // SIZE3: a link's meshes decoded in the host
   await S("HeapProfiler.collectGarbage").catch(() => {});
   await sleep(500);
   { const h = await S("Runtime.getHeapUsage"); out.jsHeap = h.usedSize, out.arrayBuffers = h.backingStorageSize ?? null; }
   out.rss = chromeRss();
   console.log(`SIZE3: open: JS heap + array buffers at most ${mb(out.maxHeap)} MB, decoded at most ${mb(out.openPeakDecoded)} MB, decodes ${JSON.stringify(out.decodes)}, ` +
-    `links in view detailed at ${out.detailedAt?.toFixed(0)} ms (first picture ${out.firstPicture?.toFixed(0)} ms); host anonymous ${out.hostAnonMb.toFixed(0)} MB`);
+    `links in view detailed at ${out.detailedAt?.toFixed(0)} ms (first picture ${out.firstPicture?.toFixed(0)} ms); host anonymous ${out.hostAnonMb.toFixed(0)} MB, link meshes decoded ${out.hostDecodes} times, dropped ${out.hostDrops}`);
+  if (process.env.FRAMES_HOST_LOG) for (const l of host.out.split("\n").filter((x) => /decoded|dropped|POST|query/.test(x)).slice(-60)) console.log(`  host: ${l}`);
   console.log(`memory: caches ${JSON.stringify(out.cacheSections)}; mesh served ${out.meshServed}; host RSS ${out.hostRssMb.toFixed(0)} MB; ` +
     `tab RSS ${out.rss.renderer.toFixed(0)} MB, GPU process ${out.rss.gpu.toFixed(0)} MB; JS heap ${mb(out.jsHeap)} MB (+ ${mb(out.arrayBuffers)} MB array buffers); GPU ${mb(out.gpuBytes)} MB`);
   if (PIXELS) { mkdirSync(PIXELS, { recursive: true }); await pixels(); }

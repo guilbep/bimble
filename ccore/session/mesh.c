@@ -196,7 +196,7 @@ static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error 
         if (v2) { /* LINKF: the turn about Z (cos, sin), the placed origin (host world mm), the colour */
             double c, sn, t[3], o[3];
             cc_link_placement(s, k, &c, &sn, t);
-            const double *lo = cc_link_raw_scene(k)->origin;
+            const double *lo = cc_link_rows(k)->origin;
             o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
             buf_append(out, &c, 8), buf_append(out, &sn, 8);
             for (int q = 0; q < 3; q++) buf_append(out, &o[q], 8);

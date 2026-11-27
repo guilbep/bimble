@@ -61,9 +61,10 @@ typedef struct {
     double density; /* kg/m3 */
 } cc_view_density;
 
-typedef struct { /* SIZE3: where a mesh's codec bytes are in a mapped view file (cc_viewfile_read_mapped) */
+typedef struct { /* SIZE3: where a mesh's codec bytes are in a mapped view file (cc_viewfile_read_mapped), its box */
     uint64_t at;
     uint32_t len;
+    float lo[3], hi[3];
 } cc_viewfile_ref;
 
 typedef struct {
@@ -112,6 +113,7 @@ typedef struct {
      * must outlive this view file; strings point into them; the meshes hold their counts only (arrays
      * NULL) until cc_viewfile_materialize decodes them; shape_refs[k] is shape k's bytes. */
     int lazy;
+    float box[6]; /* SIZE3: a lazy read's scene box (lo, hi; scene coordinates: placed shapes' boxes' corners placed) */
     const uint8_t *base;
     cc_viewfile_ref *shape_refs; /* malloc, lazy only */
     Arena *lazy_scratch;         /* during the read only */

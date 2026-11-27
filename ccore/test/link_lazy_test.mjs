@@ -37,7 +37,8 @@ const h = spawn(BIN, [String(port("link_lazy_test"))], {
 });
 h.log = "";
 h.stderr.on("data", (d) => (h.log += d));
-process.on("exit", () => {
+process.on("exit", (code) => {
+  if (code) console.log(`host log (tail):\n${h.log.slice(-4000)}`);
   try { h.kill("SIGKILL"); } catch { /* gone */ }
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -73,6 +74,19 @@ const mesh0 = await linkMesh();
 m = (await q("links_panel")).models[0];
 check("the panel, visibility_sets and the link's mesh decode nothing", count(/its meshes decoded/g) === decoded0 && m.triangles > 0 && mesh0.length > 52 &&
   mesh0.toString("latin1", 0, 4) === "BMSH" && mesh0.readUInt32LE(4) === 4, `${count(/its meshes decoded/g)} ${m.triangles} ${mesh0.length}`);
+// the calls the page makes on every refresh decode nothing (link_draw)
+await q("link_draw");
+check("link_draw decodes nothing", count(/its meshes decoded/g) === decoded0, String(count(/its meshes decoded/g)));
+// the measure tool: a pointer whose ray misses the link's box does not decode it; one through it does
+await call("action", "measure");
+let mr = await call("tool", "measure_pointer", JSON.stringify({ ray: [900000, 900000, 100000, 0, 0, -1], ray_tol: [900010, 900000, 100000, 0, 0, -1] }));
+check("measure: a ray far from the link does not decode it", mr.status === 200 && count(/its meshes decoded/g) === decoded0, `${mr.status} ${count(/its meshes decoded/g)}`);
+mr = await call("tool", "measure_pointer", JSON.stringify({ ray: [10, 20, 100000, 0, 0, -1], ray_tol: [20, 20, 100000, 0, 0, -1] }));
+check("measure: a ray through the link decodes it and snaps on it", mr.status === 200 && count(/its meshes decoded/g) === decoded0 + 1 && /"hover":\{/.test(mr.text),
+  `${mr.text.slice(0, 120)} ${count(/its meshes decoded/g)}`);
+await call("action", "measure");
+await sleep(2200); // dropped again (keep time 1.5 s)
+const decoded1 = count(/its meshes decoded/g);
 // geometry through the link: Box to selection around a linked element, the plan's cut
 const id = mesh0.toString("latin1", 52, 74);
 let r = await call("select", "-", JSON.stringify({ link: "a.ifc", ids: [id] }));
@@ -80,7 +94,7 @@ const bx = await call("action", "box_to_selection");
 const vis1 = await q("visibility");
 const box1 = JSON.stringify(vis1.section_box);
 check("Box to selection around a linked element decodes it", r.status === 200 && bx.status === 200 && vis1.section_box?.on === true &&
-  count(/its meshes decoded/g) === decoded0 + 1, `${r.text} ${box1}`);
+  count(/its meshes decoded/g) === decoded1 + 1, `${r.text} ${box1}`);
 await call("action", "section_box", JSON.stringify({ on: false })).catch(() => null);
 const ov = await q("open_views"), plan = ov.views.find((v) => v.type === "plan");
 const svg1 = plan ? JSON.parse((await call("query", "view_svg", JSON.stringify({ view: plan.id, bare: true }))).text).svg : "";
@@ -94,7 +108,7 @@ check("past the budget, after the keep time: its meshes dropped", count(/its mes
 r = await call("select", "-", JSON.stringify({ link: "a.ifc", ids: [id] }));
 await call("action", "box_to_selection");
 const vis2 = await q("visibility");
-check("Box to selection again: the same box (decoded again)", JSON.stringify(vis2.section_box) === box1 && count(/its meshes decoded/g) >= decoded0 + 2, JSON.stringify(vis2.section_box));
+check("Box to selection again: the same box (decoded again)", JSON.stringify(vis2.section_box) === box1 && count(/its meshes decoded/g) >= decoded1 + 2, JSON.stringify(vis2.section_box));
 const svg2 = plan ? JSON.parse((await call("query", "view_svg", JSON.stringify({ view: plan.id, bare: true }))).text).svg : "";
 check("the plan again: the same drawing", svg2 === svg1 && svg2.length > 0);
 void vis0;

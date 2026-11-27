@@ -474,7 +474,17 @@ static int mesh(Rd *r, cc_viewfile *v, cc_mesh *m, cc_viewfile_ref *ref, Err *e)
         ref->at = (uint64_t)(p - v->base), ref->len = (uint32_t)len;
     }
     int rc = cc_meshcodec_decode(p, len, a, m, &why);
-    if (v->lazy && rc == CC_MC_OK) m->pos = NULL, m->idx = NULL, m->edges = NULL, m->normals = NULL;
+    if (v->lazy && rc == CC_MC_OK) {
+        for (int k = 0; k < 3; k++) ref->lo[k] = 1.0f / 0.0f, ref->hi[k] = -1.0f / 0.0f; /* SIZE3: its box (finite points) */
+        for (uint32_t i = 0; i < m->nv; i++)
+            for (int k = 0; k < 3; k++) {
+                float c = m->pos[i][k];
+                if (c - c != 0.0f) continue;
+                if (c < ref->lo[k]) ref->lo[k] = c;
+                if (c > ref->hi[k]) ref->hi[k] = c;
+            }
+        m->pos = NULL, m->idx = NULL, m->edges = NULL, m->normals = NULL;
+    }
     switch (rc) {
     case CC_MC_OK: return 0;
     case CC_MC_TRUNCATED: return fail(e, E_TRUNC, NULL);
@@ -865,6 +875,24 @@ int cc_viewfile_read_mapped(const uint8_t *p, size_t n, cc_viewfile *out, cc_err
     int rc = read_raw(p, cut, out, &e);
     out->lazy_scratch = NULL;
     arena_free(&scratch);
+    if (!rc) { /* SIZE3: the scene box: own meshes' boxes, placed shapes' boxes' corners placed */
+        float *b = out->box;
+        for (int k = 0; k < 3; k++) b[k] = 1.0f / 0.0f, b[3 + k] = -1.0f / 0.0f;
+        for (size_t i = 0; i < out->nelements; i++) {
+            const cc_view_element *x = &out->elements[i];
+            const cc_viewfile_ref *r = x->shape >= 0 ? &out->shape_refs[x->shape] : &x->ref;
+            if (!(r->lo[0] <= r->hi[0])) continue; /* no finite point */
+            for (int c = 0; c < 8; c++) {
+                float q[3] = {c & 1 ? r->hi[0] : r->lo[0], c & 2 ? r->hi[1] : r->lo[1], c & 4 ? r->hi[2] : r->lo[2]}, w[3];
+                const cc_placement32 *pl = &x->to_scene;
+                for (int k = 0; k < 3; k++) w[k] = x->shape >= 0 ? pl->x[k] * q[0] + pl->y[k] * q[1] + pl->z[k] * q[2] + pl->t[k] : q[k];
+                for (int k = 0; k < 3; k++) {
+                    if (w[k] < b[k]) b[k] = w[k];
+                    if (w[k] > b[3 + k]) b[3 + k] = w[k];
+                }
+            }
+        }
+    }
     if (!rc && hlod) {
         uint64_t len = 0;
         for (int i = 0; i < 8; i++) len |= (uint64_t)p[hlod + 4 + i] << (8 * i);

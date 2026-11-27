@@ -178,6 +178,9 @@ const cc_scene *cc_link_rows(const cc_link *k);
 /* SIZE3: link k's meshes decoded now (they stay until cc_links_tick drops them past the budget). 0 ok
  * (or nothing to do), -1 out of memory or a cache changed on disk (the link then draws nothing). */
 int cc_link_resident(cc_link *k);
+/* SIZE3: a link read in place and not decoded: its box in the open scene's frame (`org`, the open scene's origin;
+ * its placement applied, from the counts' read: no mesh decoded): 1; else 0 (test it whole). */
+int cc_link_box_lazy(const cc_link *k, const double org[3], double lo[3], double hi[3]);
 /* SIZE3: whether the carrier should call cc_links_tick: a conversion queued or running, a refused link
  * waiting for its automatic retry, or decoded link meshes past the budget waiting to be dropped. */
 int cc_links_wants_tick(const cc_session *s);
