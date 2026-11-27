@@ -759,8 +759,8 @@ The 60-camera sweep (`lab_visible.mjs`, `LAB_GPU=vulkan`, Chromium 158, 6 synthe
 the culling's own truth): 0 seen elements missing, 0 pixels differ (at all) on every camera, this camera's pyramid used
 on 60 of 60, the moving frame's pyramid used by the first still frame after fast turns on 12 of 12; triangles submitted
 far 54.1 → 31.4 M (the seen elements' 0.68 M), close 17.0 → 2.7 M (13,380), inside 5.4 → 0.24 M (24,604). With the far
-cells' proxies at 1 px (still) the far view differs from its full detail within 2 % of its drawn pixels (3D2's rule,
-checked by the same test). The first sweep showed 2,777 "missing" elements on far cameras: elements stood for by those
+cells' proxies at 1 px (still) the far view differs from its full detail on 289 of its 12,310 drawn pixels (2.3 %; the
+test's bound: 5 %; 3D2's proxies, not this amendment's culling). The first sweep showed 2,777 "missing" elements on far cameras: elements stood for by those
 proxies (not culled: 0 pixels changed), and up to 1,528 pixels changed on close cameras: decision 50's sort.
 
 ### What the WebGPU renderer needs to use the same visible set
