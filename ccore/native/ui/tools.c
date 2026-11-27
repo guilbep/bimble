@@ -22,8 +22,8 @@ static void ray_json(App *a, float mx, float my, float tol_px, char *body, size_
         double k = a->origin0[i] - a->core_origin[i];
         o[i] += k, o2[i] += k;
     }
-    snprintf(body, n, "{\"ray\":[%.3f,%.3f,%.3f,%.9f,%.9f,%.9f],\"ray_tol\":[%.3f,%.3f,%.3f,%.9f,%.9f,%.9f]}", o[0], o[1], o[2], d[0], d[1], d[2],
-             o2[0], o2[1], o2[2], d2[0], d2[1], d2[2]);
+    snprintf(body, n, "{\"ray\":[%.3f,%.3f,%.3f,%.9f,%.9f,%.9f],\"ray_tol\":[%.3f,%.3f,%.3f,%.9f,%.9f,%.9f],\"tol_px\":%.1f}", o[0], o[1], o[2], d[0], d[1], d[2],
+             o2[0], o2[1], o2[2], d2[0], d2[1], d2[2], tol_px);
 }
 
 void tool_measure_input(App *a, float mx, float my, int click) {
