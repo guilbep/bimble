@@ -20,7 +20,9 @@ git -C "$work/src" fetch -q --depth 1 origin "$COMMIT"
 git -C "$work/src" checkout -q FETCH_HEAD
 [[ $(git -C "$work/src" rev-parse HEAD) == "$COMMIT" ]] || { echo "FAIL ci/sdl3.sh: not $COMMIT" >&2; exit 1; }
 cmake -S "$work/src" -B "$work/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
-    -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL_TESTS=OFF > "$work/cmake.log"
-cmake --build "$work/build" -j "$(nproc)" > "$work/build.log"
+    -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL_TESTS=OFF \
+    -DSDL_X11_XTEST=OFF -DSDL_AUDIO=OFF -DSDL_CAMERA=OFF -DSDL_JOYSTICK=OFF -DSDL_HAPTIC=OFF -DSDL_SENSOR=OFF > "$work/cmake.log" 2>&1 ||
+    { tail -60 "$work/cmake.log" >&2; exit 1; }
+cmake --build "$work/build" -j "$(nproc)" > "$work/build.log" 2>&1 || { tail -80 "$work/build.log" >&2; exit 1; }
 cmake --install "$work/build" > /dev/null
 echo "sdl3: $TAG ($COMMIT) in $prefix"
