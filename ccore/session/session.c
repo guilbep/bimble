@@ -56,6 +56,7 @@ void cc_session_free(cc_session *s) {
     buf_free(&s->mesh);
     cc_mesh_proxies_free(s); /* 3D2 */
     buf_free(&s->link_prx_out); /* LNK3D */
+    buf_free(&s->link_mesh_out); /* SIZE2 */
     cc_paper_cache_free(s);
     cc_paper_fonts_free(s); /* D7 */
     cc_versions_free(s); /* H2a */

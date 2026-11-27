@@ -57,6 +57,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { arch, cpus, loadavg, platform, release, tmpdir, totalmem } from "node:os";
+import { sumSections } from "./cache_sections.mjs";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
@@ -721,6 +722,18 @@ async function linksMain() {
   await ev("(window.__bbGl.bench.snap(0, 0), 0)");
   await quiet(20000);
   out.gpuBytes = await ev("window.__bbGl.gpuBytes ?? null");
+  // SIZE2: what the links cost in memory and on disk: the caches' sections, the mesh bytes the page fetched (every
+  // /mesh answer, a link's own included), the host's RSS, the tab's (renderer process) and the GPU process's RSS,
+  // the JS heap and array buffers after a collection
+  out.cacheSections = sumSections(files.map((f) => `${f}.bimbleview`));
+  out.meshServed = await ev("window.__bbGl.meshBytesServed ?? window.__bbGl.meshBytes ?? null");
+  out.hostRssMb = rssMb(host.pid);
+  await S("HeapProfiler.collectGarbage").catch(() => {});
+  await sleep(500);
+  { const h = await S("Runtime.getHeapUsage"); out.jsHeap = h.usedSize, out.arrayBuffers = h.backingStorageSize ?? null; }
+  out.rss = chromeRss();
+  console.log(`memory: caches ${JSON.stringify(out.cacheSections)}; mesh served ${out.meshServed}; host RSS ${out.hostRssMb.toFixed(0)} MB; ` +
+    `tab RSS ${out.rss.renderer.toFixed(0)} MB, GPU process ${out.rss.gpu.toFixed(0)} MB; JS heap ${mb(out.jsHeap)} MB (+ ${mb(out.arrayBuffers)} MB array buffers); GPU ${mb(out.gpuBytes)} MB`);
   if (PIXELS) { mkdirSync(PIXELS, { recursive: true }); await pixels(); }
   // a class hidden (every link's closed meshes): the page's work (visibility in the page, the state texture's
   // upload: elements in the rows sent), the /mesh fetches it made

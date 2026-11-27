@@ -106,6 +106,7 @@ typedef struct cc_session {
     int hlod_status; /* 0 none, 202 building, 200 built (hlod_out: BPRX), 500 (hlod_out: the error) */
     Buf hlod_out;
     Buf link_prx_out; /* LNK3D: the last link proxies answered (mesh.h cc_link_proxies) */
+    Buf link_mesh_out; /* SIZE2: the last link mesh answered (mesh.h cc_link_mesh) */
     double hlod_ms;  /* build time so far */
     cc_persist *persist;
     /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link

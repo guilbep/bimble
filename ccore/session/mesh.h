@@ -46,4 +46,12 @@ void cc_mesh_proxies_free(cc_session *s);
  * 204 none, no body (not ready, not from a cache, no proxies, no file access: not an error), 500 a
  * damaged section (the error text). The native host serves it as GET /mesh?link_proxies=k. */
 int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n);
+/* SIZE2: cc_mesh_get_form's form 6: version 3 of the open model, then the LNKS trailer version 3 (mesh.c
+ * links_lazy: each link's head, no mesh): the page asks each link's mesh on its own. */
+#define CC_MESH_FORM_LAZY 6
+/* SIZE2: link k's read scene as BMSH version 4 (src/scene_bmsh.h: shapes once, a placement per element,
+ * the blocks in the mesh codec), its rev the links' mesh key (links_mesh_gen). 200 with the bytes in `*p`
+ * (valid until the next call; the bytes of the call before are freed), 404 no such link (or missing), 500
+ * with the error. The native host serves it as GET /mesh?link=k. */
+int cc_link_mesh(cc_session *s, uint64_t k, const char **p, size_t *n);
 #endif

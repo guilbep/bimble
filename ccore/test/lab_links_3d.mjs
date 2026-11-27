@@ -18,8 +18,13 @@
 //     input measured once more after the load falls under 4. The link's eye is clicked for real and timed by
 //     test/lib/input_time.mjs (the page's time asserted at 200 ms; the presented frame by its rule); the other
 //     inputs are the page's calls (view_rule, the Links panel's place and colour), timed from the call to the frame.
+//   - SIZE2: each link's mesh is asked on its own (GET /mesh?link=k, BMSH version 4): the bytes served for the
+//     links are within 5 % of their caches' geometry sections (ELEM), and once on the GPU the page keeps none
+//     of a link's heavy arrays (picks on links read their triangles back from the GPU); a released link's
+//     detail comes back by asking its mesh again (not the whole /mesh).
 // Fails on the code before LNK3D: every hide or move fetched /mesh again (M1LINKS, LINKF), no proxies of
-// links, no notes in 3D.
+// links, no notes in 3D. The SIZE2 checks fail before SIZE2: one /mesh of 3.2 times the caches' geometry, the
+// links' arrays kept in the page.
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { port, vitePort } from "./ports.mjs";
 import { CHROMIUM, gpuFlags } from "./lib/chromium.mjs";
 import { makeLinkFolder } from "../bench/links_synth.mjs";
+import { sumSections } from "../tools/cache_sections.mjs";
 import { adapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -138,6 +144,7 @@ async function main() {
   const prx = logs.map((t) => /proxies \(HLOD, baked for the 3D view\): (\d+) cells, (\d+) triangles, (\d+) bytes, built in (\d+) ms/.exec(t));
   const detail = logs.map((t) => Number(/\ntriangles: (\d+)/.exec(t)?.[1] ?? 0));
   const cacheBytes = files.map((f) => statSync(`${f}.bimbleview`).size);
+  const elemBytes = sumSections(files.map((f) => `${f}.bimbleview`)).ELEM ?? 0; // SIZE2: the caches' geometry
   console.log(`caches: ${cacheBytes.map((b) => (b / 1e6).toFixed(2)).join(", ")} MB; proxies: ${prx.map((m) => m ? `${m[1]} cells ${m[2]} tris ${(Number(m[3]) / 1e3).toFixed(0)} kB ${m[4]} ms` : "none").join("; ")}; detail ${detail.join(", ")} triangles`);
   check("each cache holds its baked proxies (the report says cells, triangles, bytes, time)", prx.every((m) => m && Number(m[1]) > 0 && Number(m[2]) > 0 && Number(m[2]) < detail[0] / 2));
   // placed: five in a row, the sixth far; link_0 red, link_1 blue
@@ -210,6 +217,14 @@ async function main() {
   const st0 = await waitFor("six links drawn", 60000, async () => { const s = await gl(); return s.links.length === N && s.linkTris > 0 && (s.linkProxies ?? []).length === N ? s : null; });
   check("the first picture is drawn from the links' proxies, before their mesh arrives", st0.proxyPreview?.links === N && st0.proxyPreview.at <= st0.meshAt,
     `proxies ${st0.proxyPreview?.at?.toFixed(0)} ms (${st0.proxyPreview?.tris} triangles), mesh ${st0.meshAt?.toFixed(0)} ms, links' proxies asked in ${st0.linkProxiesMs?.toFixed(0)} ms`);
+  { // SIZE2: the links' meshes served compact and on their own; none of their heavy arrays kept in the page
+    const linkReqs = meshRequests.filter((u) => /[?&]link=\d/.test(u)).length;
+    const st = await waitFor("the links' arrays dropped", 10000, async () => { const s = await gl(); return (s.partBytes ?? []).length === N + 1 && s.partBytes.slice(1).every((b) => b === 0) ? s : null; }).catch(() => null) ?? await gl();
+    check("each link's mesh asked on its own, the bytes served within 5 % of the caches' geometry", linkReqs >= N && st.meshBytes <= 1.05 * elemBytes + 65536,
+      `${linkReqs} link requests; served ${st.meshBytes} bytes, the caches' ELEM ${elemBytes} bytes (${(st.meshBytes / elemBytes).toFixed(3)})`);
+    check("the page keeps none of a link's heavy arrays once on the GPU", (st.partBytes ?? []).length === N + 1 && st.partBytes.slice(1).every((b) => b === 0),
+      `heavy bytes kept per model ${JSON.stringify(st.partBytes)}`);
+  }
   await evalJs(`window.__bbGl.bench.look(${JSON.stringify(near)}, 140000)`);
   await calm();
   await sleep(400);
@@ -219,10 +234,14 @@ async function main() {
   const far = st1.linkProxies.find((x) => x.name === `link_${N - 1}.ifc`);
   check("the camera on the near links: the far link drawn from its proxies (its triangles far under its detail)", far && far.drawnTris > 0 && far.drawnTris < detail[N - 1] / 4,
     `${far?.drawnTris} of ${detail[N - 1]} triangles; still frame ${stillMs.toFixed(0)} ms, ${st1.frameTris} triangles, ${st1.frameDraws} draws, GPU ${(st1.gpuBytes / 1e6).toFixed(1)} MB`);
-  const fetches0 = st1.meshFetches, lists0 = st1.listsBuilt, req0 = meshRequests.filter((u) => !/proxies/.test(u)).length;
-  const noRefetch = async (what) => {
-    const s = await gl(), req = meshRequests.filter((u) => !/proxies/.test(u)).length;
-    check(`${what}: no /mesh request, the draw lists not rebuilt`, s.meshFetches === fetches0 && s.listsBuilt === lists0 && req === req0,
+  // SIZE2: a link's own mesh (GET /mesh?link=k) is asked again when its released detail comes back (the page keeps
+  // no copy): the budget's step may ask those, never the whole mesh
+  const whole = (u) => !/proxies|[?&]link=/.test(u);
+  const any = (u) => !/proxies/.test(u);
+  const fetches0 = st1.meshFetches, lists0 = st1.listsBuilt, reqAll0 = meshRequests.filter(any).length, reqWhole0 = meshRequests.filter(whole).length;
+  const noRefetch = async (what, links = false) => {
+    const req0 = links ? reqWhole0 : reqAll0, s = await gl(), req = meshRequests.filter(links ? whole : any).length;
+    check(`${what}: no /mesh request${links ? " but a released link's own" : ""}, the draw lists not rebuilt`, s.meshFetches === fetches0 && s.listsBuilt === lists0 && req === req0,
       `fetches ${fetches0} -> ${s.meshFetches}, lists ${lists0} -> ${s.listsBuilt}, /mesh requests ${req0} -> ${req}`);
   };
   const red0 = await pix("red"), pur0 = await pix("purple");
@@ -349,9 +368,9 @@ async function main() {
   const after3 = await evalJs("Array.from(window.__bbGl.bench.read().rgba)"), st3 = await gl();
   let d3 = 0;
   for (let i = 0; i < before3.length; i += 4) if (Math.max(Math.abs(before3[i] - after3[i]), Math.abs(before3[i + 1] - after3[i + 1]), Math.abs(before3[i + 2] - after3[i + 2])) > 40) d3++;
-  check("shown again: its detail back on the GPU (from the page's copy), the same picture as before the hide", backMs >= 0 && d3 === 0,
+  check("shown again: its detail back on the GPU (its own mesh asked again: SIZE2), the same picture as before the hide", backMs >= 0 && d3 === 0,
     `${backMs.toFixed(1)} ms (its upload ${st3.linkReloadMs?.toFixed(1)} ms), ${d3} pixels differ; ${JSON.stringify(st3.linkDetail?.map((x) => [x.name, x.detail, x.loads]))}`);
-  await noRefetch("the budget's releases and uploads");
+  await noRefetch("the budget's releases and uploads", true);
   const sel4 = await evalJs(`(() => { const r = document.getElementById("bimble").getBoundingClientRect(), g = window.__bbGl;
     for (let y = r.top + 40; y < r.bottom - 40; y += 9) for (let x = r.left + 40; x < r.right - 40; x += 9) { const h = g.pickInfoAt(x, y); if (h && h.link === "link_4.ifc") return h; } return null; })()`);
   if (sel4) await evalJs(`import('/src/bimble.ts').then((b) => b.selectLinked("link_4.ifc", ${JSON.stringify(sel4.id)}))`);

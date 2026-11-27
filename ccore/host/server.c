@@ -587,6 +587,13 @@ static void handle_one(Conn *c, int *again) {
             respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, NULL, mp, mn, keep);
             goto mesh_done;
         }
+        /* SIZE2: ?link=k, link k's mesh on its own (BMSH version 4, mesh.h cc_link_mesh), asked by a page that
+         * fetched ?shapes=1&lazy=1 */
+        if (query_param(query, "link", &prx) && parse_u64(prx, &budget)) {
+            int st = cc_link_mesh(cfg->session, budget, &mp, &mn);
+            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, NULL, mp, mn, keep);
+            goto mesh_done;
+        }
         if (query_param(query, "proxies", &prx) && parse_u64(prx, &budget)) {
             int st = cc_mesh_proxies(cfg->session, budget, &mp, &mn, &rev, &ms);
             if (st == 200) fprintf(stderr, "bimble-ccore: proxies rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
@@ -598,6 +605,7 @@ static void handle_one(Conn *c, int *again) {
         /* 3D1 (ADR 0078): ?shapes=1, BMSH version 3 (each shape once, a placement per element) */
         Str shp;
         mesh_form = query_param(query, "shapes", &shp) && str_eq(shp, "1") ? 3 : 1;
+        if (mesh_form == 3 && query_param(query, "lazy", &shp) && str_eq(shp, "1")) mesh_form = CC_MESH_FORM_LAZY; /* SIZE2 */
         int st = cc_mesh_get_form(cfg->session, mesh_form, &mp, &mn, &rev, &ms);
         if (ms > 0) fprintf(stderr, "bimble-ccore: mesh rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
         char xrev[80];
