@@ -186,3 +186,81 @@ Synthetic set (17 links, 272 MB of IFC): the caches 55.4 → 20.2 MB, 20.3 % →
 gzip blocks shrink them). A local folder of 17 IFC files (4.18 GB): its caches 1.716 GB (`ELEM` 231 MB, `HLOD` 619 MB,
 `PROP` 865 MB) → 281 MB, 6.7 % of the IFC (`ELEM` 231 MB, `HLOD` 14.8 MB, `PRPZ` 34.5 MB); the 17 converted one after
 the other in 50 s (the machine loaded by two other measuring agents), loaded together from their caches in 0.93 s.
+
+## Amendment (27 Nov 2026, ticket SIZE3): one copy in the host, a link ready before its proxies, a refused link retried when idle
+
+After SIZE2 the host still held, for the local folder's 17 links from their caches, each cache's geometry bytes and
+every decoded mesh: 1.15 GB, as much as Rust's whole app with its renderer. Choices by Claude on ticket SIZE3 under the
+same delegation.
+
+19. **A link's cache is read in place** (`cc_viewfile_read_mapped`; the native carrier maps it, `map_file`): the strings
+    point into the mapping, each mesh is decoded once into a scratch to check it (the same checks as before; the mapped
+    reader and the reader give the same verdict on every prefix and on 3,000 damaged files) and only its counts, its
+    place in the file and its box are kept. The mapping goes with the link. A gzipped cache, a carrier without
+    `map_file` (the wasm module) or a cache whose size is a multiple of the page are read as before.
+20. **`GET /mesh?link=k` is the cache's own bytes**: version 4's rows, shapes and placements from the counts, each block
+    the file's BMG1 bytes (`cc_scene_bmsh4_blocks`), byte for byte what encoding the decoded scene gives (checked on a
+    heavy view file). Copied once into the answer, freed after it is sent (SIZE2); a scatter-gather send from the mapping
+    is left.
+21. **A link's meshes are decoded only when a call needs its geometry** (`cc_link_scene`, `cc_link_raw_scene`: a
+    measure whose ray passes near the link's box, Box to selection, a plan or a section through the link, PDF, the
+    element's volume), into an arena of the link's: the only way to a link's geometry. The calls that need its rows
+    only use `cc_link_rows` (the Links panel, `visibility_sets`, `link_draw`, the LNKS heads, ids, texts), where a link
+    not decoded shows EMPTY meshes (counts 0, a zeroed shapes array of its own): its counts live in the view file only
+    (`cc_link_triangles`, the served blocks), so geometry code handed the wrong scene sees nothing, never a NULL array;
+    `cc_scene_world_mesh` and the BMSH writers refuse a mesh whose counts promise arrays it lacks. (A first version kept
+    the counts with NULL arrays in the rows: the element query's volume and GET /mesh's version 1 trailer read them and
+    the host crashed twice in the owner's dev build; `link_lazy_test` now calls every such entry point on a cold link
+    and after a drop, also under ASan.) They are dropped again past a budget of 256 MB of
+    decoded meshes across links (`link_mesh_budget`, `BIMBLE_LINK_MESH_BUDGET_MB`), least recently used first, never one
+    used in the last 10 s (a measure over every link keeps them while it runs; `BIMBLE_LINK_KEEP_MS` for the tests), at
+    the carrier's tick, and the freed memory given back to the system (platform `trim`: glibc's `malloc_trim`).
+    Decoding and dropping are logged with their size and time. A call that needs ONE element's geometry (the element
+    query's volume, Box to selection around a linked element) decodes that element's block alone (its own mesh or its
+    shape, `cc_link_element_scene`), not the link. Its mesh and its rows answer follow ONE rule (SIZE2FIX's): a
+    request that names the link or carries the heads' key is never a 404 (gone, renamed, of another key, unloaded:
+    204 superseded); a bare index of no such link is a 404. **Alternative:** decode per element on demand (every
+    consumer walks the scene's arrays directly: a rewrite of measure, plans, sections and paper).
+22. **A link refused for memory is retried when the host is idle too** (`cc_links_wants_tick`): the carrier looked at its
+    links only while one was queued or converting, so a refused last link stayed refused (decision 16 did not hold).
+    `BIMBLE_MEM_AVAILABLE=@<file>` reads the free memory from a file at each call (`test/link_retry_test.mjs`).
+23. **A link is ready before its proxies exist** (ticket SIZE3 E, cache format 6): the conversion writes the cache's
+    geometry, names, source and property sets, its SRCE saying `"complete": false`, and the link is drawn; its proxies are
+    baked afterwards by a job of their own, once no conversion is queued (the smallest link first): the cache read again
+    (untrusted: every section checked), rebuilt as its sections, SRCE marked complete, the proxies (HLOD), then the
+    property sets (last: read lazily), written by tmp + rename (a crash leaves the smaller, valid cache, which the next
+    open serves and completes), its report appended ("indexed after the link was ready"), the link switched to it (the
+    same rows: its placement, colour and selection stay). The Links panel says "shown, indexing…" and Cancel stops it
+    (the cache stays incomplete). `query link_draw` gains `proxies`, a counter that moves when a link's proxies arrive:
+    the page then asks that link's proxies and makes its batches again by their leaves (ADR 0078 amendment 5).
+    **Alternative:** read the property sets later too (they need the IFC's entities: a second read of the file, as long
+    as the first); bake the proxies only when the GPU is short, as Rust does (the page's first picture of a large folder
+    is its links' proxies). Left: a proxy of a shared shape instanced, levels coarser than 4,096 triangles a cell, 16-bit
+    positions in a cell's box (SIZE2's list).
+
+Evidence for decision 23, the local folder converted fresh, the same hour as Rust v0.19.0's read of the same 17 files
+(`examples/folder --read-only`, one process a file: 27.8 s of reading, peak 2.38 GB): the 17 links drawn (all ready)
+after 35.5 s (load 9.2; 40.9 s at load 7.3 in another run), indexed after 49.7 s (55.9 s); before, nothing was drawn
+before the end (50.5 s in the comparison of the day). The rest of the gap to Rust is the property sets' pass and the
+cache's write (C's read alone took 28.6 s in that comparison).
+
+Evidence (`link_lazy_test.mjs`, a scratch script reading `/proc/<host>/status`, `frames.mjs`'s folder mode). A local
+folder of 17 IFC files, from caches made by the same build, the SIZE2 host and this one the same hour: host at rest
+after the 17 links are ready 1,145 MB RSS, 1,141 MB anonymous → 348 MB RSS, 121 MB anonymous (the rest the caches'
+file pages, which the kernel may drop); after the page's requests (the lazy mesh, each link's mesh and proxies) 1,178 →
+375 MB RSS (1,173 → 148 MB anonymous); in the browser run, after the open, 319 MB RSS, 92 MB anonymous. The slowest
+link's mesh served in 890 → 137 ms. A measure over every link decodes all 17 (1.1 GB, 0.86 s; anonymous 1.72 GB at its
+peak) and they are dropped down to the budget 10 s later (392 MB anonymous); a pointer whose ray meets no link's box
+decodes none (2 ms). Right after a fresh conversion of the 17 in the same host (the heap given back after each
+job): 199 MB anonymous when drawn (35.9 s), 240 MB anonymous once indexed (51.0 s), 468 MB RSS with the caches' file
+pages; before that trim, 1,090 MB anonymous. The synthetic set (17 links, converted by the same host): 102 → 66 MB anonymous at rest. A cold
+link's decode, per link of the local folder: 0.7-307 MB in 0-333 ms (the largest: 307 MB in 220 ms, 87 MB in 333 ms):
+what a measure pays when its ray meets that link's box; the element query and Box to selection decode one block.
+Found, not caused here: a plan through the 17 links (`view_svg`) took 12.6 s and 6.5 GB (8.5 GB at its peak):
+`paper_scene.c` expands every placed copy of every link (110 M triangles), each made twice in the merged scene's
+arena. Capped now (24.): each copy made in a scratch, then copied moved (half the memory); and the links whose
+expanded copies (96 bytes a placed triangle, from their counts: nothing decoded) do not fit in half the memory free
+(`pf->mem_available`, as a conversion's check) are drawn simplified, each element its box, the answer saying "too
+large to cut exactly with the memory free: N links simplified" (`view_svg`'s `notice`; `link_retry_test` with
+`BIMBLE_MEM_AVAILABLE`). Follow-up, the proper fix: cut without expanding copies (each shape cut once by the plane
+moved into its own frame, the cut placed per copy), so that a plan costs the shapes' triangles, not the copies'.

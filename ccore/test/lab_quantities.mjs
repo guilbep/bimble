@@ -275,12 +275,19 @@ async function switches(mode, S, evalJs) {
   await settle();
   const g0 = await gl();
   const d0 = await dark();
-  check(`${mode}: edges drawn by default (${g0.q2.edgeSegs} segments, ${d0} dark pixels)`, g0.q2.edges === true && g0.q2.edgeSegs > 0 && d0 > 500, JSON.stringify(g0.q2));
+  // VIS1 (ADR 0078 amendment 7): in 3D the edges are found on screen by default (one pass: no line segments); what the
+  // user sees is asserted (dark edge pixels), and the line pass (edge_mode lines, the bench hook lineEdges) still draws segments
+  check(`${mode}: edges drawn by default (${g0.q2.edgeMode}: ${g0.q2.edgeSegs} segments, ${d0} dark pixels)`, g0.q2.edges === true && d0 > 500 && (g0.q2.edgeMode === "screen" || g0.q2.edgeSegs > 0), JSON.stringify(g0.q2));
+  await evalJs("(window.__bbGl.lineEdges = true, 0)");
+  await evalJs("(window.__bbGl.bench.frame(0, false), 0)");
+  const gL = await gl(), dL = await dark();
+  check(`${mode}: the line pass (edge_mode lines): segments drawn (${gL.q2.edgeSegs}), dark pixels like on screen (${dL} against ${d0})`, gL.q2.edgeMode === "lines" && gL.q2.edgeSegs > 0 && dL > 500, JSON.stringify(gL.q2));
+  await evalJs("(delete window.__bbGl.lineEdges, window.__bbGl.bench.frame(0, false), 0)");
   check(`${mode}: action edges -> null`, (await run("edges")) === null);
   await waitFor(`${mode}: edges off`, 3000, async () => (await gl()).q2.edges === false).catch(() => {});
   await settle();
   const d1 = await dark(), g1 = await gl();
-  check(`${mode}: edges off: none drawn, the dark pixels gone (${d0} -> ${d1})`, g1.q2.edges === false && g1.q2.edgeSegs === 0 && d1 < d0 / 10, `${JSON.stringify(g1.q2)} ${d1}`);
+  check(`${mode}: edges off: none drawn, the dark pixels gone (${d0} -> ${d1})`, g1.q2.edges === false && g1.q2.edgeSegs === 0 && g1.q2.edgeMode === "none" && d1 < d0 / 10, `${JSON.stringify(g1.q2)} ${d1}`);
   check(`${mode}: the Edges button not pressed`, (await B("return b.actions.value.find((a) => a.name === 'edges').pressed;")) === false);
   await run("edges");
   await waitFor(`${mode}: edges on`, 3000, async () => (await gl()).q2.edges === true).catch(() => {});

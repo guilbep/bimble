@@ -9,7 +9,8 @@ sample and certification file we can find? What does it refuse, crash on, or ski
 **Update, ticket IFC2 (same day): the C reader now reads 7 of these gaps that Rust (frozen) still
 has; see "After IFC2" below.** **Ticket IFC3: the importer at the reader's level (no silent drop),
 profile slopes, centre-line, composite and mirrored profiles, geometric sets, nesting 64; see
-"After IFC3".** The numbers in this section and the tables are IFC1's.
+"After IFC3".** **Ticket TESS1: arcs by deflection and booleans that take nothing (the reader's
+standard detail): the same 617 files and elements, 5.3 % fewer triangles; see "After TESS1".** The numbers in this section and the tables are IFC1's.
 
 - **617 STEP files (IFC2X3 283, IFC4 83, IFC4X3 249, other 2), 1.24 GB, 19.2 M entities: the C
   reader reads all 617 (ok), Rust reads all 617.** No refusal, no crash, no timeout, no file over
@@ -461,6 +462,48 @@ ASan+UBSan+LeakSanitizer, `halt_on_error`) on the IFC3 sources: 655 files (617 S
 STEP; 173 git-lfs pointers skipped as before), **no report**; every outcome equal to the -O2
 build's (617 ok, 38 refused), and the -O2 scenes of that run equal the "after" run's on all 828
 records. `ccore/ci/run.sh full`: 37 suites, 0 failed (the clang ASan+UBSan unit run included).
+
+## After TESS1 (27 Nov 2026): arcs by deflection, booleans that take nothing
+
+The reader's default detail is now standard (ADR 0085, `golden/DEVIATIONS.md` section 40: chords
+within 2 mm and 18 degrees; a boolean or an opening that takes nothing keeps its operand; kernel
+results cleaned); exact is Rust's reader. Before: the build at the ticket's start (`C_DUMP=`, the
+exact rule); after: the TESS1 build at its default, `CORPUS_TAG=tess1-before` / `tess1-after`,
+each file under the shared measure lock with a 6 GB cgroup cap.
+
+**828 records (617 STEP files read, 38 refused, 173 git-lfs pointers skipped, as before); 405 files
+give the same scene, byte for byte; 212 changed, every one in its triangles only.**
+
+| | before | after |
+|---|---|---|
+| outcomes (ok / refused / skipped) | 617 / 38 / 173 | 617 / 38 / 173 |
+| crashes, timeouts, memory kills | 0 | 0 |
+| products with a body | 128,591 | 128,591 |
+| elements drawn | 125,832 | 125,832 |
+| triangles | 32,276,755 | 30,569,953 (−5.3 %) |
+| files with more triangles than before | | 0 |
+| files whose warnings changed | | 0 |
+| read time, sum of the 617 read calls | 15.5 s | 13.8 s |
+
+Largest reductions (triangles before -> after):
+
+| file | triangles |
+|---|---|
+| `IfcSampleFiles/Ifc4_Revit_STR.ifc` | 1,411,324 -> 1,056,164 |
+| `files/468--reinforcingBar--segfault--augmented.ifc` | 496,132 -> 142,692 |
+| `files/424--reinforcingBar--segfault--augmented.ifc` | 283,472 -> 81,648 |
+| `IFC-infra-unit-test/SpatialStructure-6/SpatialStructure-6-3.ifc` | 558,348 -> 471,404 |
+| `files/330--reinforcingBar--segfault--augmented.ifc` | 224,104 -> 151,720 |
+| `ifc-sample-files/DigitalHub_v2/DigitalHub_FM-SAN_v2.ifc` | 1,473,764 -> 1,413,428 |
+| `engine_web-ifc/tests/ifcfiles/public/ISSUE_068_ARK_NUS_skolebygg.ifc` | 1,403,447 -> 1,357,422 |
+| `files/IfcReinforcingBar.ifc` | 263,256 -> 219,264 |
+
+A first after-run showed one file with more triangles (`files/Allplan 2017 Test
+Bauteil-Oberflächen.ifc`, 19,124 -> 19,132: an operand kept where the kernel's result of the same
+solid was lighter); the reader now keeps the lighter of the two (19,116), and the run above is the
+one after that fix. Five public files have products with two `Body` representations (741 products
+in 5 files, `Ifc4_Revit_MEP.ifc` 627): C draws both, as before; none has `Body` and `Facetation`
+together.
 
 ## Tables (generated: `ccore/bench/corpus.sh report`)
 

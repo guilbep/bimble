@@ -5,27 +5,44 @@
 #include <string.h>
 
 #include "links.h"
+#include "settings.h"
 #include "m1links.h"
 #include "link_cache.h" /* LINKF */
 #include "jobs.h"       /* LINKF: cc_atomic_load */
 #include "ifc_math.h"   /* LINKF: cc_sin, cc_cos */
 #include "json_r.h"
+#include "meshcodec.h" /* SIZE3: one element decoded */
 
 static const char *const FAMILY[CC_CAT_COUNT] = {"Concrete", "Steel", "Timber", "Masonry",
                                                  "Insulation", "Earth", "Glass", "Other"}; /* MaterialCategory::label */
 
 static void keep_settings(cc_link *k, const cc_link *old);
+static int link_rows_view(cc_link *k); /* SIZE3 */
 static void cc_links_undo_free(cc_session *s);
+
+/* SIZE3: link k's decoded meshes dropped (a lazy link: its view file keeps their counts and places). */
+static void link_evict(cc_link *k) {
+    if (!k->resident) return;
+    if (k->placed) cc_scene_free(&k->pscene), k->placed = 0;
+    cc_viewfile_dematerialize(k->vf);
+    link_rows_view(k); /* empty meshes again (the counts stay in the view file) */
+    arena_free(&k->marena);
+    k->resident = 0, k->mbytes = 0;
+}
 
 /* What link k holds in memory (its scene), freed; the link itself stays. */
 static void link_drop_data(cc_link *k) {
     if (k->ifc) cc_ifc_scene_free(k->ifc), free(k->ifc), k->ifc = NULL;
+    if (k->vf) link_evict(k);
     if (k->vf) cc_scene_free(&k->scene), cc_viewfile_free(k->vf), free(k->vf), k->vf = NULL;
+    if (k->map) k->map_pf->unmap_file(k->map_pf->ctx, k->map), k->map = NULL; /* SIZE3: after the view file over it */
+    k->pwant = 0;
     if (k->model) cc_scene_free(&k->scene), cc_model_free(k->model), free(k->model), k->model = NULL;
     memset(&k->scene, 0, sizeof k->scene);
     if (k->placed) cc_scene_free(&k->pscene), k->placed = 0; /* LINKF */
     free(k->psets), k->psets = NULL, k->npsets = 0; /* M1LINKS */
     k->kind = 0;
+    k->indexing = 0; /* SIZE3 (E): a job still running for it is not taken (link_take_index) */
 }
 
 void cc_link_free(cc_link *k) {
@@ -35,11 +52,134 @@ void cc_link_free(cc_link *k) {
     memset(k, 0, sizeof *k);
 }
 
-const cc_scene *cc_link_raw_scene(const cc_link *k) { return k->ifc ? &k->ifc->scene : &k->scene; }
-const cc_scene *cc_link_scene(const cc_link *k) { return k->placed ? &k->pscene : cc_link_raw_scene(k); } /* LINKF */
+static int place_scene(cc_scene *out, const cc_scene *in, double c, double sn, const double t[3]);
+static uint64_t link_use_tick; /* SIZE3: the order links' meshes were last asked (least recently used first) */
+
+const cc_scene *cc_link_rows(const cc_link *k) { return k->ifc ? &k->ifc->scene : &k->scene; }
+
+/* SIZE3: a link read in place and not decoded shows a scene of EMPTY meshes (counts 0, arrays NULL; its shapes a
+ * zeroed array of the scene's own): no structure reachable through a cc_scene ever holds counts without arrays, so
+ * code that reads geometry from a scene it was not meant to have sees nothing, never a NULL array. The counts live
+ * in the view file only (cc_link_triangles, mesh.c's served blocks). */
+static int link_rows_view(cc_link *k) {
+    if (!k->zshapes && k->vf->nshapes) {
+        k->zshapes = arena_alloc(&k->scene.arena, k->vf->nshapes * sizeof *k->zshapes, 8);
+        if (!k->zshapes) return -1;
+    }
+    if (k->zshapes) memset(k->zshapes, 0, k->vf->nshapes * sizeof *k->zshapes);
+    k->scene.shapes = k->zshapes;
+    for (size_t i = 0; i < k->scene.nelements; i++) memset(&k->scene.elements[i].mesh, 0, sizeof(cc_mesh));
+    return 0;
+}
+
+uint64_t cc_link_triangles(const cc_link *k) {
+    uint64_t tris = 0;
+    if (k->vf && k->vf->lazy) { /* the counts the mapped read kept */
+        for (size_t e = 0; e < k->vf->nelements; e++) tris += k->vf->elements[e].shape < 0 ? k->vf->elements[e].mesh.ni / 3 : 0;
+        for (size_t e = 0; e < k->vf->nshapes; e++) tris += k->vf->shapes[e].ni / 3;
+        return tris;
+    }
+    const cc_scene *sc = cc_link_rows(k);
+    for (size_t e = 0; e < sc->nelements; e++) tris += sc->elements[e].shape < 0 ? sc->elements[e].mesh.ni / 3 : 0;
+    for (size_t e = 0; e < sc->nshapes; e++) tris += sc->shapes[e].ni / 3; /* each shared shape once */
+    return tris;
+}
+
+int cc_link_resident(cc_link *k) {
+    if (!k->vf || !k->vf->lazy) return 0;
+    k->mused = ++link_use_tick;
+    if (!k->resident) {
+        arena_init(&k->marena, 0);
+        uint64_t b = 0;
+        const cc_platform *pf = k->map_pf;
+        double t0 = pf ? pf->now_ms(pf->ctx) : 0;
+        if (cc_viewfile_materialize(k->vf, &k->marena, &b)) { /* out of memory, or the cache changed under its mapping */
+            arena_free(&k->marena);
+            for (size_t i = 0; i < k->vf->nelements; i++) memset(&k->vf->elements[i].mesh, 0, sizeof(cc_mesh));
+            for (size_t i = 0; i < k->vf->nshapes; i++) memset(&k->vf->shapes[i], 0, sizeof(cc_mesh));
+            link_rows_view(k);
+            return -1; /* draws nothing from now on: its counts are 0 */
+        }
+        for (size_t i = 0; i < k->scene.nelements && i < k->vf->nelements; i++) k->scene.elements[i].mesh = k->vf->elements[i].mesh;
+        k->scene.shapes = k->vf->shapes; /* decoded */
+        k->resident = 1, k->mbytes = b;
+        if (pf) cc_log(pf, "bimble-ccore: link %s: its meshes decoded (%.1f MB in %.0f ms)", k->path, (double)b / 1e6, pf->now_ms(pf->ctx) - t0);
+    }
+    if (k->pwant && !k->placed) {
+        if (place_scene(&k->pscene, &k->scene, k->pc, k->ps, k->pt)) cc_scene_free(&k->pscene);
+        else k->placed = 1;
+    }
+    return 0;
+}
+
+const cc_scene *cc_link_element_scene(cc_link *k, size_t i, cc_scene *tmp, size_t *at) {
+    memset(tmp, 0, sizeof *tmp);
+    arena_init(&tmp->arena, 0);
+    if (!k->vf || !k->vf->lazy || k->resident || i >= k->scene.nelements || i >= k->vf->nelements) {
+        *at = i;
+        return cc_link_scene(k); /* decoded already, or not read in place: the whole scene */
+    }
+    /* one element: its own mesh's block or its shape's, decoded into the scratch scene, placed as the link is */
+    const cc_view_element *x = &k->vf->elements[i];
+    cc_scene one;
+    memset(&one, 0, sizeof one);
+    arena_init(&one.arena, 0);
+    memcpy(one.origin, k->scene.origin, sizeof one.origin);
+    one.elements = arena_alloc(&one.arena, sizeof *one.elements, 8);
+    cc_mesh *m = arena_alloc(&one.arena, sizeof *m, 8);
+    const uint8_t *q;
+    size_t qn;
+    const char *why;
+    size_t b = x->shape >= 0 ? (size_t)x->shape : k->vf->nshapes + i;
+    int ok = one.elements && m && cc_viewfile_block(k->vf, b, &q, &qn) == 0 && cc_meshcodec_decode(q, qn, &one.arena, m, &why) == CC_MC_OK;
+    if (ok) {
+        one.elements[0] = k->scene.elements[i];
+        if (x->shape >= 0) one.shapes = m, one.nshapes = 1, one.elements[0].shape = 0;
+        else one.elements[0].mesh = *m;
+        one.nelements = 1;
+    }
+    *at = 0;
+    if (!ok) return cc_scene_free(&one), tmp; /* (an empty scene: nothing to measure) */
+    if (!k->pwant) {
+        cc_scene_free(tmp);
+        *tmp = one;
+        return tmp;
+    }
+    cc_scene_free(tmp);
+    int rc = place_scene(tmp, &one, k->pc, k->ps, k->pt); /* its arrays (own) copied placed; a shape's borrowed */
+    if (rc) cc_scene_free(tmp), memset(tmp, 0, sizeof *tmp), arena_init(&tmp->arena, 0);
+    else arena_adopt(&tmp->arena, &one.arena); /* the shape it borrows lives on */
+    if (rc) cc_scene_free(&one);
+    return tmp;
+}
+
+int cc_link_box_lazy(const cc_link *k, const double org[3], double lo[3], double hi[3]) {
+    if (!k->kind || !k->vf || !k->vf->lazy || k->resident || !(k->vf->box[0] <= k->vf->box[3])) return 0;
+    const double *O = k->vf->origin;
+    double c = k->pwant ? k->pc : 1.0, sn = k->pwant ? k->ps : 0.0, t[3] = {0, 0, 0};
+    if (k->pwant) memcpy(t, k->pt, sizeof t);
+    double P[3] = {c * O[0] - sn * O[1] + t[0], sn * O[0] + c * O[1] + t[1], O[2] + t[2]}; /* place_scene's origin */
+    for (int q = 0; q < 3; q++) lo[q] = 1.0 / 0.0, hi[q] = -1.0 / 0.0;
+    for (int i = 0; i < 4; i++) {
+        double x = i & 1 ? k->vf->box[3] : k->vf->box[0], y = i & 2 ? k->vf->box[4] : k->vf->box[1];
+        double w[2] = {c * x - sn * y + P[0] - org[0], sn * x + c * y + P[1] - org[1]};
+        for (int q = 0; q < 2; q++) lo[q] = w[q] < lo[q] ? w[q] : lo[q], hi[q] = w[q] > hi[q] ? w[q] : hi[q];
+    }
+    lo[2] = k->vf->box[2] + P[2] - org[2], hi[2] = k->vf->box[5] + P[2] - org[2];
+    return 1;
+}
+
+const cc_scene *cc_link_raw_scene(const cc_link *k) {
+    if (k->vf && k->vf->lazy) cc_link_resident((cc_link *)k); /* SIZE3: decoded on demand (the session's calls are serial) */
+    return cc_link_rows(k);
+}
+const cc_scene *cc_link_scene(const cc_link *k) {
+    const cc_scene *raw = cc_link_raw_scene(k);
+    return k->placed ? &k->pscene : raw; /* LINKF */
+}
 
 void cc_link_id(const cc_link *k, size_t i, char id[22]) {
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k); /* SIZE3: ids only (the placed scene's rows are the same) */
     if (k->kind == CC_LINK_IFC) { /* cc_ifc_scene_bmsh: the file's text, '0'-padded to 22 */
         cc_str g = k->ifc->info[sc->elements[i].model_index].global_id;
         for (size_t j = 0; j < 22; j++) id[j] = j < g.n ? g.p[j] : '0';
@@ -47,7 +187,7 @@ void cc_link_id(const cc_link *k, size_t i, char id[22]) {
 }
 
 long cc_link_find(const cc_link *k, const char *id) {
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k);
     char t[22];
     for (size_t i = 0; i < sc->nelements; i++) {
         cc_link_id(k, i, t);
@@ -95,7 +235,7 @@ int cc_links_add(cc_session *s, const char *path, cc_error *err) {
         k.uid = ++s->link_uid_next, k.pinned = 1, k.colour = -1; /* LINKF */
         s->links[s->nlinks++] = k;
     }
-    const cc_scene *sc = cc_link_scene(&k);
+    const cc_scene *sc = cc_link_rows(&k);
     cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, sc->nelements); /* lib.rs:1484 */
     s->links_gen++, s->links_mesh_gen++; /* LNK3D: the geometry changed */
     return 0;
@@ -178,7 +318,7 @@ void cc_links_draw_json(cc_session *s, JsonW *w) {
         const cc_link *k = &s->links[i];
         double c, sn, t[3], o[3];
         cc_link_placement(s, k, &c, &sn, t);
-        const double *lo = k->kind ? cc_link_raw_scene(k)->origin : (const double[3]){0, 0, 0};
+        const double *lo = k->kind ? cc_link_rows(k)->origin /* SIZE3: no mesh decoded */ : (const double[3]){0, 0, 0};
         o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
         jw_obj_begin(w);
         jw_key(w, "colour"), jw_i64(w, k->colour);
@@ -187,6 +327,7 @@ void cc_links_draw_json(cc_session *s, JsonW *w) {
         jw_key(w, "origin"), jw_arr_begin(w);
         for (int q = 0; q < 3; q++) jw_f64(w, o[q] + 0.0); /* + 0.0: never -0.0 */
         jw_arr_end(w);
+        jw_key(w, "proxies"), jw_u64(w, k->proxies_gen); /* SIZE3 (E): moves when its proxies were baked after it was ready */
         jw_key(w, "sin"), jw_f64(w, sn + 0.0);
         jw_key(w, "visible"), jw_bool(w, k->visible && k->kind);
         jw_obj_end(w);
@@ -220,7 +361,7 @@ static void str_or_null(JsonW *w, cc_str t) {
 
 /* The read-only element detail (lib.rs:4508 link_properties, :4570 properties): query element's
  * shape plus family, read_only, triangles and volume_m3; "link" only for a linked model. */
-static int ro_element_json(const cc_scene *sc, size_t i, cc_str cls, cc_str nm, cc_str storey, cc_str material,
+static int ro_element_json(const cc_scene *sc, size_t i, double vol_mm3, cc_str cls, cc_str nm, cc_str storey, cc_str material,
                            const char t[22], const char *link, Buf *out) {
     const cc_scene_element *e = &sc->elements[i];
     const cc_mesh *lm = cc_scene_local_mesh(sc, i);
@@ -254,7 +395,7 @@ static int ro_element_json(const cc_scene *sc, size_t i, cc_str cls, cc_str nm, 
     jw_key(&w, "storey"), jw_str(&w, "");
     jw_key(&w, "storey_name"), str_or_null(&w, storey);
     if (!link) jw_key(&w, "triangles"), jw_u64(&w, lm ? lm->ni / 3 : 0); /* lib.rs:4590 "Triangles" */
-    jw_key(&w, "volume_m3"), jw_f64(&w, volume_mm3(sc, i) / 1e9);
+    jw_key(&w, "volume_m3"), jw_f64(&w, vol_mm3 / 1e9);
     jw_obj_end(&w);
     if (jw_finish(&w) != JW_OK || out->oom) {
         buf_clear(out);
@@ -276,7 +417,7 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
         buf_puts(out, "no element with this id");
         return -1;
     }
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k); /* SIZE3: its texts from the rows; its volume from its own block (below) */
     const cc_scene_element *e = &sc->elements[i];
     cc_str cls = e->class_name, nm = {0}, storey = {0}, material = {0};
     if (k->kind == CC_LINK_IFC) {
@@ -296,7 +437,12 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
     char t[22];
     cc_link_id(k, (size_t)i, t);
     size_t at = out->len;
-    if (ro_element_json(sc, (size_t)i, cls, nm, storey, material, t, k->name, out)) return -1;
+    cc_scene one; /* SIZE3: its volume from its own block when the link is not decoded */
+    size_t gi;
+    const cc_scene *gs = cc_link_element_scene((cc_link *)k, (size_t)i, &one, &gi);
+    double vol = gi < gs->nelements ? volume_mm3(gs, gi) : 0.0;
+    cc_scene_free(&one);
+    if (ro_element_json(sc, (size_t)i, vol, cls, nm, storey, material, t, k->name, out)) return -1;
     if (out->len > at && out->p[out->len - 1] == '}') { /* M1LINKS: its property sets (m1links.h) */
         out->len--;
         cc_link_psets_json(s, k, (size_t)i, out);
@@ -322,7 +468,7 @@ int cc_scene_element_json(cc_session *s, const char *id, size_t idn, Buf *out) {
             const cc_view_element *f = &s->vf->elements[e->model_index];
             cls = f->class_name, nm = f->name, storey = f->storey, material = f->material;
         }
-        return ro_element_json(sc, i, cls, nm, storey, material, e->id.c, NULL, out);
+        return ro_element_json(sc, i, volume_mm3(sc, i), cls, nm, storey, material, e->id.c, NULL, out);
     }
     buf_puts(out, "no element with this id");
     return -1;
@@ -709,7 +855,7 @@ int cc_links_locate(cc_session *s, int i, const char *path, cc_error *err) {
     cc_link_free(&s->links[i]);
     s->links[i] = k;
     s->links_gen++, s->links_mesh_gen++;
-    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, cc_link_scene(&k)->nelements);
+    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, cc_link_rows(&k)->nelements);
     return 0;
 }
 /* ---- end LNK1 ---- */
@@ -744,6 +890,7 @@ static char *dup_z(const char *p) {
 static void keep_settings(cc_link *k, const cc_link *old) {
     k->uid = old->uid, k->origin = old->origin, k->rotation_deg = old->rotation_deg, k->pinned = old->pinned;
     k->colour = old->colour;
+    k->detail_own = old->detail_own, k->detail = old->detail; /* TESS1 */
     memcpy(k->move_mm, old->move_mm, sizeof k->move_mm);
 }
 
@@ -777,25 +924,79 @@ static void take(cc_session *s, cc_link *k, cc_link_job *j) {
             return;
         }
         k->vf = j->vf, j->vf = NULL, k->kind = CC_LINK_VIEW;
+        k->map = j->map, k->map_pf = j->pf, j->map = NULL; /* SIZE3: read in place over its mapped cache */
+        k->zshapes = NULL;
+        if (k->vf->lazy && link_rows_view(k)) { /* SIZE3: its scene empty until decoded */
+            k->state = CC_LS_FAILED, k->msg = dup_z("out of memory");
+            return;
+        }
     } else k->ifc = j->ifc, j->ifc = NULL, k->kind = CC_LINK_IFC;
     k->psets = j->psets, k->npsets = j->npsets, j->psets = NULL, j->npsets = 0; /* M1LINKS: a small IFC's */
     k->state = CC_LS_READY;
     link_geo(k); /* LINKF: where the file says it is */
     k->cache = dup_z(j->cache), k->log = dup_z(j->log), k->msg = dup_z(j->note);
     k->cache_mtime_s = j->cache_mtime_s, k->from_cache = j->from_cache;
-    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements (%s, %.0f ms)", k->path, cc_link_scene(k)->nelements,
+    k->indexing = j->incomplete && j->cache[0] && k->kind == CC_LINK_VIEW ? 1 : 0; /* SIZE3 (E): its proxies next */
+    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements (%s, %.0f ms)", k->path, cc_link_rows(k)->nelements,
            j->from_cache ? "its cache" : j->cache[0] ? "read, cache written" : "read", j->ms);
+}
+
+/* SIZE3 (E): link k's indexing job done: its completed cache in place of the one it read (the same rows: the
+ * placement, colour and selection stay); its proxies' generation moves. A job of a link unloaded, removed or read
+ * again meanwhile is not taken. */
+static void take_index(cc_session *s, cc_link *k, cc_link_job *j) {
+    if (k->state != CC_LS_READY || k->indexing != 2 || k->kind != CC_LINK_VIEW) return;
+    k->indexing = 0;
+    if (j->rc != CC_JOB_OK) {
+        if (j->rc != CC_JOB_CANCELLED) free(k->msg), k->msg = dup_z(j->err.msg[0] ? j->err.msg : "its proxies could not be baked");
+        cc_log(s->pf, "bimble-ccore: link %s: indexing %s", k->path, j->rc == CC_JOB_CANCELLED ? "cancelled" : j->err.msg);
+        return;
+    }
+    cc_scene sc;
+    cc_error err;
+    if (cc_view_scene(&sc, j->vf, &err)) return; /* (out of memory: the link keeps its cache as it was) */
+    link_evict(k);
+    if (k->placed) cc_scene_free(&k->pscene), k->placed = 0;
+    cc_scene_free(&k->scene), cc_viewfile_free(k->vf), free(k->vf);
+    if (k->map) k->map_pf->unmap_file(k->map_pf->ctx, k->map);
+    k->scene = sc, k->vf = j->vf, j->vf = NULL;
+    k->map = j->map, k->map_pf = j->pf, j->map = NULL;
+    k->zshapes = NULL;
+    if (k->vf->lazy && link_rows_view(k)) k->state = CC_LS_FAILED, free(k->msg), k->msg = dup_z("out of memory");
+    k->cache_mtime_s = j->cache_mtime_s;
+    k->proxies_gen++;
+    cc_log(s->pf, "bimble-ccore: link %s: indexed (proxies baked in %.0f ms after it was ready)", k->path, j->ms);
+}
+
+/* SIZE3 (E): link i's proxies baked by a job of their own, after every queued conversion. */
+static void start_index(cc_session *s, int i) {
+    cc_link *k = &s->links[i];
+    cc_link_job *j = cc_link_job_new(s->pf, k->path);
+    if (j) j->topts = s->tiles_opts; /* TILE1: the pyramid's bake settings */
+    if (!j) {
+        k->indexing = 0;
+        return;
+    }
+    j->index_only = 1, j->index_delay_ms = s->link_index_delay_ms;
+    snprintf(j->cache, sizeof j->cache, "%s", k->cache ? k->cache : "");
+    snprintf(j->log, sizeof j->log, "%s", k->log ? k->log : "");
+    k->indexing = 2;
+    s->link_job = j, s->link_job_uid = k->uid;
+    if (!s->pf->spawn || s->pf->spawn(s->pf->ctx, cc_link_job_run, j)) cc_link_job_run(j);
 }
 
 /* Starts link i's conversion: on the carrier's thread, else here. */
 static void start(cc_session *s, int i) {
     cc_link *k = &s->links[i];
     cc_link_job *j = cc_link_job_new(s->pf, k->path);
+    if (j) j->topts = s->tiles_opts; /* TILE1: the pyramid's bake settings */
     if (!j) {
         k->state = CC_LS_FAILED, free(k->msg), k->msg = dup_z("out of memory");
         return;
     }
     j->cache_min = s->link_cache_min, j->no_beside = s->link_no_beside;
+    if (k->detail_own) j->detail = k->detail; /* TESS1: the link's own detail, else the settings'; a cache of another converts again */
+    else cc_settings_link_opts(s, &j->detail);
     k->state = CC_LS_CONVERTING, k->progress = 0;
     s->link_job = j, s->link_job_uid = k->uid;
     if (!s->pf->spawn || s->pf->spawn(s->pf->ctx, cc_link_job_run, j)) cc_link_job_run(j);
@@ -804,12 +1005,49 @@ static void start(cc_session *s, int i) {
 int cc_links_busy(const cc_session *s) {
     if (s->link_job) return 1;
     for (size_t i = 0; i < s->nlinks; i++)
-        if (s->links[i].state == CC_LS_QUEUED) return 1;
+        if (s->links[i].state == CC_LS_QUEUED || s->links[i].indexing == 1) return 1; /* SIZE3 (E): an indexing to start */
     return 0;
 }
 
+int cc_links_wants_tick(const cc_session *s) {
+    if (cc_links_busy(s)) return 1;
+    for (size_t i = 0; i < s->nlinks; i++) /* SIZE3 (F): a link refused for memory, retried once by itself */
+        if (s->links[i].state == CC_LS_REFUSED && !s->links[i].auto_retried && s->pf->mem_available) return 1;
+    uint64_t total = 0; /* SIZE3: decoded meshes past the budget, dropped after CC_LINK_KEEP_MS */
+    for (size_t i = 0; i < s->nlinks; i++) total += s->links[i].resident ? s->links[i].mbytes : 0;
+    return total > s->link_mesh_budget;
+}
+
+/* SIZE3: decoded link meshes past the budget dropped, the least recently used first, none used in the
+ * last CC_LINK_KEEP_MS (a measure over every link keeps them while it runs). Called at each tick. */
+static void links_trim(cc_session *s) {
+    double now = s->pf->now_ms(s->pf->ctx);
+    uint64_t total = 0;
+    int trimmed = 0;
+    for (size_t i = 0; i < s->nlinks; i++) {
+        cc_link *k = &s->links[i];
+        if (!k->resident) continue;
+        if (k->mused != (uint64_t)k->mused_ms_tick) k->mused_ms_tick = k->mused, k->mused_ms = now; /* used since the last tick */
+        total += k->mbytes;
+    }
+    while (total > s->link_mesh_budget) {
+        cc_link *old = NULL;
+        for (size_t i = 0; i < s->nlinks; i++) {
+            cc_link *k = &s->links[i];
+            if (k->resident && now - k->mused_ms >= s->link_keep_ms && (!old || k->mused < old->mused)) old = k;
+        }
+        if (!old) break;
+        total -= old->mbytes;
+        cc_log(s->pf, "bimble-ccore: link %s: its meshes dropped (%.1f MB; decoded again when needed)", old->path, (double)old->mbytes / 1e6);
+        link_evict(old);
+        trimmed = 1;
+    }
+    if (trimmed && s->pf->trim) s->pf->trim(s->pf->ctx);
+}
+
 int cc_links_tick(cc_session *s) {
-    int ch = 0;
+    int ch = 0, idx = 0;
+    links_trim(s);
     cc_link_job *j = s->link_job;
     if (j) {
         int at = link_by_uid(s, s->link_job_uid);
@@ -819,10 +1057,12 @@ int cc_links_tick(cc_session *s) {
             if (at >= 0) s->links[at].progress = (unsigned)cc_atomic_load(&j->pg.done);
             return 0;
         } else {
-            if (at >= 0) take(s, &s->links[at], j);
+            if (at >= 0) j->index_only ? take_index(s, &s->links[at], j) : take(s, &s->links[at], j); /* SIZE3 (E) */
+            if (j->index_only) idx = 1; /* SIZE3 (E): the same geometry: the panel and link_draw only */
+            else ch = 1;
             cc_link_job_free(j);
             s->link_job = NULL, s->link_job_uid = 0;
-            ch = 1;
+            if (s->pf->trim) s->pf->trim(s->pf->ctx); /* SIZE3: a conversion's freed heap given back (it peaks at GBs) */
         }
     }
     if (!s->link_job && s->pf->mem_available && s->pf->stat_path) { /* SIZE2: a link refused for memory, queued again once
@@ -849,11 +1089,17 @@ int cc_links_tick(cc_session *s) {
         for (size_t i = 0; i < s->nlinks; i++)
             if (s->links[i].state == CC_LS_QUEUED && (best < 0 || s->links[i].bytes < s->links[best].bytes)) best = (int)i;
         if (best >= 0) start(s, best); /* "converting": no change published (above) */
+        else { /* SIZE3 (E): no conversion waits: a ready link's proxies, the smallest first */
+            for (size_t i = 0; i < s->nlinks; i++)
+                if (s->links[i].state == CC_LS_READY && s->links[i].indexing == 1 && s->links[i].cache && (best < 0 || s->links[i].bytes < s->links[best].bytes)) best = (int)i;
+            if (best >= 0) start_index(s, best);
+        }
         if (s->link_job && cc_link_job_done(s->link_job)) /* ran here (no thread): take it now */
             return cc_links_tick(s), 1;
     }
     if (ch) s->links_gen++, s->links_mesh_gen++;
-    return ch;
+    else if (idx) s->links_gen++;
+    return ch || idx;
 }
 
 /* Queues `path` as a link: at *at (in its place) when at is given, else in the place of a link of
@@ -874,8 +1120,11 @@ static int links_add_queued(cc_session *s, const char *path, int *at, cc_error *
     int now = !s->pf->spawn || bytes < s->link_cache_min || !s->pf->files;
     if (now) { /* read here: as cc_link_load, through the job (the cache when it is worth one) */
         cc_link_job *j = cc_link_job_new(s->pf, path);
+        if (j) j->topts = s->tiles_opts; /* TILE1 */
         if (!j) return snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
         j->cache_min = s->link_cache_min, j->no_beside = s->link_no_beside;
+        if (at && *at >= 0 && (size_t)*at < s->nlinks && s->links[*at].detail_own) j->detail = s->links[*at].detail; /* TESS1 */
+        else cc_settings_link_opts(s, &j->detail);
         cc_link_job_run(j);
         if (j->rc != CC_JOB_OK) {
             *err = j->err;
@@ -971,6 +1220,8 @@ void cc_links_cancel(cc_session *s, int i) {
         s->links_gen++, s->links_mesh_gen++;
     } else if (k->state == CC_LS_CONVERTING && s->link_job && s->link_job_uid == k->uid)
         cc_atomic_store(&s->link_job->pg.cancel, 1); /* the job ends "cancelled" (a batch later) */
+    else if (k->indexing == 1) k->indexing = 0, s->links_gen++; /* SIZE3 (E): not baked now (at the next open) */
+    else if (k->indexing == 2 && s->link_job && s->link_job_uid == k->uid) cc_atomic_store(&s->link_job->pg.cancel, 1);
 }
 
 void cc_links_unload(cc_session *s, int i) {
@@ -1314,6 +1565,15 @@ int cc_links_sync_placement(cc_session *s) {
         double c, sn, t[3];
         cc_link_placement(s, k, &c, &sn, t);
         int ident = c == 1.0 && sn == 0.0 && t[0] == 0.0 && t[1] == 0.0 && t[2] == 0.0;
+        if (k->vf && k->vf->lazy) { /* SIZE3: the placed scene is made when its meshes are decoded */
+            if (ident ? !k->pwant : k->pwant && k->pc == c && k->ps == sn && !memcmp(k->pt, t, sizeof t)) continue;
+            if (k->placed) cc_scene_free(&k->pscene), k->placed = 0;
+            k->pwant = !ident, k->pc = c, k->ps = sn, memcpy(k->pt, t, sizeof t);
+            if (k->pwant && k->resident && place_scene(&k->pscene, &k->scene, c, sn, t) == 0) k->placed = 1;
+            else if (k->pwant && k->resident) cc_scene_free(&k->pscene), rc = -1;
+            ch = 1;
+            continue;
+        }
         if (ident) {
             if (k->placed) cc_scene_free(&k->pscene), k->placed = 0, ch = 1;
             continue;

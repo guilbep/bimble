@@ -45,6 +45,7 @@ export const SETTINGS_KEY = "bimble.settings";
 // ---- FS1: one code path for pickers and the unsaved question (files.ts) ----
 import { pickFile } from "./files";
 // ---- end FS1 ----
+import { linkInAddress } from "./openurl"; // URL1
 
 interface Exports {
   memory: WebAssembly.Memory;
@@ -56,6 +57,7 @@ interface Exports {
   change_json(res: number): number;
   host_mesh(flags: number, res: number): number;
   host_proxies(budget: number, res: number): number; // 3D2
+  host_tiles?(link: number, budget: number, rp: number, rn: number, res: number): number; // TILE1
   host_saved(res: number): number;
   host_saved_path(res: number): number;
   host_open(flags: number, np: number, nn: number, bp: number, bn: number, res: number): number;
@@ -201,6 +203,17 @@ export function ccoreMesh(): { bytes: ArrayBuffer; rev: number } {
 export function ccoreProxies(budget: number): { status: number; bytes: ArrayBuffer; rev: number } {
   if (!module) throw new Error("ccore: not loaded");
   const r = run(module.X.host_proxies.bind(module.X), [], [budget]);
+  return { status: r.status, bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
+}
+
+/** TILE1 (ADR 0078 amendment 6, ccore/src/tiles.h): the tile pyramid (host_tiles, session/mesh.h): `link` >= 0 that
+ *  link's (cc_link_tiles), -1 the open scene's built in steps of `budget` triangles (cc_mesh_tiles: 202 "done total" until
+ *  built); `req` "toc" (the table of contents), "occ" (the occluders) or "a,b,c" (a "TILS" answer). Decode with gl/tiles.ts. */
+export function ccoreTiles(link: number, req: string, budget = 200000): { status: number; bytes: ArrayBuffer; rev: number } {
+  if (!module) throw new Error("ccore: not loaded");
+  const X = module.X;
+  if (!X.host_tiles) return { status: 404, bytes: new ArrayBuffer(0), rev: 0 };
+  const r = run(X.host_tiles.bind(X), [enc.encode(req)], [link, budget]);
   return { status: r.status, bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
 }
 
@@ -390,12 +403,17 @@ function fileAction(name: string): boolean {
 /** Loads the module, opens the model and returns a `Wasm` for bimble.ts. */
 export async function ccoreClient(params: URLSearchParams, steps: OpenSteps = {}): Promise<CcoreClient> {
   const base = document.baseURI;
-  const wasmUrl = new URL(params.get("ccore_wasm") ?? "ccore/ccore.wasm", base).href;
-  const modelUrl = new URL(params.get("model") ?? "ccore/frame.json", base).href;
+  // ---- URL1 (ADR 0086): in a built page, ?ccore_wasm= and ?model= name a file of this site only (a
+  // link fetches no other address without a click: another site's model opens with #open=, which asks).
+  // With a link (#open= / ?open=) the start opens no model: the link's model is the first (openurl.ts). ----
+  const here = (p: string | null) => { if (p === null || !import.meta.env.PROD) return p; try { if (new URL(p, base).origin === location.origin) return p; } catch { /* refused below */ } console.warn(`ccore: ${p}: not on this site, ignored (open another site's model with #open=<url>)`); return null; };
+  const wasmUrl = new URL(here(params.get("ccore_wasm")) ?? "ccore/ccore.wasm", base).href;
+  const modelUrl = linkInAddress() ? null : new URL(here(params.get("model")) ?? "ccore/frame.json", base).href;
+  // ---- end URL1 ----
   steps.step?.("read");
-  const [wr, mr] = await Promise.all([fetch(wasmUrl), fetch(modelUrl)]);
+  const [wr, mr] = await Promise.all([fetch(wasmUrl), modelUrl === null ? null : fetch(modelUrl)]);
   if (!wr.ok) throw new Error(`ccore: ${wasmUrl}: HTTP ${wr.status} (run npm run ccore:wasm)`);
-  if (!mr.ok) throw new Error(`ccore: ${modelUrl}: HTTP ${mr.status}`);
+  if (mr && !mr.ok) throw new Error(`ccore: ${modelUrl}: HTTP ${mr.status}`);
   const wasmBuf = await wr.arrayBuffer();
   const { instance } = await WebAssembly.instantiate(wasmBuf, {});
   const X = instance.exports as unknown as Exports;
@@ -406,14 +424,16 @@ export async function ccoreClient(params: URLSearchParams, steps: OpenSteps = {}
   X.guid_entropy(sp, sn);
   X.cc_free(sp);
 
-  const text = new Uint8Array(await mr.arrayBuffer());
-  const name = decodeURIComponent(new URL(modelUrl).pathname.split("/").pop() || "model.bimble");
-  await yieldTask(); // PERF2: the instantiation and the parse in two tasks
-  steps.step?.("parse");
-  const o = run(X.host_open_text.bind(X), [enc.encode(name), text]);
-  if (o.status !== 200) throw new Error(`ccore: ${name}: ${dec.decode(o.bytes)}`);
+  const text = mr ? new Uint8Array(await mr.arrayBuffer()) : new Uint8Array(0);
+  const name = modelUrl ? decodeURIComponent(new URL(modelUrl).pathname.split("/").pop() || "model.bimble") : "";
+  if (mr && modelUrl) { // URL1: none with a link
+    await yieldTask(); // PERF2: the instantiation and the parse in two tasks
+    steps.step?.("parse");
+    const o = run(X.host_open_text.bind(X), [enc.encode(name), text]);
+    if (o.status !== 200) throw new Error(`ccore: ${name}: ${dec.decode(o.bytes)}`);
+  }
   window.__bbCcore = { wasmBytes: wasmBuf.byteLength, readyMs, openMs: performance.now(), model: name, modelBytes: text.length, memBytes: () => X.memory.buffer.byteLength }; // GPU1: memBytes
-  await warm(X, steps); // PERF2: the scene and the mesh, each in its own task, before the page asks
+  if (mr) await warm(X, steps); // PERF2: the scene and the mesh, each in its own task, before the page asks
 
   let listener: ((json: string) => void) | null = null;
   let last = "";

@@ -11,9 +11,15 @@
 // Inputs: a press, a drag move, a wheel step, a click or a key on the viewport; its time to the end
 // of the next frame drawn (dropped when no frame comes within 2 s: it changed nothing on screen).
 // Nothing here is sent anywhere; file names leave the page only in the copied text, when asked.
+import { shallowReactive } from "vue";
+import { linkGpu } from "./gl/linkmem"; // SIZE3 (C)
+import { setSettings, userSettings } from "./bimble";
+import { optimisationLines } from "./optimisations";
 
 /** One frame drawn: when it started (performance.now), what it took (ms), moving or still, what it drew. */
-export interface PerfFrame { at: number; ms: number; moving: boolean; tris: number; draws: number; synced: boolean }
+export interface PerfFrame { at: number; ms: number; moving: boolean; tris: number; draws: number; synced: boolean;
+  /** VIS1 (P0-a): a moving frame budgeted although the setting is "Draw everything" (a whole frame took over 100 ms). */
+  capped?: boolean }
 export interface PerfInput { what: string; ms: number; at: number; synced: boolean }
 /** The adapter as the API names it (WebGPU's GPUAdapterInfo, or WebGL2's debug renderer strings), shown as
  *  given; `software`: decided from evidence (REAL1), not from these names alone: WebGPU's isFallbackAdapter,
@@ -23,7 +29,12 @@ export interface PerfAdapter { vendor: string; architecture: string; device?: st
   /** WebGPU: the fill rate measured when the device opened (megapixels a second; device.ts). */
   fillMpxS?: number | null }
 /** What draws the 3D view: asked (the setting or ?gpu=), in use, the adapter, why WebGPU is not in use. */
-export interface PerfRenderer { asked: "auto" | "webgl2" | "webgpu"; using: "WebGL2" | "WebGPU"; adapter: PerfAdapter | null; reason: string | null; gpuCull: boolean }
+export interface PerfRenderer { asked: "auto" | "webgl2" | "webgpu"; using: "WebGL2" | "WebGPU"; adapter: PerfAdapter | null; reason: string | null; gpuCull: boolean;
+  /** GPU2: the other renderer being made ready while this one still draws ("WebGPU: 3 of 17 models on the GPU"), else null. */
+  progress?: string | null;
+  /** GPU2: the last live switch (the toggle): to which renderer, when it was asked (performance.now), the ms from
+   *  the ask to the end of the first frame the other renderer drew (null while it is not in). */
+  switchTo?: "WebGL2" | "WebGPU" | null; switchAt?: number | null; switchMs?: number | null }
 export interface PerfLink { name: string; elements: number; triangles: number; visible: boolean;
   /** LNK3D (ADR 0078 amendment 3): its detail on the GPU (false: its proxies only; null: not told) and its GPU bytes. */
   detail?: boolean | null; gpuBytes?: number | null }
@@ -35,6 +46,8 @@ let pending: { what: string; at: number } | null = null;
 /** The last open (navigation start for the page's own model), its first mesh, that mesh's first frame's end and
  *  complete picture (later meshes of the same file, after an edit, do not move them). */
 let openAt = 0, openMesh: number | null = null, firstAt: number | null = null, completeAt: number | null = null, meshElements = 0, meshTris = 0;
+/** VIS1 (P0-b): the first picture of stand-ins (the links' proxies, before the mesh) after the last open. */
+let previewAt: number | null = null;
 let links: PerfLink[] = [];
 let glAdapter: PerfAdapter | null = null;
 const px = new Uint8Array(4);
@@ -43,7 +56,67 @@ let waiters = 0;
 let recording: { until: number; frames: PerfFrame[]; inputs: PerfInput[] } | null = null;
 let lastRecord: { seconds: number; frames: PerfFrame[]; inputs: PerfInput[] } | null = null;
 
-export const renderer: PerfRenderer = { asked: "auto", using: "WebGL2", adapter: null, reason: null, gpuCull: false };
+/** Reactive (GPU2): the status bar's chip and the panel's switch follow it at once. Shallow: the adapter stays a plain
+ *  object (a page's proxy reads back as {} through CDP's returnByValue: frames.mjs and the lab tests read it). */
+export const renderer: PerfRenderer = shallowReactive<PerfRenderer>({ asked: "auto", using: "WebGL2", adapter: null, reason: null, gpuCull: false,
+  progress: null, switchTo: null, switchAt: null, switchMs: null });
+
+// ---- GPU2: the live toggle (the panel's switch, the status bar's chip, the palette's "renderer webgpu|webgl2"). Here,
+// not in gpu/switch.ts, so the main chunk does not carry the switch: the viewport's switches listen. ----
+let chosen: "webgl2" | "webgpu" | null = null;
+const appliers = new Set<() => void>();
+/** The toggle's choice (over ?gpu= and the setting until the page reloads), or null. */
+export const chosenRenderer = (): "webgl2" | "webgpu" | null => chosen;
+export const onRendererChosen = (f: () => void): void => { appliers.add(f); };
+/** Switches the 3D view's renderer live and remembers it (the setting `renderer`). Returns the setting's error, if
+ *  any (the switch still happens). */
+export function chooseRenderer(a: "webgl2" | "webgpu"): string | null {
+  chosen = a;
+  renderer.asked = a;
+  renderer.switchTo = a === "webgpu" ? "WebGPU" : "WebGL2", renderer.switchAt = performance.now(), renderer.switchMs = null;
+  if (renderer.using === renderer.switchTo && !renderer.progress) renderer.switchMs = 0; // already there
+  let err: string | null = null;
+  try { err = userSettings.value?.values.renderer === a ? null : setSettings({ renderer: a }); } catch (e) { err = e instanceof Error ? e.message : String(e); }
+  for (const f of appliers) f();
+  return err;
+}
+const warmers = new Set<() => void>();
+export const onWarmRenderer = (f: () => void): void => { warmers.add(f); };
+/** The WebGPU device checked ahead of a switch (the panel opened, the chip hovered): no renderer made, no buffer. */
+export const warmRenderer = (): void => { for (const f of warmers) f(); };
+/** The toggle's other side: WebGPU when WebGL2 was asked (or automatic), else WebGL2. */
+export const toggleRenderer = (): string | null => chooseRenderer(gpuSide() ? "webgl2" : "webgpu");
+/** The toggle's side: WebGPU asked, or automatic and WebGPU drawing. */
+export const gpuSide = (): boolean => renderer.asked === "webgpu" || (renderer.asked === "auto" && renderer.using === "WebGPU");
+/** Why WebGPU is not drawing, in plain words (an i18n key and its value), from the switch's reason. */
+export type WhyKey = "perf.why.starting" | "perf.why.noWebgpu" | "perf.why.noAdapter" | "perf.why.software" | "perf.why.lost" | "perf.why.feature" | "perf.why.failed" | "perf.why.notAsked";
+export const FEATURE_REASON = "not drawn by WebGPU yet: ";
+export function whyPlain(reason: string | null): { key: WhyKey; what?: string } | null {
+  if (!reason) return null;
+  if (reason === "starting…") return { key: "perf.why.starting" };
+  if (reason.startsWith(FEATURE_REASON)) return { key: "perf.why.feature", what: reason.slice(FEATURE_REASON.length) };
+  if (/linked models are drawn by WebGL2/.test(reason)) return { key: "perf.why.feature", what: "linked models" };
+  if (/no navigator\.gpu|no WebGPU/.test(reason)) return { key: "perf.why.noWebgpu" };
+  if (/no adapter/.test(reason)) return { key: "perf.why.noAdapter" };
+  if (/fallback|software|CPU\)/.test(reason)) return { key: "perf.why.software" };
+  if (/lost/.test(reason)) return { key: "perf.why.lost" };
+  if (/WebGL2 asked|automatic is WebGL2|^automatic: /.test(reason)) return { key: "perf.why.notAsked" };
+  return { key: "perf.why.failed" };
+}
+/** What the user can do when WebGPU has no adapter or no API, per platform (the orchestrator's note: on Linux
+ *  Chromium 153 gives WebGPU no adapter without flags; these three were verified on Asahi, Chromium 153, a browser
+ *  process with a headless display, GPU2). null: nothing to say (WebGPU draws, or another reason). */
+export type HowKey = "perf.how.linuxChromium" | "perf.how.chrome" | "perf.how.firefox" | "perf.how.other";
+export function howToWebgpu(reason: string | null): HowKey | null {
+  const w = whyPlain(reason);
+  if (!w || (w.key !== "perf.why.noAdapter" && w.key !== "perf.why.noWebgpu" && w.key !== "perf.why.software")) return null;
+  const ua = navigator.userAgent;
+  if (/Firefox\//.test(ua)) return "perf.how.firefox";
+  const chromium = /Chrome\/|Chromium\//.test(ua);
+  if (chromium && /Linux/.test(ua) && !/Android/.test(ua)) return "perf.how.linuxChromium";
+  return chromium ? "perf.how.chrome" : "perf.how.other";
+}
+// ---- end GPU2 ----
 
 /** The names of CPU rasterisers (SwiftShader, llvmpipe, lavapipe, Microsoft's Basic Render). Not the
  *  word "software": Dawn calls Mesa's Asahi GPU (the M1 Pro, Vulkan) architecture "software" (REAL1). */
@@ -65,16 +138,20 @@ export function perfWait(on: boolean): void { waiters = Math.max(0, waiters + (o
 
 /** A frame drawn by the viewport, started at `t0`. `sync`: the WebGL2 context (a 1x1 read waits for
  *  its pixels), or a promise of the GPU's end (WebGPU), or null (an overlay-only frame). */
-export function perfFrame(moving: boolean, t0: number, sync: WebGL2RenderingContext | Promise<unknown> | null): void {
+export function perfFrame(moving: boolean, t0: number, sync: WebGL2RenderingContext | Promise<unknown> | null, capped = false): void {
   const g = window.__bbGl;
   const wait = perfWaits();
   if (sync && !(sync instanceof Promise)) {
     if (!glAdapter) glAdapter = webglAdapter(sync);
     if (wait) sync.readPixels(0, 0, 1, 1, sync.RGBA, sync.UNSIGNED_BYTE, px);
   }
-  const f: PerfFrame = { at: t0, ms: 0, moving, tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, synced: wait && sync !== null };
+  const f: PerfFrame = { at: t0, ms: 0, moving, tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, synced: wait && sync !== null, capped };
+  // GPU2: the first frame of the renderer a live switch asked for ends the switch's time (WebGL2: a context; WebGPU: a promise)
+  const by = sync === null ? null : sync instanceof Promise ? "WebGPU" : "WebGL2";
+  const sw = renderer.switchTo && renderer.switchMs === null && renderer.switchAt !== null && by === renderer.switchTo && t0 >= renderer.switchAt! ? renderer.switchAt! : null;
   const done = () => {
     f.ms = performance.now() - t0;
+    if (sw !== null && renderer.switchMs === null) renderer.switchMs = f.at + f.ms - sw;
     push(f);
   };
   if (sync instanceof Promise && wait) void sync.then(done, done);
@@ -83,6 +160,7 @@ export function perfFrame(moving: boolean, t0: number, sync: WebGL2RenderingCont
 
 function push(f: PerfFrame): void {
   frames.push(f);
+  compareRec?.push(f); // GPU2
   if (frames.length > RING) frames.splice(0, frames.length - RING);
   if (recording) recording.frames.push(f), endRecord();
   const g = window.__bbGl;
@@ -112,7 +190,9 @@ export function perfMesh(m: { ids: string[]; ni: Uint32Array; model?: Uint8Array
 }
 
 /** The shell started opening a file (send.ts): the next mesh's "open -> first frame" counts from here. */
-export function perfOpening(): void { openAt = performance.now(), openMesh = firstAt = completeAt = null; }
+export function perfOpening(): void { openAt = performance.now(), openMesh = firstAt = completeAt = previewAt = null; }
+/** VIS1 (P0-b): the viewport drew its first stand-ins (the links' proxies before their mesh). */
+export function perfPreview(): void { if (previewAt === null && openMesh === null) previewAt = performance.now(); }
 
 /** Watches the viewport canvas's inputs (once). */
 export function perfInputs(canvas: HTMLElement): void {
@@ -132,6 +212,7 @@ export function perfInputs(canvas: HTMLElement): void {
 /** Records every frame and input for 10 s (the GPU waited for meanwhile); `done` when it ends. */
 export function perfRecord(): void {
   if (recording) return;
+  perfTruth(); // VIS1: what the last frame drew against what can be seen (one offscreen pass: only when recording)
   perfWait(true);
   recording = { until: performance.now() + 10000, frames: [], inputs: [] };
   lastRecord = null;
@@ -144,6 +225,68 @@ function endRecord(): void {
   perfWait(false);
 }
 export const perfRecording = (): boolean => recording !== null;
+
+// ---- GPU2: "Compare renderers": the same camera path on WebGL2, then on WebGPU (switched live), each frame waited for ----
+/** One renderer's block of a comparison. */
+export interface CompareBlock { renderer: "WebGL2" | "WebGPU"; error: string | null; switchMs: number | null; moving: FrameStats; still: FrameStats;
+  tris: number; draws: number; stillTris: number; stillDraws: number; gpuBytes: number | null; adapter: string }
+let compareRec: PerfFrame[] | null = null;
+let lastCompare: { blocks: CompareBlock[]; path: string } | null = null;
+export const perfComparing = (): boolean => comparing;
+let comparing = false;
+/** The path: COMPARE_STEPS frames turning the view by COMPARE_STEP radians each (an orbit of the current view), one an
+ *  animation frame, then COMPARE_STILL_MS still (the fill and its still frames) and COMPARE_STILL_FRAMES whole still frames;
+ *  the view turned back after. */
+const COMPARE_STEPS = 240, COMPARE_STEP = 0.0125, COMPARE_STILL_MS = 2500, COMPARE_STILL_FRAMES = 10;
+const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+const until = async (f: () => boolean, ms: number) => { const t = performance.now() + ms; while (!f() && performance.now() < t) await new Promise((r) => setTimeout(r, 50)); return f(); };
+const median = (xs: number[]) => quantile(xs, 0.5);
+export async function perfCompare(progress: (what: string) => void = () => {}): Promise<void> {
+  const g = window.__bbGl;
+  if (comparing || !g?.bench) return;
+  comparing = true;
+  perfWait(true);
+  const back = renderer.asked;
+  const blocks: CompareBlock[] = [];
+  try {
+    for (const r of ["webgl2", "webgpu"] as const) {
+      const want = r === "webgpu" ? "WebGPU" : "WebGL2";
+      progress(`${want}: switching`);
+      chooseRenderer(r);
+      const ok = await until(() => renderer.using === want && !renderer.progress && renderer.reason !== "starting…", 60000);
+      await until(() => renderer.switchMs !== null, 5000);
+      const name = renderer.using === "WebGPU" ? (renderer.adapter ? adapterNames(renderer.adapter) : "unknown") : glAdapter ? adapterNames(glAdapter) : "unknown";
+      if (!ok) { blocks.push({ renderer: want, error: renderer.reason ?? "did not start", switchMs: null, moving: stats([]), still: stats([]), tris: 0, draws: 0, stillTris: 0, stillDraws: 0, gpuBytes: null, adapter: name }); continue; }
+      const switchMs = renderer.switchMs ?? null;
+      for (let i = 0; i < 10; i++) await nextFrame(); // (settled)
+      compareRec = [];
+      for (let i = 0; i < COMPARE_STEPS; i++) {
+        if (i % 40 === 0) progress(`${want}: orbit ${Math.round((100 * i) / COMPARE_STEPS)} %`);
+        g.bench.frame(COMPARE_STEP, true);
+        await nextFrame();
+      }
+      progress(`${want}: still`);
+      await new Promise((res) => setTimeout(res, COMPARE_STILL_MS));
+      for (let i = 0; i < COMPARE_STILL_FRAMES; i++) { g.bench.frame(0, false); await nextFrame(); } // whole still frames (a small model's moving frame draws all: no fill)
+      const fs = compareRec;
+      compareRec = null;
+      g.bench.frame(-COMPARE_STEPS * COMPARE_STEP, false); // the view turned back
+      const mv = fs.filter((f) => f.moving), st = fs.filter((f) => !f.moving);
+      const snap = perfSnapshot();
+      blocks.push({ renderer: want, error: null, switchMs, moving: stats(mv), still: stats(st), tris: median(mv.map((f) => f.tris)), draws: median(mv.map((f) => f.draws)),
+        stillTris: st.length ? Math.max(...st.map((f) => f.tris)) : NaN, stillDraws: st.length ? Math.max(...st.map((f) => f.draws)) : NaN, gpuBytes: snap.gpuBytes, adapter: name });
+    }
+  } finally {
+    compareRec = null;
+    if (back === "webgl2" || back === "webgpu") chooseRenderer(back);
+    else chooseRenderer("webgl2");
+    perfWait(false);
+    comparing = false;
+  }
+  lastCompare = { blocks, path: `an orbit of the current view, ${COMPARE_STEPS} frames of ${COMPARE_STEP} rad (one an animation frame), then ${COMPARE_STILL_MS / 1000} s still and ${COMPARE_STILL_FRAMES} whole still frames` };
+  progress("");
+}
+export const perfCompared = () => lastCompare;
 
 const quantile = (xs: number[], q: number): number => {
   if (!xs.length) return NaN;
@@ -159,11 +302,18 @@ const stats = (fs: PerfFrame[]): FrameStats => {
 /** What the panel shows now. */
 export interface PerfSnapshot {
   renderer: PerfRenderer; adapter: PerfAdapter | null; moving: FrameStats; still: FrameStats; synced: boolean;
+  /** VIS1 (P0-a): the moving frames kept under 100 ms while the setting is "Draw everything". */
+  capped: FrameStats; openToPreview: number | null;
   tris: number; draws: number; batches: number; culled: number; proxiesDrawn: number; proxyTris: number; gpuBytes: number | null;
+  /** GPU2: under WebGPU, the bytes each renderer holds (WebGPU's buffers, WebGL2's left) and the models taken over. */
+  gpuSplit: { webgpu: number; webgl: number; taken: number; models: number } | null;
   jsHeap: number | null; wasmBytes: number | null; elements: number; triangles: number;
   openToFirst: number | null; openToComplete: number | null; links: PerfLink[]; inputs: PerfInput[]; frames: number;
   record: { seconds: number; moving: FrameStats; still: FrameStats; inputs: PerfInput[] } | null; recording: boolean;
   canvas: { w: number; h: number; dpr: number };
+  /** VIS1: what the last frame left out as hidden, and the ground truth taken when a recording started. */
+  hidden: { tris: number; items: number; used: boolean } | null;
+  truth: PerfTruth | null;
 }
 
 export function perfSnapshot(): PerfSnapshot {
@@ -172,10 +322,15 @@ export function perfSnapshot(): PerfSnapshot {
   const cc = (window as unknown as { __bbCcore?: { memBytes?: () => number } }).__bbCcore;
   const c = document.getElementById("bimble") as HTMLCanvasElement | null;
   return {
-    renderer, adapter: renderer.using === "WebGPU" ? renderer.adapter : glAdapter,
+    renderer: { ...renderer }, adapter: renderer.using === "WebGPU" ? renderer.adapter : glAdapter, // (a plain copy, not the reactive object)
     moving: stats(frames.filter((f) => f.moving)), still: stats(frames.filter((f) => !f.moving)), synced: frames.some((f) => f.synced),
+    capped: stats(frames.filter((f) => f.capped)), openToPreview: previewAt !== null ? previewAt - openAt : null,
     tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, batches: g?.moving?.batches ?? 0, culled: g?.moving?.culled ?? 0,
-    proxiesDrawn: g?.proxies?.drawnCells ?? 0, proxyTris: g?.proxies?.drawnTris ?? 0, gpuBytes: g?.gpuBytes ?? null,
+    // VIS1 (P0-b): the links' proxies drawn too (LNK3D), not only the open model's
+    proxiesDrawn: (g?.proxies?.drawnCells ?? 0) + (g?.linkProxies ?? []).reduce((n, x) => n + x.drawnCells, 0),
+    proxyTris: (g?.proxies?.drawnTris ?? 0) + (g?.linkProxies ?? []).reduce((n, x) => n + x.drawnTris, 0),
+    gpuBytes: renderer.using === "WebGPU" && g?.gpuSplit ? g.gpuSplit.webgpu + g.gpuSplit.webgl : g?.gpuBytes ?? null, // GPU2: what each renderer holds
+    gpuSplit: g?.gpuSplit ?? null,
     jsHeap: mem ? mem.usedJSHeapSize : null, wasmBytes: cc?.memBytes ? cc.memBytes() : null,
     elements: meshElements, triangles: meshTris,
     openToFirst: firstAt !== null ? firstAt - openAt : null,
@@ -187,6 +342,7 @@ export function perfSnapshot(): PerfSnapshot {
     record: lastRecord ? { seconds: lastRecord.seconds, moving: stats(lastRecord.frames.filter((f) => f.moving)), still: stats(lastRecord.frames.filter((f) => !f.moving)), inputs: lastRecord.inputs } : null,
     recording: recording !== null,
     canvas: { w: c?.width ?? 0, h: c?.height ?? 0, dpr: window.devicePixelRatio || 1 },
+    hidden: g?.vis ? { tris: g.vis.hiddenTris, items: g.vis.hidden, used: g.vis.used } : null, truth,
   };
 }
 
@@ -211,30 +367,65 @@ export function perfReport(names: boolean, file: string | null): string {
   L.push(`frame time (draw to pixels${s.synced ? "" : ", NOT waited for: submit time only"}), last ${RING} frames:`);
   L.push(`  moving: ${fline(s.moving)}`);
   L.push(`  still:  ${fline(s.still)}`);
+  if (s.capped.n) L.push(`  of the moving, kept under 100 ms (draw everything is on): ${fline(s.capped)}`); // VIS1 (P0-a)
   L.push(`last frame: ${num(s.tris)} triangles, ${num(s.draws)} draw calls; batches ${num(s.batches)}, culled ${num(s.culled)}; proxies drawn ${num(s.proxiesDrawn)} (${num(s.proxyTris)} triangles)`);
-  L.push(`memory: GPU buffers ${mb(s.gpuBytes)}, JS heap ${mb(s.jsHeap)}, wasm ${mb(s.wasmBytes)}`);
-  L.push(`model${names && file ? ` ${file}` : ""}: ${num(s.elements)} elements, ${num(s.triangles)} triangles; open -> first frame ${ms(s.openToFirst)}, -> complete picture ${ms(s.openToComplete)}`);
+  L.push(`memory: GPU buffers ${mb(s.gpuBytes)}${s.gpuSplit && r.using === "WebGPU" ? ` (WebGPU ${mb(s.gpuSplit.webgpu)}, WebGL2 ${mb(s.gpuSplit.webgl)}; ${s.gpuSplit.taken} of ${s.gpuSplit.models} models on WebGPU)` : ""}, JS heap ${mb(s.jsHeap)}, wasm ${mb(s.wasmBytes)}`);
+  if (linkGpu.value) L.push(`linked files on the GPU: ${mb(linkGpu.value.used)} of a ${mb(linkGpu.value.budget)} budget`); // SIZE3 (C)
+  L.push(`model${names && file ? ` ${file}` : ""}: ${num(s.elements)} elements, ${num(s.triangles)} triangles; open -> first picture (stand-ins) ${ms(s.openToPreview)}; first detailed frame ${ms(s.openToFirst)}; complete ${ms(s.openToComplete)}`); // VIS1 (P0-b)
   if (s.links.length) {
     L.push(`links (${s.links.length}):`);
     s.links.forEach((l, k) => L.push(`  ${names ? l.name : `link ${k + 1}`}: ${num(l.elements)} elements, ${num(l.triangles)} triangles, ${l.visible ? "shown" : "hidden"}` +
       (l.detail === true ? `, detail loaded (${mb(l.gpuBytes ?? null)})` : l.detail === false ? ", proxies only" : "")));
   }
+  L.push("optimisations (setting: value):"); // the owner's rule: every optimisation a setting, its value in the report
+  L.push(...optimisationLines());
   L.push("slowest input -> frame (this session):");
   if (!s.inputs.length) L.push("  none yet");
   s.inputs.forEach((i, k) => L.push(`  ${k + 1}. ${ms(i.ms)} ${i.what}${i.synced ? "" : " (submitted)"}`));
+  if (s.hidden) L.push(`left out as hidden behind the last picture: ${num(s.hidden.tris)} triangles (${num(s.hidden.items)} elements)${s.hidden.used ? "" : " - not used for this frame"}`); // VIS1
+  if (s.truth) L.push(`at the recording's start: drawn ${num(s.truth.submitted)} triangles; ${num(s.truth.seenTris)} belong to the ${num(s.truth.seen)} elements you can see (${num(s.truth.pixels)} pixels)`);
   if (s.record) {
     L.push(`recording (${s.record.seconds} s):`);
     L.push(`  moving: ${fline(s.record.moving)}`);
     L.push(`  still:  ${fline(s.record.still)}`);
     L.push(`  inputs: ${s.record.inputs.length}, slowest ${ms(s.record.inputs.length ? Math.max(...s.record.inputs.map((i) => i.ms)) : null)}`);
   }
+  if (lastCompare) { // GPU2: the two renderers side by side, the same camera path
+    const [a, b] = lastCompare.blocks, pad = (x: string) => x.padEnd(26);
+    const row = (k: string, f: (c: CompareBlock) => string) => L.push(`  ${pad(k)}${(a ? f(a) : "-").padEnd(30)}${b ? f(b) : "-"}`);
+    L.push(`compare renderers (${lastCompare.path}):`);
+    row("", (c) => c.renderer);
+    row("adapter", (c) => c.adapter.slice(0, 28));
+    row("not drawn", (c) => c.error ?? "-");
+    row("time to switch", (c) => ms(c.switchMs));
+    row("moving median / p95", (c) => `${ms(c.moving.median)} / ${ms(c.moving.p95)} (n ${c.moving.n})`);
+    row("still median / p95", (c) => `${ms(c.still.median)} / ${ms(c.still.p95)} (n ${c.still.n})`);
+    row("moving tris / draws", (c) => `${num(c.tris || 0)} / ${num(c.draws || 0)}`);
+    row("still tris / draws (max)", (c) => (Number.isFinite(c.stillTris) ? `${num(c.stillTris)} / ${num(c.stillDraws)}` : "-"));
+    row("GPU bytes", (c) => mb(c.gpuBytes));
+  }
   return L.join("\n") + "\n";
 }
+
+// ---- VIS1 (ADR 0078 amendment 7): the number the owner feels, behind the panel's Record: the triangles the last frame
+// submitted against those of the elements with at least one pixel on screen (the viewport's id pass: every shown
+// element's faces as ids into an offscreen target, read back; one pass, at the recording's start only) ----
+export interface PerfTruth { at: number; submitted: number; seen: number; seenTris: number; pixels: number }
+let truth: PerfTruth | null = null;
+export function perfTruth(): PerfTruth | null {
+  const g = window.__bbGl;
+  const submitted = g?.frameTris ?? 0;
+  const r = g?.bench?.idCount?.();
+  if (!r) return null;
+  truth = { at: performance.now(), submitted, seen: r.elements, seenTris: r.tris, pixels: r.pixels };
+  return truth;
+}
+// ---- end VIS1 ----
 
 declare global {
   interface Window {
     /** GPU1: the performance panel's source (perf.ts), for the lab tests. */
-    __bbPerf?: { snapshot: typeof perfSnapshot; report: typeof perfReport; record: typeof perfRecord };
+    __bbPerf?: { snapshot: typeof perfSnapshot; report: typeof perfReport; record: typeof perfRecord; compare: typeof perfCompare; compared: typeof perfCompared };
   }
 }
-window.__bbPerf = { snapshot: perfSnapshot, report: perfReport, record: perfRecord };
+window.__bbPerf = { snapshot: perfSnapshot, report: perfReport, record: perfRecord, compare: perfCompare, compared: perfCompared };

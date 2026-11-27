@@ -5,6 +5,7 @@
 
 #include "guid.h"
 #include "hlod.h"
+#include "tiles.h"
 #include "ifc_psets.h"
 #include "inflate.h"
 #include "links.h"
@@ -48,8 +49,18 @@ static int ends_hash(const char *head, size_t nh, const char *tail, size_t nt, u
     return 0;
 }
 
+static const char *const DETAILS[] = {"exact", "standard", "light", "custom"}; /* TESS1: cc_ifc_detail */
+static const char *detail_name(int d) { return d >= 0 && d <= 3 ? DETAILS[d] : DETAILS[1]; }
+static const cc_ifc_read_opts STANDARD = {CC_IFC_DETAIL_STANDARD, 0, 0};
+
 int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
                          const double *base_mm, char *out, size_t n) {
+    return cc_link_cache_source_at(bytes, mtime_s, head, nh, tail, nt, base_mm, &STANDARD, out, n);
+}
+
+int cc_link_cache_source_at(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
+                            const double *base_mm, const cc_ifc_read_opts *detail, char *out, size_t n) {
+    int custom = detail->detail == CC_IFC_DETAIL_CUSTOM;
     char e[65];
     if (ends_hash(head, nh, tail, nt, bytes, e)) return -1;
     Buf b;
@@ -63,8 +74,12 @@ int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size
         jw_arr_end(&w);
     }
     jw_key(&w, "bytes"), jw_u64(&w, bytes);
+    if (custom) jw_key(&w, "chord_mm"), jw_f64(&w, detail->chord_mm); /* TESS1 */
+    jw_key(&w, "complete"), jw_bool(&w, 0); /* SIZE3 (E): the proxies are baked after (cc_link_cache_mark_complete) */
+    jw_key(&w, "detail"), jw_str(&w, detail_name((int)detail->detail)); /* TESS1 */
     jw_key(&w, "ends"), jw_str(&w, e);
     jw_key(&w, "format"), jw_str(&w, CC_LINK_CACHE_FORMAT);
+    if (custom) jw_key(&w, "max_deg"), jw_f64(&w, detail->max_deg); /* TESS1 */
     jw_key(&w, "mtime_s"), jw_i64(&w, mtime_s);
     jw_obj_end(&w);
     int rc = jw_finish(&w) != JW_OK || b.oom || b.len + 1 > n ? -1 : 0;
@@ -92,6 +107,11 @@ int cc_link_cache_base_point(const char *src, size_t n, double out[3]) {
 }
 
 int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex, int ends_known) {
+    return cc_link_cache_matches_at(src, n, bytes, mtime_s, ends_hex, ends_known, &STANDARD);
+}
+
+int cc_link_cache_matches_at(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex,
+                             int ends_known, const cc_ifc_read_opts *detail) {
     Arena a;
     arena_init(&a, 0);
     JrError je;
@@ -100,11 +120,82 @@ int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mti
     if (v && v->type == JR_OBJ) {
         const JrVal *b = jr_get(v, "bytes"), *m = jr_get(v, "mtime_s"), *f = jr_get(v, "format"), *e = jr_get(v, "ends");
         ok = b && b->type == JR_NUM && b->num == (double)bytes && m && m->type == JR_NUM && m->num == (double)mtime_s &&
-             f && f->type == JR_STR && !strcmp(f->s, CC_LINK_CACHE_FORMAT) && e && e->type == JR_STR && e->n == 64;
+             f && f->type == JR_STR && (!strcmp(f->s, CC_LINK_CACHE_FORMAT) || !strcmp(f->s, CC_LINK_CACHE_FORMAT_PREV)) && e && e->type == JR_STR &&
+             e->n == 64; /* TILE1: a format 6 cache's geometry is format 7's: re-indexed, not read again from the IFC */
         if (ok && ends_known) ok = !memcmp(e->s, ends_hex, 64);
+        const JrVal *d = jr_get(v, "detail"); /* TESS1 */
+        const char *want = detail_name((int)detail->detail);
+        if (ok) ok = d ? d->type == JR_STR && d->n == strlen(want) && !memcmp(d->s, want, d->n) : detail->detail == CC_IFC_DETAIL_STANDARD;
+        if (ok && detail->detail == CC_IFC_DETAIL_CUSTOM) { /* the same two numbers, bit for bit through ryu */
+            const JrVal *c = jr_get(v, "chord_mm"), *g = jr_get(v, "max_deg");
+            ok = c && c->type == JR_NUM && c->num == detail->chord_mm && g && g->type == JR_NUM && g->num == detail->max_deg;
+        }
     }
     arena_free(&a);
     return ok;
+}
+
+int cc_link_cache_complete(const char *src, size_t n) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, src, n, &je), *c = v && v->type == JR_OBJ ? jr_get(v, "complete") : NULL;
+    const JrVal *f = v && v->type == JR_OBJ ? jr_get(v, "format") : NULL;
+    int ok = c && c->type == JR_BOOL && c->b && f && f->type == JR_STR && !strcmp(f->s, CC_LINK_CACHE_FORMAT); /* TILE1: a format 6 one is not */
+    arena_free(&a);
+    return ok;
+}
+
+int cc_link_cache_mark_complete(const char *src, size_t n, char *out, size_t cap) {
+    static const char F[] = "\"complete\":false", T[] = "\"complete\":true";
+    const size_t fl = sizeof F - 1;
+    size_t at = n, tat = n;
+    for (size_t i = 0; i + fl <= n; i++)
+        if (!memcmp(src + i, F, fl)) { at = i; break; }
+    for (size_t i = 0; i + sizeof T - 1 <= n; i++) /* TILE1: a format 6 cache complete without tiles: re-indexed */
+        if (!memcmp(src + i, T, sizeof T - 1)) { tat = i; break; }
+    if ((at == n && tat == n) || n + 1 > cap) return -1;
+    size_t m;
+    if (at < n) {
+        memcpy(out, src, at);
+        memcpy(out + at, T, sizeof T - 1);
+        memcpy(out + at + 15, src + at + fl, n - at - fl);
+        m = n - 1; /* one byte shorter */
+    } else memcpy(out, src, n), m = n;
+    out[m] = 0;
+    /* the format: the previous one (the same length) turned current */
+    static const char P[] = "\"format\":\"" CC_LINK_CACHE_FORMAT_PREV "\"", C[] = "\"format\":\"" CC_LINK_CACHE_FORMAT "\"";
+    for (size_t i = 0; i + sizeof P - 1 <= m; i++)
+        if (!memcmp(out + i, P, sizeof P - 1)) { memcpy(out + i, C, sizeof C - 1); break; }
+    return cc_link_cache_complete(out, m) ? 0 : -1;
+}
+
+int cc_link_cache_tiles_match(const char *src, size_t n, const char *text) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, src, n, &je), *t = v && v->type == JR_OBJ ? jr_get(v, "tiles") : NULL;
+    int ok = t && t->type == JR_STR && !strcmp(t->s, text);
+    arena_free(&a);
+    return ok;
+}
+
+int cc_link_cache_set_tiles(const char *src, size_t n, const char *text, char *out, size_t cap) {
+    static const char K[] = ",\"tiles\":\"";
+    size_t at = n, end = n;
+    for (size_t i = 0; i + sizeof K - 1 <= n; i++)
+        if (!memcmp(src + i, K, sizeof K - 1)) { at = i; break; }
+    if (at < n) { /* the old value cut out (a string without quotes or escapes: ours) */
+        end = at + sizeof K - 1;
+        while (end < n && src[end] != '"') end++;
+        if (end >= n) return -1;
+        end++;
+    }
+    if (!n || src[n - 1] != '}') return -1;
+    size_t keep = at < n ? at : n - 1; /* "tiles" sorts after every other key: last, before the closing brace */
+    int w = snprintf(out, cap, "%.*s%.*s,\"tiles\":\"%s\"}", (int)keep, src, at < n ? (int)(n - 1 - end) : 0, at < n ? src + end : "", text);
+    if (w < 0 || (size_t)w >= cap) return -1;
+    return cc_link_cache_tiles_match(out, (size_t)w, text) ? 0 : -1;
 }
 
 cc_link_job *cc_link_job_new(const cc_platform *pf, const char *path) {
@@ -115,12 +206,14 @@ cc_link_job *cc_link_job_new(const cc_platform *pf, const char *path) {
     strcpy(j->path, path);
     j->pf = pf;
     j->cache_min = CC_LINK_CACHE_MIN;
+    j->detail = STANDARD; /* TESS1 */
     return j;
 }
 
 void cc_link_job_free(cc_link_job *j) {
     if (!j) return;
     if (j->vf) cc_viewfile_free(j->vf), free(j->vf);
+    if (j->map) j->pf->unmap_file(j->pf->ctx, j->map); /* SIZE3: after the view file over it */
     if (j->ifc) cc_ifc_scene_free(j->ifc), free(j->ifc);
     free(j->psets); /* M1LINKS */
     free(j->path);
@@ -151,6 +244,26 @@ static cc_viewfile *read_view(const cc_platform *pf, const char *path, uint64_t 
     int rc = cc_viewfile_read((const uint8_t *)p, n, vf, err);
     free(p);
     if (rc) return cc_viewfile_free(vf), free(vf), NULL;
+    return vf;
+}
+
+/* SIZE3: the cache at `path` mapped and read in place (its meshes' counts and places kept, not their
+ * arrays: viewfile.h cc_viewfile_read_mapped); `*map` its mapping. NULL with err (then the caller reads
+ * it as before) when the carrier cannot map it or it does not read. */
+static cc_viewfile *map_view(const cc_platform *pf, const char *path, void **map, cc_error *err) {
+    *map = NULL;
+    if (!pf->map_file || !pf->unmap_file) return NULL;
+    const char *p = NULL;
+    size_t n = 0;
+    void *h = NULL;
+    if (pf->map_file(pf->ctx, path, cc_session_read_limit(path, NULL), &p, &n, &h) != CC_PF_OK) return NULL;
+    cc_viewfile *vf = malloc(sizeof *vf);
+    if (!vf || cc_viewfile_read_mapped((const uint8_t *)p, n, vf, err) || !vf->lazy) {
+        if (vf) cc_viewfile_free(vf), free(vf);
+        pf->unmap_file(pf->ctx, h);
+        return NULL;
+    }
+    *map = h;
     return vf;
 }
 
@@ -240,8 +353,14 @@ static void report_tail(Buf *b, const cc_link_job *j, uint64_t cache_bytes, cons
         buf_puts(b, "\nproxies' budget: "), buf_u64(b, cc_link_hlod_cap(j->geom_bytes)), buf_puts(b, " bytes (15 % of the geometry), ");
         buf_u64(b, j->hlod_dropped), buf_puts(b, " finer cells left without; stored gzipped: "), buf_u64(b, j->hlod_stored), buf_puts(b, " bytes");
     }
+    buf_puts(b, "\ntile pyramid (TILE, for drawing by tiles): "); /* TILE1 */
+    if (j->tiles_bytes) {
+        buf_u64(b, j->tiles_count), buf_puts(b, " tiles in "), buf_u64(b, j->tiles_levels), buf_puts(b, " levels, ");
+        buf_u64(b, j->tiles_proxy_tris), buf_puts(b, " proxy triangles, "), buf_u64(b, j->tiles_bytes), buf_puts(b, " bytes, built in ");
+        buf_u64(b, (uint64_t)(j->tiles_ms + 0.5)), buf_puts(b, " ms");
+    } else buf_puts(b, j->tiles_why[0] ? j->tiles_why : "none");
     buf_puts(b, "\ncache sections (bytes):");
-    static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ"};
+    static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ", "TILE"};
     for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) {
         uint64_t x = j->sections[q];
         if (x) buf_puts(b, " "), buf_puts(b, KINDS[q]), buf_puts(b, " "), buf_u64(b, x);
@@ -333,7 +452,145 @@ static void bake_hlod(cc_link_job *j, Buf *vb) {
     j->hlod_ms = pf->now_ms(pf->ctx) - t0;
 }
 
+/* TILE1 (ADR 0078 amendment 6): the tile pyramid, from the cache's bytes read in place (nothing decoded but one mesh
+ * at a time: tiles.h), built in steps (cancellable between them), appended as a section TILE. A failure leaves the
+ * cache without (the page draws as before), said in the report. */
+static void bake_tiles(cc_link_job *j, Buf *vb) {
+    const cc_platform *pf = j->pf;
+    double t0 = pf->now_ms(pf->ctx);
+    cc_viewfile vf;
+    cc_error e;
+    if (cc_viewfile_read_mapped((const uint8_t *)vb->p, vb->len, &vf, &e)) {
+        snprintf(j->tiles_why, sizeof j->tiles_why, "none (%s)", e.msg);
+        return;
+    }
+    cc_tiles t;
+    cc_tiles_opts o = j->topts;
+    if (!o.leaf_tris) cc_tiles_default(&o);
+    cc_tiles_src src = {NULL, &vf};
+    int rc = cc_tiles_start(&t, &src, &o, &e);
+    while (rc == 0 && !cc_atomic_load(&j->pg.cancel)) {
+        int st = cc_tiles_step(&t, 1000000, &e);
+        if (st < 0) rc = -1;
+        if (st != 0) break;
+    }
+    if (rc == 0 && t.work) snprintf(j->tiles_why, sizeof j->tiles_why, "none (cancelled)"), rc = 1;
+    cc_viewfile_free(&vf); /* before vb grows (it reads vb's bytes) */
+    if (rc == 0 && cc_viewfile_append_tiles(vb, t.out.p, t.out.len) == 0) {
+        j->tiles_count = t.ntiles, j->tiles_levels = t.levels, j->tiles_proxy_tris = t.proxy_tris, j->tiles_bytes = t.out.len;
+    } else if (rc < 0) snprintf(j->tiles_why, sizeof j->tiles_why, "none (%s)", e.msg);
+    cc_tiles_free(&t);
+    j->tiles_ms = pf->now_ms(pf->ctx) - t0;
+}
+
+/* ---- SIZE3 (E): the proxies baked after the link is ready ----
+ * The cache at j->cache (written by the conversion with SRCE "complete": false, read untrusted again here) rebuilt as
+ * its sections but the lazy ones, SRCE marked complete, its proxies baked (HLOD), then its property sets (PRPZ, PROP:
+ * last, read lazily); written in place (tmp + rename: a crash leaves the incomplete cache, completed at the next open);
+ * its report appended; the completed cache read in place for the session. Cancellable between proxy steps. */
+static void sleep_cancellable(cc_link_job *j, double ms) {
+    const cc_platform *pf = j->pf;
+    double t0 = pf->now_ms(pf->ctx);
+    while (pf->now_ms(pf->ctx) - t0 < ms && !cc_atomic_load(&j->pg.cancel))
+        for (volatile unsigned long spin = 0; spin < 200000ul; spin++) {} /* (no sleep in the platform: tests only) */
+}
+
+static void index_run(cc_link_job *j) {
+    const cc_platform *pf = j->pf;
+    if (j->index_delay_ms > 0) sleep_cancellable(j, j->index_delay_ms);
+    if (cc_atomic_load(&j->pg.cancel)) return fail(j, CC_JOB_CANCELLED, NULL);
+    char *p = NULL;
+    size_t n = 0;
+    if (pf->read_file(pf->ctx, j->cache, cc_session_read_limit(j->cache, NULL), &p, &n) != CC_PF_OK)
+        return fail(j, CC_JOB_FAILED, "the cache cannot be read again");
+    Buf vb, tail, lg;
+    buf_init(&vb), buf_init(&tail), buf_init(&lg);
+    int bad = n < 12 || memcmp(p, "BIMBLEVW", 8) != 0, have_src = 0;
+    if (!bad) buf_append(&vb, p, 12);
+    for (size_t at = 12; !bad && at < n;) { /* every section checked against what is there */
+        if (n - at < 12) { bad = 1; break; }
+        uint64_t len = 0;
+        for (int i = 0; i < 8; i++) len |= (uint64_t)(unsigned char)p[at + 4 + i] << (8 * i);
+        if (len > n - at - 12) { bad = 1; break; }
+        const char *kind = p + at;
+        if (!memcmp(kind, "SRCE", 4)) { /* its JSON text (a string: varint length, bytes) marked complete */
+            char *src = NULL;
+            size_t sn = 0;
+            {
+                size_t q = 0, shift = 0;
+                uint64_t ln = 0;
+                const unsigned char *s = (const unsigned char *)p + at + 12;
+                while (q < len && q < 10) { ln |= (uint64_t)(s[q] & 0x7f) << shift; shift += 7; if (!(s[q++] & 0x80)) break; }
+                if (ln == len - q) src = (char *)s + q, sn = (size_t)ln;
+            }
+            char out[1024], out2[1200], tt[160];
+            cc_tiles_opts o = j->topts;
+            if (!o.leaf_tris) cc_tiles_default(&o);
+            cc_tiles_opts_text(&o, tt, sizeof tt); /* TILE1: the pyramid's bake settings recorded */
+            if (!src || sn + 1 > sizeof out || cc_link_cache_mark_complete(src, sn, out, sizeof out) ||
+                cc_link_cache_set_tiles(out, strlen(out), tt, out2, sizeof out2))
+                bad = 1;
+            else if (cc_viewfile_append_source(&vb, out2, strlen(out2))) bad = 1;
+            have_src = 1;
+        } else if (!memcmp(kind, "HLOD", 4) || !memcmp(kind, "TILE", 4)) { /* (none expected: dropped, baked again) */
+        } else if (!memcmp(kind, "PROP", 4) || !memcmp(kind, "PRPZ", 4)) buf_append(&tail, p + at, 12 + (size_t)len);
+        else buf_append(&vb, p + at, 12 + (size_t)len);
+        at += 12 + (size_t)len;
+    }
+    free(p);
+    if (bad || !have_src || vb.oom || tail.oom) {
+        buf_free(&vb), buf_free(&tail);
+        return fail(j, CC_JOB_FAILED, "the cache is damaged: converted again at the next open");
+    }
+    j->geom_bytes = section_bytes(&vb, "ELEM");
+    bake_hlod(j, &vb);
+    if (!cc_atomic_load(&j->pg.cancel)) bake_tiles(j, &vb); /* TILE1 */
+    if (cc_atomic_load(&j->pg.cancel)) {
+        buf_free(&vb), buf_free(&tail);
+        return fail(j, CC_JOB_CANCELLED, NULL);
+    }
+    buf_append(&vb, tail.p, tail.len);
+    buf_free(&tail);
+    if (vb.oom || pf->write_file(pf->ctx, j->cache, vb.p, vb.len)) {
+        buf_free(&vb);
+        return fail(j, CC_JOB_FAILED, "the completed cache cannot be written");
+    }
+    { /* its report: the proxies' lines appended */
+        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ", "TILE"};
+        for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) j->sections[q] = section_bytes(&vb, KINDS[q]);
+        j->cache_bytes = vb.len;
+        char *old = NULL;
+        size_t on = 0;
+        if (j->log[0] && pf->read_file(pf->ctx, j->log, (size_t)4 << 20, &old, &on) == CC_PF_OK) {
+            buf_append(&lg, old, on);
+            buf_puts(&lg, "\n\nindexed after the link was ready (SIZE3):");
+            report_tail(&lg, j, vb.len, j->cache, "");
+            if (!lg.oom) pf->write_file(pf->ctx, j->log, lg.p, lg.len);
+        }
+        free(old);
+        buf_free(&lg);
+    }
+    cc_pf_stat cs;
+    if (pf->stat_path(pf->ctx, j->cache, 1, &cs) == CC_PF_OK) j->cache_mtime_s = cs.mtime_s;
+    cc_error me;
+    cc_viewfile *mv = map_view(pf, j->cache, &j->map, &me);
+    if (!mv) {
+        mv = malloc(sizeof *mv);
+        if (!mv || cc_viewfile_read((const uint8_t *)vb.p, vb.len, mv, &j->err)) {
+            if (mv) cc_viewfile_free(mv), free(mv);
+            buf_free(&vb);
+            return fail(j, CC_JOB_FAILED, mv ? NULL : "out of memory");
+        }
+    }
+    buf_free(&vb);
+    j->vf = mv;
+}
+
 static void run(cc_link_job *j) {
+    if (j->index_only) { /* SIZE3 (E) */
+        index_run(j);
+        return;
+    }
     const cc_platform *pf = j->pf;
     cc_pf_stat st;
     int have_stat = pf->stat_path && pf->stat_path(pf->ctx, j->path, 1, &st) == CC_PF_OK && st.kind == CC_PF_FILE;
@@ -365,9 +622,19 @@ static void run(cc_link_job *j) {
         cc_pf_stat cs;
         if (!cp[0] || pf->stat_path(pf->ctx, cp, 1, &cs) != CC_PF_OK || cs.kind != CC_PF_FILE) continue;
         cc_error e;
-        cc_viewfile *vf = read_view(pf, cp, cs.size, &e);
-        if (vf && vf->has_source && cc_link_cache_matches(vf->source.p, vf->source.n, j->bytes, j->mtime_s, ends, ends_known)) {
-            j->vf = vf, j->from_cache = 1;
+        void *map = NULL;
+        cc_viewfile *vf = cc_session_fits(pf, cp, cs.size, &e) ? NULL : map_view(pf, cp, &map, &e); /* SIZE3: in place */
+        if (!vf) vf = read_view(pf, cp, cs.size, &e);
+        if (vf && vf->has_source && cc_link_cache_matches_at(vf->source.p, vf->source.n, j->bytes, j->mtime_s, ends, ends_known, &j->detail)) {
+            j->vf = vf, j->from_cache = 1, j->map = map;
+            j->incomplete = !cc_link_cache_complete(vf->source.p, vf->source.n); /* SIZE3 (E): its proxies to bake */
+            { /* TILE1: or its pyramid baked with other settings: indexed again (not converted) */
+                cc_tiles_opts o = j->topts;
+                char tt[160];
+                if (!o.leaf_tris) cc_tiles_default(&o);
+                cc_tiles_opts_text(&o, tt, sizeof tt);
+                if (!cc_link_cache_tiles_match(vf->source.p, vf->source.n, tt)) j->incomplete = 1;
+            }
             snprintf(j->cache, sizeof j->cache, "%s", cp);
             if (c) snprintf(j->log, sizeof j->log, "%s", alt_log);
             else snprintf(j->log, sizeof j->log, "%s.log.txt", j->path);
@@ -378,6 +645,7 @@ static void run(cc_link_job *j) {
         }
         snprintf(j->note, sizeof j->note, "%s", vf ? "the cache was of another version of the IFC: read again" : "the cache was damaged: read again");
         if (vf) cc_viewfile_free(vf), free(vf);
+        if (map) pf->unmap_file(pf->ctx, map);
     }
     /* read the IFC */
     int fits = have_stat ? cc_session_fits(pf, j->path, j->bytes, &j->err) : 0;
@@ -403,9 +671,9 @@ static void run(cc_link_job *j) {
     if (!have_stat) j->bytes = n;
     char src[512] = "";
     cc_ifc_scene *s = malloc(sizeof *s);
-    int rc = s ? cc_ifc_read_progress(text, n, s, &j->err, &j->pg) : -1;
-    if (!rc && cached && cc_link_cache_source(j->bytes, j->mtime_s, text, n < ENDS ? n : ENDS, n > ENDS ? text + n - ENDS : text,
-                                              n < ENDS ? n : ENDS, s->base_point_mm, src, sizeof src))
+    int rc = s ? cc_ifc_read_with(text, n, &j->detail, s, &j->err, &j->pg) : -1; /* TESS1: the job's detail */
+    if (!rc && cached && cc_link_cache_source_at(j->bytes, j->mtime_s, text, n < ENDS ? n : ENDS, n > ENDS ? text + n - ENDS : text,
+                                                 n < ENDS ? n : ENDS, s->base_point_mm, &j->detail, src, sizeof src))
         cached = 0;
     Buf psb; /* M1LINKS: the property sets, read beside the display (ifc_psets.h); none when they cannot be */
     buf_init(&psb);
@@ -437,7 +705,8 @@ static void run(cc_link_job *j) {
     cc_viewfile_meta_free(&mt);
     report(&lg, j, s, read_ms);
     cc_ifc_scene_free(s), free(s); /* LNK3D: the IFC's scene goes before the proxies are built (its peak) */
-    if (!wr && !vb.oom) bake_hlod(j, &vb); /* LNK3D: then HLOD, then PROP (both read lazily) */
+    /* SIZE3 (E): the proxies are baked after the link is ready (index_run), not here: the link draws sooner */
+    snprintf(j->hlod_why, sizeof j->hlod_why, "none yet (baked after the link is ready: see below)");
     if (!wr && psb.len) { /* M1LINKS: last, read lazily; SIZE2: packed (each set once, in gzip blocks) */
         Buf pk;
         buf_init(&pk);
@@ -468,7 +737,7 @@ static void run(cc_link_job *j) {
         snprintf(j->note, sizeof j->note, "no cache written (neither the IFC's folder nor the cache folder could be written)");
     }
     {
-        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ"};
+        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ", "TILE"};
         for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) j->sections[q] = section_bytes(&vb, KINDS[q]);
     }
     if (j->cache[0]) {
@@ -479,6 +748,16 @@ static void run(cc_link_job *j) {
         if (!lg.oom && pf->write_file(pf->ctx, logp, lg.p, lg.len) == 0) snprintf(j->log, sizeof j->log, "%s", logp);
     }
     buf_free(&lg); /* the session keeps the light scene only (the IFC's went above) */
+    j->incomplete = j->cache[0] != 0; /* SIZE3 (E): written without proxies: the session queues its indexing */
+    if (j->cache[0]) { /* SIZE3: the cache just written, read in place (its meshes stay in the file) */
+        cc_error me;
+        cc_viewfile *mv = map_view(pf, j->cache, &j->map, &me);
+        if (mv) {
+            buf_free(&vb);
+            j->vf = mv;
+            return;
+        }
+    }
     cc_viewfile *vf = malloc(sizeof *vf);
     if (!vf || cc_viewfile_read((const uint8_t *)vb.p, vb.len, vf, &j->err)) {
         if (vf) cc_viewfile_free(vf), free(vf);

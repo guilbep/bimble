@@ -1,5 +1,8 @@
 /* What the paper drawing draws (ticket LNK1): see paper_scene.h. */
 #include "paper_scene.h"
+#include "viewfile.h"
+#include "bvh.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "georef.h"
@@ -225,26 +228,60 @@ static int link_drawn(const cc_link *k, const cc_view *view) {
     return !(view && name_in(view->visibility.hidden_links.v, view->visibility.hidden_links.n, k->name));
 }
 
-/* Appends link `k`'s elements to the merged scene, moved by `d`, model_index from `base`. */
-static int scene_add_link(cc_scene *out, size_t *cap, const cc_link *lk, const cc_view *view, const cc_scene *ls,
-                          const float d[3], size_t base) {
+/* SIZE3: link k's placed (expanded) triangles, from its counts (nothing decoded): each copy of a shape counted. */
+static uint64_t link_expanded_tris(const cc_link *k) {
+    uint64_t t = 0;
+    if (k->vf && k->vf->lazy) {
+        for (size_t e = 0; e < k->vf->nelements; e++) {
+            const cc_view_element *x = &k->vf->elements[e];
+            t += (x->shape >= 0 && (size_t)x->shape < k->vf->nshapes ? k->vf->shapes[x->shape].ni : x->mesh.ni) / 3;
+        }
+        return t;
+    }
+    const cc_scene *sc = cc_link_rows(k);
+    for (size_t e = 0; e < sc->nelements; e++) t += cc_scene_local_mesh(sc, e)->ni / 3;
+    return t;
+}
+#define PAPER_BYTES_PER_TRI 96 /* SIZE3: a placed copy in the merged scene and the cut's working memory (measured: 6.5 GB for 110 M) */
+
+/* SIZE3: link lk drawn simplified: each element as its box (its own frame's box, placed as the link), no mesh
+ * decoded (a link read in place: the boxes its mapped read kept), moved by `d`, model_index from `base`. */
+static int scene_add_link_boxes(cc_scene *out, size_t *cap, const cc_link *lk, const cc_view *view, const float d[3], size_t base) {
+    const cc_scene *ls = cc_link_rows(lk);
+    double c = lk->pwant ? lk->pc : 1.0, sn = lk->pwant ? lk->ps : 0.0;
+    static const uint32_t TRI[36] = {0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5};
+    static const uint8_t EDGE[24] = {0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7};
     for (size_t k = 0; k < ls->nelements; k++) {
-        if (view && cc_link_hidden_by_rule(lk, k, &view->visibility)) continue; /* M1LINKS: a link storey hidden */
-        cc_mesh w, m;
-        if (cc_scene_world_mesh(ls, k, &out->arena, &w)) return -1;
+        if (view && cc_link_hidden_by_rule(lk, k, &view->visibility)) continue;
+        float lo[3] = {1.0f / 0.0f, 1.0f / 0.0f, 1.0f / 0.0f}, hi[3] = {-1.0f / 0.0f, -1.0f / 0.0f, -1.0f / 0.0f};
+        if (lk->vf && lk->vf->lazy && k < lk->vf->nelements) {
+            const cc_view_element *x = &lk->vf->elements[k];
+            const cc_viewfile_ref *r = x->shape >= 0 ? &lk->vf->shape_refs[x->shape] : &x->ref;
+            if (!(r->lo[0] <= r->hi[0])) continue;
+            for (int q = 0; q < 8; q++) {
+                float p[3] = {q & 1 ? r->hi[0] : r->lo[0], q & 2 ? r->hi[1] : r->lo[1], q & 4 ? r->hi[2] : r->lo[2]}, w[3];
+                for (int j = 0; j < 3; j++) w[j] = x->shape >= 0 ? x->to_scene.x[j] * p[0] + x->to_scene.y[j] * p[1] + x->to_scene.z[j] * p[2] + x->to_scene.t[j] : p[j];
+                for (int j = 0; j < 3; j++) lo[j] = w[j] < lo[j] ? w[j] : lo[j], hi[j] = w[j] > hi[j] ? w[j] : hi[j];
+            }
+        } else {
+            cc_aabb b = cc_scene_element_bounds(ls, k);
+            if (cc_aabb_is_empty(&b)) continue;
+            memcpy(lo, b.min, sizeof lo), memcpy(hi, b.max, sizeof hi);
+        }
+        cc_mesh m;
         memset(&m, 0, sizeof m);
-        m.nv = w.nv, m.ni = w.ni, m.ne = w.ne, m.nn = w.nn;
-        m.pos = arena_alloc(&out->arena, ((size_t)w.nv + 1) * sizeof *m.pos, 4);
-        m.idx = arena_alloc(&out->arena, ((size_t)w.ni + 1) * sizeof *m.idx, 4);
-        m.edges = arena_alloc(&out->arena, ((size_t)w.ne + 1) * sizeof *m.edges, 4);
-        m.normals = arena_alloc(&out->arena, ((size_t)w.nn + 1) * sizeof *m.normals, 4);
-        if (!m.pos || !m.idx || !m.edges || !m.normals) return -1;
-        for (uint32_t i = 0; i < w.nv; i++)
-            for (int j = 0; j < 3; j++) m.pos[i][j] = w.pos[i][j] + d[j];
-        if (w.ni) memcpy(m.idx, w.idx, (size_t)w.ni * sizeof *m.idx);
-        for (uint32_t i = 0; i < w.ne; i++)
-            for (int j = 0; j < 6; j++) m.edges[i][j] = w.edges[i][j] + d[j % 3];
-        if (w.nn) memcpy(m.normals, w.normals, (size_t)w.nn * sizeof *m.normals);
+        m.nv = 8, m.ni = 36, m.ne = 12;
+        m.pos = arena_alloc(&out->arena, 8 * sizeof *m.pos, 4);
+        m.idx = arena_alloc(&out->arena, 36 * sizeof *m.idx, 4);
+        m.edges = arena_alloc(&out->arena, 12 * sizeof *m.edges, 4);
+        if (!m.pos || !m.idx || !m.edges) return -1;
+        for (int q = 0; q < 8; q++) {
+            double x = q & 1 ? hi[0] : lo[0], y = q & 2 ? hi[1] : lo[1], z = q & 4 ? hi[2] : lo[2];
+            m.pos[q][0] = (float)(c * x - sn * y) + d[0], m.pos[q][1] = (float)(sn * x + c * y) + d[1], m.pos[q][2] = (float)z + d[2];
+        }
+        memcpy(m.idx, TRI, sizeof TRI);
+        for (int q = 0; q < 12; q++)
+            for (int j = 0; j < 3; j++) m.edges[q][j] = m.pos[EDGE[2 * q]][j], m.edges[q][3 + j] = m.pos[EDGE[2 * q + 1]][j];
         void *p = out->elements;
         if (grow(&out->arena, &p, cap, out->nelements + 1, sizeof *out->elements)) return -1;
         out->elements = p;
@@ -257,8 +294,45 @@ static int scene_add_link(cc_scene *out, size_t *cap, const cc_link *lk, const c
     return 0;
 }
 
+/* Appends link `k`'s elements to the merged scene, moved by `d`, model_index from `base`. */
+static int scene_add_link(cc_scene *out, size_t *cap, const cc_link *lk, const cc_view *view, const cc_scene *ls,
+                          const float d[3], size_t base) {
+    Arena tmp; /* SIZE3: each placed copy made in a scratch, then copied moved (it was made twice in the scene's arena) */
+    arena_init(&tmp, 0);
+    for (size_t k = 0; k < ls->nelements; k++) {
+        if (view && cc_link_hidden_by_rule(lk, k, &view->visibility)) continue; /* M1LINKS: a link storey hidden */
+        cc_mesh w, m;
+        arena_trim(&tmp, (size_t)1 << 22);
+        if (cc_scene_world_mesh(ls, k, &tmp, &w)) return arena_free(&tmp), -1;
+        memset(&m, 0, sizeof m);
+        m.nv = w.nv, m.ni = w.ni, m.ne = w.ne, m.nn = w.nn;
+        m.pos = arena_alloc(&out->arena, ((size_t)w.nv + 1) * sizeof *m.pos, 4);
+        m.idx = arena_alloc(&out->arena, ((size_t)w.ni + 1) * sizeof *m.idx, 4);
+        m.edges = arena_alloc(&out->arena, ((size_t)w.ne + 1) * sizeof *m.edges, 4);
+        m.normals = arena_alloc(&out->arena, ((size_t)w.nn + 1) * sizeof *m.normals, 4);
+        if (!m.pos || !m.idx || !m.edges || !m.normals) return arena_free(&tmp), -1;
+        for (uint32_t i = 0; i < w.nv; i++)
+            for (int j = 0; j < 3; j++) m.pos[i][j] = w.pos[i][j] + d[j];
+        if (w.ni) memcpy(m.idx, w.idx, (size_t)w.ni * sizeof *m.idx);
+        for (uint32_t i = 0; i < w.ne; i++)
+            for (int j = 0; j < 6; j++) m.edges[i][j] = w.edges[i][j] + d[j % 3];
+        if (w.nn) memcpy(m.normals, w.normals, (size_t)w.nn * sizeof *m.normals);
+        void *p = out->elements;
+        if (grow(&out->arena, &p, cap, out->nelements + 1, sizeof *out->elements)) return arena_free(&tmp), -1;
+        out->elements = p;
+        cc_scene_element *e = &out->elements[out->nelements++];
+        *e = ls->elements[k];
+        e->model_index = base + ls->elements[k].model_index;
+        e->shape = -1;
+        e->mesh = m;
+    }
+    arena_free(&tmp);
+    return 0;
+}
+
 int cc_paper_src_get(cc_session *s, const cc_scene *sc, const cc_view *view, cc_paper_src *src, Buf *err) {
     memset(src, 0, sizeof *src);
+    s->paper_notice[0] = 0; /* SIZE3 */
     if (!sc || !(s->open || s->view)) return buf_puts(err, "no model open"), -1;
     size_t nl = 0;
     for (size_t i = 0; i < s->nlinks; i++) nl += link_drawn(&s->links[i], view);
@@ -303,15 +377,32 @@ int cc_paper_src_get(cc_session *s, const cc_scene *sc, const cc_view *view, cc_
         src->link_first = arena_alloc(&m->arena, nl * sizeof *src->link_first, _Alignof(size_t)); /* DXF1 */
         src->link_name = arena_alloc(&m->arena, nl * sizeof *src->link_name, _Alignof(const char *));
         if (!src->link_first || !src->link_name) goto oom;
+        /* SIZE3: the placed copies are expanded for the cut (110 M triangles, 6.5 GB on a folder of 17): past half the
+         * memory available, the links that do not fit are drawn simplified (each element its box), said in a notice */
+        uint64_t avail = s->pf->mem_available ? s->pf->mem_available(s->pf->ctx) : 0, room = avail ? avail / 2 : (uint64_t)1 << 30, used = 0;
+        size_t simplified = 0;
         for (size_t i = 0; i < s->nlinks; i++) {
-            const cc_link *k = &s->links[i];
+            cc_link *k = &s->links[i];
             if (!link_drawn(k, view)) continue;
             src->link_first[src->nlinks] = m->nelements, src->link_name[src->nlinks++] = k->name; /* DXF1 */
-            const cc_scene *ls = cc_link_scene(k);
+            uint64_t want = link_expanded_tris(k) * PAPER_BYTES_PER_TRI;
+            int boxes = used + want > room;
+            if (!boxes) used += want;
+            const cc_scene *ls = boxes ? cc_link_rows(k) : cc_link_scene(k);
+            double O[3];
+            memcpy(O, ls->origin, sizeof O);
+            if (boxes && k->pwant) O[0] = k->pc * ls->origin[0] - k->ps * ls->origin[1] + k->pt[0], O[1] = k->ps * ls->origin[0] + k->pc * ls->origin[1] + k->pt[1], O[2] = ls->origin[2] + k->pt[2];
             float d[3];
-            for (int j = 0; j < 3; j++) d[j] = (float)(ls->origin[j] - sc->origin[j]); /* lib.rs:1499 offset */
+            for (int j = 0; j < 3; j++) d[j] = (float)(O[j] - sc->origin[j]); /* lib.rs:1499 offset */
             size_t base = m->nelements;
-            if (elements_of(&b, k->kind, k->ifc, k->vf, k->model, ls) || scene_add_link(o, &cap, k, view, ls, d, base)) goto oom;
+            if (elements_of(&b, k->kind, k->ifc, k->vf, k->model, ls)) goto oom;
+            if (boxes ? scene_add_link_boxes(o, &cap, k, view, d, base) : scene_add_link(o, &cap, k, view, ls, d, base)) goto oom;
+            simplified += boxes;
+        }
+        if (simplified) {
+            snprintf(s->paper_notice, sizeof s->paper_notice, "too large to cut exactly with the memory free: %zu link%s simplified (each element its box)",
+                     simplified, simplified == 1 ? "" : "s");
+            cc_log(s->pf, "bimble-ccore: %s", s->paper_notice);
         }
         src->scene = o;
     }

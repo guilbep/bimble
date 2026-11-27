@@ -52,6 +52,8 @@ const fonts = computed(() => s.value?.fonts ?? []);
 /** DEAD1: a font this computer lacks cannot be chosen (it would change nothing): disabled with where its files go. */
 const installed = computed(() => new Map(fonts.value.map((f) => [f, fontInstalled(f)])));
 const sizes = computed<[number, number]>(() => s.value?.text_sizes ?? [10, 16]);
+/** SIZE3: the links' GPU budget's choices (MB), the stored value among them. */
+const linkGpuChoices = computed(() => [...new Set([256, 512, 768, 1024, 1536, 2048, 4096, v.value?.link_gpu_mb ?? 768])].sort((a, b) => a - b));
 const isDefaultLook = computed(() => !v.value || (v.value.theme === "grey" && v.value.ui_font === "roboto" && v.value.text_size === TEXT_SIZE));
 const close = () => { currentDialog.value = null; };
 </script>
@@ -110,17 +112,58 @@ const close = () => { currentDialog.value = null; };
           <select class="inp" :value="v.moving_fps" data-bb="settings-moving-fps" data-setting="moving_fps" @change="set({ moving_fps: Number(($event.target as HTMLSelectElement).value) })">
             <option v-for="f in [0, 15, 30, 60, 120, 240]" :key="f" :value="f">{{ f === 0 ? tx('settings.moving.0') : tx('settings.moving.fps', { fps: f }) }}</option>
           </select></label>
-        <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ tx('settings.movingNote') }}</p>
+        <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ v.moving_fps === 0 ? tx('settings.moving.0Note') : tx('settings.movingNote') }}</p>
         <!-- 3D2 (ADR 0078): HLOD proxies (moving_proxies, Rust's setting): far cells drawn as stand-ins -->
         <label v-if="s?.applies.moving_proxies" class="row"><span>{{ tx('settings.proxies') }}</span>
           <input type="checkbox" :checked="v.moving_proxies" data-bb="settings-moving-proxies" data-setting="moving_proxies" @change="set({ moving_proxies: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s?.applies.moving_proxies" class="note" data-bb="settings-proxies-note">{{ tx('settings.proxiesNote') }}</p>
+        <!-- TESS1 (ADR 0085): the reader's detail for the links' conversions -->
+        <label v-if="s?.applies.link_detail" class="row"><span>{{ tx('settings.linkDetail') }}</span>
+          <select class="inp" :value="v.link_detail ?? 'standard'" data-bb="settings-link-detail" data-setting="link_detail" @change="set({ link_detail: ($event.target as HTMLSelectElement).value as 'exact' | 'standard' | 'light' | 'custom' })">
+            <option value="exact">{{ tx('settings.linkDetail.exact') }}</option>
+            <option value="standard">{{ tx('settings.linkDetail.standard') }}</option>
+            <option value="light">{{ tx('settings.linkDetail.light') }}</option>
+            <option value="custom">{{ tx('settings.linkDetail.custom') }}</option>
+          </select></label>
+        <label v-if="s?.applies.link_chord_mm && v.link_detail === 'custom'" class="row"><span>{{ tx('settings.linkChord') }}</span>
+          <input class="inp" type="number" min="0.01" max="1000" step="0.5" :value="v.link_chord_mm ?? 2" data-bb="settings-link-chord" data-setting="link_chord_mm" @change="set({ link_chord_mm: Number(($event.target as HTMLInputElement).value) })"></label>
+        <label v-if="s?.applies.link_max_deg && v.link_detail === 'custom'" class="row"><span>{{ tx('settings.linkMaxDeg') }}</span>
+          <input class="inp" type="number" min="1" max="90" step="1" :value="v.link_max_deg ?? 18" data-bb="settings-link-max-deg" data-setting="link_max_deg" @change="set({ link_max_deg: Number(($event.target as HTMLInputElement).value) })"></label>
+        <p v-if="s?.applies.link_detail" class="note" data-bb="settings-link-detail-note">{{ tx('settings.linkDetailNote') }}</p>
+        <!-- SIZE3 (ADR 0078 amendment 5): the links' GPU budget, MB -->
+        <label v-if="s?.applies.link_gpu_mb" class="row"><span>{{ tx('settings.linkGpu') }}</span>
+          <select class="inp" :value="v.link_gpu_mb ?? 768" data-bb="settings-link-gpu" data-setting="link_gpu_mb" @change="set({ link_gpu_mb: Number(($event.target as HTMLSelectElement).value) })">
+            <option v-for="mb in linkGpuChoices" :key="mb" :value="mb">{{ tx('settings.linkGpu.mb', { mb }) }}</option>
+          </select></label>
+        <p v-if="s?.applies.link_gpu_mb" class="note" data-bb="settings-link-gpu-note">{{ tx('settings.linkGpuNote') }}</p>
+        <!-- VIS1 (ADR 0078 amendment 7): draw only what can be seen (draw_visible, not Rust's) -->
+        <label v-if="s?.applies.draw_visible" class="row"><span>{{ tx('settings.visible') }}</span>
+          <input type="checkbox" :checked="v.draw_visible === true" data-bb="settings-draw-visible" data-setting="draw_visible" @change="set({ draw_visible: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.draw_visible" class="note" data-bb="settings-visible-note">{{ tx('settings.visibleNote') }}</p>
+        <!-- VIS1: the 3D view's other optimisations, each with an exact value -->
+        <label v-if="s?.applies.edge_mode" class="row"><span>{{ tx('settings.edgeMode') }}</span>
+          <select class="inp" :value="v.edge_mode ?? 'screen'" data-bb="settings-edge-mode" data-setting="edge_mode" @change="set({ edge_mode: ($event.target as HTMLSelectElement).value as 'screen' | 'lines' | 'none' })">
+            <option v-for="m in ['screen', 'lines', 'none']" :key="m" :value="m">{{ tx(`settings.edgeMode.${m}`) }}</option>
+          </select></label>
+        <label v-if="s?.applies.still_px" class="row"><span>{{ tx('settings.stillPx') }}</span>
+          <select class="inp" :value="v.still_px ?? 0" data-bb="settings-still-px" data-setting="still_px" @change="set({ still_px: Number(($event.target as HTMLSelectElement).value) })">
+            <option v-for="p in [0, 0.5, 1, 2, 4]" :key="p" :value="p">{{ p === 0 ? tx('settings.stillPx.0') : tx('settings.stillPx.px', { px: p }) }}</option>
+          </select></label>
+        <label v-if="s?.applies.cull_back" class="row"><span>{{ tx('settings.cullBack') }}</span>
+          <input type="checkbox" :checked="v.cull_back === true" data-bb="settings-cull-back" data-setting="cull_back" @change="set({ cull_back: ($event.target as HTMLInputElement).checked })"></label>
+        <label v-if="s?.applies.refill_offscreen" class="row"><span>{{ tx('settings.refill') }}</span>
+          <input type="checkbox" :checked="v.refill_offscreen !== false" data-bb="settings-refill" data-setting="refill_offscreen" @change="set({ refill_offscreen: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.edge_mode" class="note" data-bb="settings-optim-note">{{ tx('settings.optimNote') }}</p>
         <!-- GPU1 (ADR 0083): the 3D renderer (automatic is WebGL2 for now); GPU culling of copies applies with WebGPU -->
         <label v-if="s?.applies.renderer" class="row"><span>{{ tx('settings.renderer') }}</span>
           <select class="inp" :value="v.renderer ?? 'auto'" data-bb="settings-renderer" data-setting="renderer" @change="set({ renderer: ($event.target as HTMLSelectElement).value as 'auto' | 'webgl2' | 'webgpu' })">
             <option v-for="r in ['auto', 'webgl2', 'webgpu']" :key="r" :value="r">{{ tx(`settings.renderer.${r}` as K) }}</option>
           </select></label>
         <p v-if="s?.applies.renderer" class="note" data-bb="settings-renderer-note">{{ tx('settings.rendererNote') }}</p>
+        <!-- GPU2: `bimble-ccore open` in an app window of Chromium with the flags that give WebGPU (the native host's) -->
+        <label v-if="s?.applies.open_app" class="row"><span>{{ tx('settings.openApp') }}</span>
+          <input type="checkbox" :checked="v.open_app ?? false" data-bb="settings-open-app" data-setting="open_app" @change="set({ open_app: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.open_app" class="note" data-bb="settings-open-app-note">{{ tx('settings.openAppNote') }}</p>
         <label v-if="s?.applies.gpu_cull" class="row"><span>{{ tx('settings.gpuCullOn') }}</span>
           <input type="checkbox" :checked="v.gpu_cull" data-bb="settings-gpu-cull-on" data-setting="gpu_cull" @change="set({ gpu_cull: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s && !s.applies.gpu_cull" class="note" data-bb="settings-gpu-cull">{{ tx('settings.gpuCull') }}</p>

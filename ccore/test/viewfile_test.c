@@ -105,11 +105,24 @@ static void check_bytes(const char *what, const Buf *got, const char *want, size
     check_true(label, 0);
 }
 
+/* SIZE3: the mapped reader (in place, meshes checked then forgotten) gives the same verdict, and a
+ * lazy read materialized decodes every mesh to the counts it read. */
+static int mapped_disagree;
 static int read_ok(const void *p, size_t n) {
-    cc_viewfile v;
+    cc_viewfile v, m;
     cc_error err;
     int rc = cc_viewfile_read(p, n, &v, &err);
     cc_viewfile_free(&v);
+    int rm = cc_viewfile_read_mapped(p, n, &m, &err);
+    if ((rc == 0) != (rm == 0)) mapped_disagree++;
+    if (rm == 0 && m.lazy) {
+        Arena a;
+        arena_init(&a, 0);
+        if (cc_viewfile_materialize(&m, &a, NULL)) mapped_disagree++;
+        cc_viewfile_dematerialize(&m);
+        arena_free(&a);
+    }
+    cc_viewfile_free(&m);
     return rc == 0;
 }
 
@@ -319,6 +332,7 @@ static void robustness(void) {
     }
     printf("  3000 damaged files: %d errors\n", nerr);
     check_true("3000 damaged files: no crash, most are errors", nerr > 1500);
+    check_true("SIZE3: the mapped reader agrees with the reader on every prefix and damaged file", mapped_disagree == 0);
     free(b);
 
     Buf x;
@@ -698,6 +712,50 @@ static void link_cache_source(void) {
     check_true("other ends: no", !cc_link_cache_matches(src, strlen(src), 68059, 1795696594, hexs, 1));
     check_true("ends unknown (the IFC unreadable): size and time", cc_link_cache_matches(src, strlen(src), 68059, 1795696594, "", 0));
     check_true("not JSON: no", !cc_link_cache_matches("{bytes", 6, 68059, 1795696594, "", 0));
+    /* SIZE3 (E): the "complete" marker: written false, marked true; anything else (untrusted) is not complete */
+    {
+        char done[512];
+        check_true("SIZE3: a new cache's source says complete: false", strstr(src, "\"complete\":false") && !cc_link_cache_complete(src, strlen(src)));
+        check_true("SIZE3: marked complete, it says so and still matches", cc_link_cache_mark_complete(src, strlen(src), done, sizeof done) == 0 &&
+                   cc_link_cache_complete(done, strlen(done)) && cc_link_cache_matches(done, strlen(done), 68059, 1795696594, "", 0));
+        check_true("SIZE3: a source without the marker cannot be marked", cc_link_cache_mark_complete("{\"bytes\":1}", 11, done, sizeof done) == -1);
+        check_true("SIZE3: no room: refused", cc_link_cache_mark_complete(src, strlen(src), done, 8) == -1);
+        static const char *const hostile[] = {"{\"complete\":1}", "{\"complete\":\"true\"}", "{\"complete\":null}", "[true]", "not json", "{\"complete\":tru", ""};
+        int none = 1;
+        for (size_t i = 0; i < sizeof hostile / sizeof *hostile; i++) none &= !cc_link_cache_complete(hostile[i], strlen(hostile[i]));
+        check_true("SIZE3: hostile markers are not complete", none);
+        /* TILE1: a format 6 cache, complete (no TILE): it matches (its geometry is format 7's), is not complete, and is
+         * marked complete in format 7 by the re-indexing */
+        char six[512], up[512];
+        snprintf(six, sizeof six, "%s", done);
+        char *f = strstr(six, CC_LINK_CACHE_FORMAT);
+        if (f) memcpy(f, CC_LINK_CACHE_FORMAT_PREV, strlen(CC_LINK_CACHE_FORMAT_PREV));
+        check_true("TILE1: a format 6 cache matches but is not complete", f && cc_link_cache_matches(six, strlen(six), 68059, 1795696594, "", 0) &&
+                                                                       !cc_link_cache_complete(six, strlen(six)));
+        check_true("TILE1: re-indexed, it says complete in format 7", cc_link_cache_mark_complete(six, strlen(six), up, sizeof up) == 0 &&
+                                                                      cc_link_cache_complete(up, strlen(up)) && strstr(up, CC_LINK_CACHE_FORMAT));
+    }
+    /* TESS1: the reader's detail in the source; a cache read at another detail does not match */
+    {
+        char lsrc[512], csrc[512];
+        const cc_ifc_read_opts ex = {CC_IFC_DETAIL_EXACT, 0, 0}, st = {CC_IFC_DETAIL_STANDARD, 0, 0}, li = {CC_IFC_DETAIL_LIGHT, 0, 0};
+        const cc_ifc_read_opts cu = {CC_IFC_DETAIL_CUSTOM, 5.0, 22.5}, cu2 = {CC_IFC_DETAIL_CUSTOM, 5.0, 20.0};
+        check_true("TESS1: a new source names the standard detail", strstr(src, "\"detail\":\"standard\"") != NULL);
+        check_true("TESS1: a light source", cc_link_cache_source_at(68059, 1795696594, head, sizeof head - 1, tail, sizeof tail - 1, NULL,
+                                                                     &li, lsrc, sizeof lsrc) == 0 &&
+                                                strstr(lsrc, "\"detail\":\"light\"") != NULL);
+        check_true("TESS1: standard matches standard", cc_link_cache_matches_at(src, strlen(src), 68059, 1795696594, "", 0, &st));
+        check_true("TESS1: light asked of a standard cache: no", !cc_link_cache_matches_at(src, strlen(src), 68059, 1795696594, "", 0, &li));
+        check_true("TESS1: exact asked of a light cache: no", !cc_link_cache_matches_at(lsrc, strlen(lsrc), 68059, 1795696594, "", 0, &ex));
+        check_true("TESS1: light matches light", cc_link_cache_matches_at(lsrc, strlen(lsrc), 68059, 1795696594, "", 0, &li));
+        check_true("TESS1: a custom source names its numbers",
+                   cc_link_cache_source_at(68059, 1795696594, head, sizeof head - 1, tail, sizeof tail - 1, NULL, &cu, csrc, sizeof csrc) == 0 &&
+                       strstr(csrc, "\"chord_mm\":5.0") && strstr(csrc, "\"max_deg\":22.5") && strstr(csrc, "\"detail\":\"custom\""));
+        check_true("TESS1: custom matches the same numbers", cc_link_cache_matches_at(csrc, strlen(csrc), 68059, 1795696594, "", 0, &cu));
+        check_true("TESS1: custom with another angle: no", !cc_link_cache_matches_at(csrc, strlen(csrc), 68059, 1795696594, "", 0, &cu2));
+        static const char odd[] = "{\"bytes\":1,\"detail\":7,\"ends\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"format\":\"" CC_LINK_CACHE_FORMAT "\",\"mtime_s\":1}";
+        check_true("TESS1: a detail that is not a name: no", !cc_link_cache_matches_at(odd, sizeof odd - 1, 1, 1, "", 0, &st));
+    }
     static const char other[] = "{\"bytes\":1,\"ends\":\"\",\"format\":\"x\",\"mtime_s\":1}";
     check_true("another format: no", !cc_link_cache_matches(other, sizeof other - 1, 1, 1, "", 0));
     /* hostile SRCE sections */

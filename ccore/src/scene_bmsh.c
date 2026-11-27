@@ -73,6 +73,10 @@ int cc_scene_bmsh3(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_
         put_u32(out, first[k][2]), put_u32(out, m->ne);
     }
 #define BLOCK_MESH(b) ((b) >= ne ? &s->shapes[(b) - ne] : &s->elements[(b)].mesh)
+    for (size_t j = 0; j < nb; j++) { /* SIZE3: a mesh with counts and no arrays (a scene not decoded) is refused */
+        const cc_mesh *m = BLOCK_MESH(order[j]);
+        if ((m->nv && !m->pos) || (m->ni && !m->idx) || (m->ne && !m->edges) || (m->nn && !m->normals)) { fail(err, "mesh arrays missing"); goto done; }
+    }
     for (size_t j = 0; j < nb; j++) {
         const cc_mesh *m = BLOCK_MESH(order[j]);
         buf_append(out, m->pos, (size_t)m->nv * 12);
@@ -116,6 +120,11 @@ done:
 static void put_u32_at(Buf *b, size_t at, uint32_t v) { memcpy(b->p + at, &v, 4); }
 
 int cc_scene_bmsh4(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_t rev, Buf *out, cc_error *err) {
+    return cc_scene_bmsh4_blocks(s, id, ctx, rev, NULL, NULL, out, err);
+}
+
+int cc_scene_bmsh4_blocks(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_t rev, cc_bmsh_block_fn blk, const void *bctx,
+                          Buf *out, cc_error *err) {
     size_t ne = s->nelements, nsh = s->nshapes;
     Arena tmp;
     arena_init(&tmp, 0);
@@ -169,14 +178,26 @@ int cc_scene_bmsh4(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_
         buf_append(out, e->to_scene.x, 12), buf_append(out, e->to_scene.y, 12);
         buf_append(out, e->to_scene.z, 12), buf_append(out, e->to_scene.t, 12);
     }
+    if (blk == CC_BMSH_ROWS_ONLY) { /* SIZE3: no block */
+        put_u32(out, 0);
+        if (out->oom) { fail(err, "out of memory"); goto done; }
+        rc = 0;
+        goto done;
+    }
     put_u32(out, (uint32_t)nb);
     for (size_t j = 0; j < nb && !out->oom; j++) {
         const cc_mesh *m = order[j] >= ne ? &s->shapes[order[j] - ne] : &s->elements[order[j]].mesh;
-        for (uint32_t i = 0; i < m->ni; i++)
-            if (m->idx[i] >= m->nv) { fail(err, "mesh index out of range"); goto done; }
         size_t at = out->len;
-        put_u32(out, 0);
-        if (cc_meshcodec_encode(m, out)) break;
+        if (blk) { /* SIZE3: the block's codec bytes as stored (a mapped cache), not encoded again */
+            put_u32(out, 0);
+            if (blk(bctx, order[j] >= ne, order[j] >= ne ? order[j] - ne : order[j], out)) { fail(err, "mesh bytes not available"); goto done; }
+        } else {
+            if ((m->nv && !m->pos) || (m->ni && !m->idx) || (m->ne && !m->edges) || (m->nn && !m->normals)) { fail(err, "mesh arrays missing"); goto done; } /* SIZE3 */
+            for (uint32_t i = 0; i < m->ni; i++)
+                if (m->idx[i] >= m->nv) { fail(err, "mesh index out of range"); goto done; }
+            put_u32(out, 0);
+            if (cc_meshcodec_encode(m, out)) break;
+        }
         if (out->len - at - 4 > UINT32_MAX) { fail(err, "block too large for BMSH"); goto done; }
         if (!out->oom) put_u32_at(out, at, (uint32_t)(out->len - at - 4));
     }

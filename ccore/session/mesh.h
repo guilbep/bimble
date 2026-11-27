@@ -49,7 +49,7 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n);
 /* SIZE2: cc_mesh_get_form's form 6: version 3 of the open model, then the LNKS trailer version 3 (mesh.c
  * links_lazy: each link's head, no mesh): the page asks each link's mesh on its own. */
 #define CC_MESH_FORM_LAZY 6
-/* SIZE2: link k's read scene as BMSH version 4 (src/scene_bmsh.h: shapes once, a placement per element,
+/* SIZE3: 204 (no body) for a link not there or not loaded (the page's request raced a change). SIZE2: link k's read scene as BMSH version 4 (src/scene_bmsh.h: shapes once, a placement per element,
  * the blocks in the mesh codec), its rev the links' mesh key (links_mesh_gen). 200 with the bytes in `*p`
  * (valid until the next call; the bytes of the call before are freed), 404 no such link (or missing), 500
  * with the error. The native host serves it as GET /mesh?link=k. */
@@ -58,4 +58,37 @@ int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int 
  * page read), a link that is no longer k under that name, a key that is no longer the links' mesh
  * generation, or a link with no geometry now (unloaded, missing, queued, converting) answers 204 (superseded:
  * no body; the page drops that fetch and asks the heads again): never 404 (SIZE2FIX2). */
+/* SIZE3 (B): link k's rows without its meshes: BMSH version 4 with no block (nB = 0), then "BOXS" and per element its
+ * box (f32 min xyz, max xyz; the page's arithmetic: a placed shape's vertices placed one by one; +inf/-inf when
+ * empty), what the page needs to merge a link, cut its batches and draw its proxies before any of its detail. A link
+ * read in place is decoded one mesh at a time into a scratch, nothing kept. The same rule as cc_link_mesh for `name`
+ * and `key` (204 superseded, never 404 with either). The native host serves it as GET /mesh?link=k&rows=1&name=&key=. */
+int cc_link_rows_answer(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n);
+/* TILE1 (ADR 0078 amendment 6, src/tiles.h): link k's tile pyramid. `req` "toc": its table of contents (the section's
+ * bytes [0, toc)); "a,b,c" (at most 4,096 ids): "TILS" u32 count, then per tile u32 id, u32 kind (1 leaf: TLF1 gathered
+ * from the cache's ELEM blocks; 2 proxy: its TPX1 blob), u32 bytes, the bytes padded to 4. From the mapped cache (its
+ * section TILE checked on each call), else a small link's pyramid built at once (kept for one link). The rule of
+ * cc_link_mesh for `name` and `key` (204 superseded); 202 "indexing" while its indexing job runs; 204 no tiles (a large
+ * link whose cache has none: indexed again at its next open); 400 bad ids; 500 a damaged section. The native host
+ * serves it as GET /mesh?link=k&name=&key=&tiles=toc (or &tile=a,b,c). */
+int cc_link_tiles(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char *req, size_t nreq,
+                  const char **p, size_t *n);
+/* TILE1: the open model's pyramid (the session's scene: a model, an IFC, a view file), built in steps after the open as
+ * 3D2's proxies were: each call clusters about `budget` triangles more and answers 202 "done total" until built, then
+ * `req` as cc_link_tiles; a view file opened with a section TILE is served at once. 404 nothing open. */
+int cc_mesh_tiles(cc_session *s, uint64_t budget, const char *req, size_t nreq, const char **p, size_t *n, uint32_t *rev);
+void cc_mesh_tiles_free(cc_session *s);
+/* TILE1: what the reference walker (tiles.h cc_tiles_select) draws for one camera in the host's world mm, per link (its
+ * eye and frustum moved into the link's frame by its placement): tiles, triangles, proxy bytes and (leaf_bytes) the
+ * leaves' answers' bytes, the tables' bytes; or (bounds_only) the world box of every link's root. JSON into `out`.
+ * The native host serves it as GET /mesh?tiles_frame=1&eye=x,y,z&at=x,y,z&fov=deg&w=&h=&err=px&budget=&leaf_bytes=1&occ=1&lod=0
+ * (every input a renderer's setting: err 1, budget none, lod 1, occ 0 by default; tiles_frame=bounds: the box; occ=1: tiles hidden by the drawn tiles' occluders left out, counted apart). Tools and tests (ccore/tools/tiles.mjs). */
+typedef struct {
+    double eye[3], at[3], tan_half, w, h, error_px;
+    uint64_t budget;
+    int leaf_bytes, bounds_only;
+    int occlusion; /* the drawn tiles' occluders in one depth buffer (tiles.h cc_tiles_occ): tiles hidden left out */
+    int lod;       /* levels of detail: 1 on (the default), 0 off: every leaf in the frustum */
+} cc_tiles_frame_q;
+int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out);
 #endif

@@ -1,0 +1,158 @@
+// A link read in place from its cache (ticket SIZE3 D; ADR 0079 amendment): its meshes are decoded only
+// when a call needs its geometry, served from the cache's own bytes, and dropped again past the budget.
+//   CCORE_PORT_BASE=auto node ccore/test/link_lazy_test.mjs
+// A native host (out/tcc/bimble-ccore or $HOST_BIN) with every IFC converted through a cache
+// (BIMBLE_LINK_CACHE_MIN=0), a budget of 0 MB of decoded link meshes and a keep time of 1.5 s
+// (BIMBLE_LINK_MESH_BUDGET_MB=0, BIMBLE_LINK_KEEP_MS=1500): golden/ifc/frame.ifc linked twice (the second
+// time from its cache): ready with nothing decoded; the panel, visibility_sets and GET /mesh?link=0 decode
+// nothing (the mesh is the cache's blocks); Box to selection on a linked element and the plan through the
+// link decode it (logged with its time), the same /mesh?link=0 bytes; 1.5 s later its meshes are dropped
+// (logged); then Box to selection and the plan give the same answers again (decoded again).
+// On the code before SIZE3 a cache's meshes were decoded at load and kept: nothing is ever "dropped".
+// Prints "N passed, M failed"; exits non-zero on a failure.
+import { spawn } from "node:child_process";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs";
+
+const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
+const TOKEN = "link-lazy-token";
+let passed = 0, failed = 0;
+const check = (name, ok, detail = "") => {
+  if (ok) passed++;
+  else failed++;
+  console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`);
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const tmp = mkdtempSync(join(tmpdir(), "ccore-link-lazy-"));
+const A = join(tmp, "a.ifc");
+copyFileSync(join(CCORE, "golden/ifc/frame.ifc"), A);
+const h = spawn(BIN, [String(port("link_lazy_test"))], {
+  env: hostEnv({ BIMBLE_TOKEN: TOKEN, BIMBLE_CACHE_DIR: join(tmp, "cache"), BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_LINK_MESH_BUDGET_MB: "0", BIMBLE_LINK_KEEP_MS: "1500" }),
+  stdio: ["ignore", "ignore", "pipe"],
+});
+h.log = "";
+h.stderr.on("data", (d) => (h.log += d));
+process.on("exit", (code) => {
+  if (code) console.log(`host log (tail):\n${h.log.slice(-4000)}`);
+  try { h.kill("SIGKILL"); } catch { /* gone */ }
+  rmSync(tmp, { recursive: true, force: true });
+});
+for (let i = 0; i < 400 && !h.log.includes("listening"); i++) await sleep(25);
+const p = Number(h.log.match(/listening (\d+)/)?.[1]);
+const call = async (op, nm, body = "") => {
+  const r = await fetch(`http://127.0.0.1:${p}/${op}/${encodeURIComponent(nm)}?t=${TOKEN}`, { method: "POST", body, headers: { "Content-Type": "text/plain" } });
+  return { status: r.status, text: await r.text() };
+};
+const q = async (nm, body = "{}") => JSON.parse((await call("query", nm, body)).text);
+const linkMesh = async () => Buffer.from(await (await fetch(`http://127.0.0.1:${p}/mesh?link=0&t=${TOKEN}`)).arrayBuffer());
+const count = (re) => (h.log.match(re) ?? []).length;
+async function ready() {
+  for (let i = 0; i < 400; i++) {
+    const m = (await q("links_panel")).models[0];
+    if (m && m.state !== "queued" && m.state !== "converting") return m;
+    await sleep(50);
+  }
+  return null;
+}
+
+await call("action", "new");
+await call("action", "link_model", JSON.stringify({ path: A }));
+let m = await ready();
+check("linked, its cache written", m?.state === "ready" && m.elements === 72 && !!m.cache, JSON.stringify(m));
+await call("action", "manage_links", JSON.stringify({ op: "reload", name: "a.ifc" }));
+m = await ready();
+check("linked again from its cache", m?.state === "ready" && m.from_cache === true && m.elements === 72, JSON.stringify(m));
+const decoded0 = count(/its meshes decoded/g);
+await q("visibility_sets");
+const vis0 = await q("visibility");
+const mesh0 = await linkMesh();
+m = (await q("links_panel")).models[0];
+check("the panel, visibility_sets and the link's mesh decode nothing", count(/its meshes decoded/g) === decoded0 && m.triangles > 0 && mesh0.length > 52 &&
+  mesh0.toString("latin1", 0, 4) === "BMSH" && mesh0.readUInt32LE(4) === 4, `${count(/its meshes decoded/g)} ${m.triangles} ${mesh0.length}`);
+// SIZE3 (B): the host's rows answer (GET /mesh?link=0&rows=1): version 4 with no block, then each element's box;
+// nothing kept decoded (each mesh decoded into a scratch)
+{
+  const rr = await fetch(`http://127.0.0.1:${p}/mesh?link=0&rows=1&t=${TOKEN}`);
+  const b = Buffer.from(await rr.arrayBuffer()), nE = b.length >= 16 ? b.readUInt32LE(12) : -1;
+  const at = b.length - 24 * nE - 8;
+  check("the rows answer: no block, then a box per element; the link stays undecoded", rr.status === 200 && b.readUInt32LE(4) === 4 && nE === 72 &&
+    b.readUInt32LE(at) === 0 && b.toString("latin1", at + 4, at + 8) === "BOXS" && count(/its meshes decoded/g) === decoded0,
+    `${rr.status} ${b.length} bytes (the mesh ${mesh0.length}), ${nE} elements`);
+}
+// the calls the page makes on every refresh decode nothing (link_draw)
+await q("link_draw");
+check("link_draw decodes nothing", count(/its meshes decoded/g) === decoded0, String(count(/its meshes decoded/g)));
+// the measure tool: a pointer whose ray misses the link's box does not decode it; one through it does
+await call("action", "measure");
+let mr = await call("tool", "measure_pointer", JSON.stringify({ ray: [900000, 900000, 100000, 0, 0, -1], ray_tol: [900010, 900000, 100000, 0, 0, -1] }));
+check("measure: a ray far from the link does not decode it", mr.status === 200 && count(/its meshes decoded/g) === decoded0, `${mr.status} ${count(/its meshes decoded/g)}`);
+mr = await call("tool", "measure_pointer", JSON.stringify({ ray: [10, 20, 100000, 0, 0, -1], ray_tol: [20, 20, 100000, 0, 0, -1] }));
+check("measure: a ray through the link decodes it and snaps on it", mr.status === 200 && count(/its meshes decoded/g) === decoded0 + 1 && /"hover":\{/.test(mr.text),
+  `${mr.text.slice(0, 120)} ${count(/its meshes decoded/g)}`);
+await call("action", "measure");
+await sleep(2200); // dropped again (keep time 1.5 s)
+const decoded1 = count(/its meshes decoded/g);
+// geometry through the link: Box to selection around a linked element, the plan's cut
+const id = mesh0.toString("latin1", 52, 74);
+let r = await call("select", "-", JSON.stringify({ link: "a.ifc", ids: [id] }));
+const bx = await call("action", "box_to_selection");
+const vis1 = await q("visibility");
+const box1 = JSON.stringify(vis1.section_box);
+check("Box to selection around a linked element decodes that element's block alone, not the link (SIZE3)", r.status === 200 && bx.status === 200 && vis1.section_box?.on === true &&
+  count(/its meshes decoded/g) === decoded1, `${r.text} ${box1}`);
+await call("action", "section_box", JSON.stringify({ on: false })).catch(() => null);
+const ov = await q("open_views"), plan = ov.views.find((v) => v.type === "plan");
+const svg1 = plan ? JSON.parse((await call("query", "view_svg", JSON.stringify({ view: plan.id, bare: true }))).text).svg : "";
+check("the plan draws the link's cut", (svg1.match(/<path/g) ?? []).length > 10, String((svg1.match(/<path/g) ?? []).length));
+const mesh1 = await linkMesh();
+check("the link's mesh once decoded: the same bytes", mesh1.equals(mesh0), `${mesh1.length} ${mesh0.length}`);
+const line = h.log.split("\n").find((l) => /its meshes decoded/.test(l)) ?? "";
+console.log(`  ${line.replace(/^.*link [^:]*: /, "")}`);
+await sleep(2200);
+check("past the budget, after the keep time: its meshes dropped", count(/its meshes dropped/g) >= 1, h.log.split("\n").filter((l) => /dropped/.test(l)).join(" | "));
+r = await call("select", "-", JSON.stringify({ link: "a.ifc", ids: [id] }));
+await call("action", "box_to_selection");
+const vis2 = await q("visibility");
+check("Box to selection again: the same box", JSON.stringify(vis2.section_box) === box1, JSON.stringify(vis2.section_box));
+const svg2 = plan ? JSON.parse((await call("query", "view_svg", JSON.stringify({ view: plan.id, bare: true }))).text).svg : "";
+check("the plan again: the same drawing", svg2 === svg1 && svg2.length > 0);
+void vis0;
+
+// ---- every entry point that reads a link's geometry, on a cold link (nothing decoded) and again after its meshes
+// were dropped: each answers (no crash: the host is checked alive after each), and the same answer both times. On
+// the code of 60d1afd the element query (its volume) and GET /mesh (version 1) read a mesh whose arrays were NULL. ----
+const dropped = () => count(/its meshes dropped/g);
+async function cold() { // until every decode of the link was followed by its drop (budget 0, keep 1.5 s)
+  const t0 = Date.now();
+  while (Date.now() - t0 < 8000 && count(/its meshes decoded/g) > dropped()) await sleep(100);
+}
+const alive = async () => (await call("query", "state")).status === 200;
+const plan2 = (await q("open_views")).views.find((v) => v.type === "plan");
+const points = [
+  ["element query (its volume)", async () => { const r = await call("query", "element", JSON.stringify({ id, link: "a.ifc" })); return `${r.status} ${r.text}`; }],
+  ["measure through the link", async () => { await call("action", "measure"); const r = await call("tool", "measure_pointer", JSON.stringify({ ray: [10, 20, 100000, 0, 0, -1], ray_tol: [20, 20, 100000, 0, 0, -1] })); await call("action", "measure"); return `${r.status} ${r.text.replace(/"items".*$/, "")}`; }],
+  ["Box to selection", async () => { await call("select", "-", JSON.stringify({ link: "a.ifc", ids: [id] })); const r = await call("action", "box_to_selection"); const v = await q("visibility"); return `${r.status} ${JSON.stringify(v.section_box)}`; }],
+  ["a plan through the link (SVG)", async () => { const r = await call("query", "view_svg", JSON.stringify({ view: plan2.id, bare: true })); return `${r.status} ${(JSON.parse(r.text).svg.match(/<path/g) ?? []).length}`; }],
+  ["the plan's PDF", async () => { const r = await fetch(`http://127.0.0.1:${p}/query/view_pdf?t=${TOKEN}`, { method: "POST", body: JSON.stringify({ view: plan2.id }) }); const b = Buffer.from(await r.arrayBuffer()); return `${r.status} ${b.subarray(0, 5).toString("latin1")} ${b.length > 1000}`; }],
+  ["GET /mesh (version 1, the links in its trailer)", async () => { const r = await fetch(`http://127.0.0.1:${p}/mesh?t=${TOKEN}`); const b = Buffer.from(await r.arrayBuffer()); return `${r.status} ${b.length}`; }],
+  ["GET /mesh?shapes=1 (version 3, the links in its trailer)", async () => { const r = await fetch(`http://127.0.0.1:${p}/mesh?shapes=1&t=${TOKEN}`); const b = Buffer.from(await r.arrayBuffer()); return `${r.status} ${b.length}`; }],
+  ["GET /mesh?link=0", async () => { const r = await fetch(`http://127.0.0.1:${p}/mesh?link=0&t=${TOKEN}`); const b = Buffer.from(await r.arrayBuffer()); return `${r.status} ${b.length}`; }],
+  ["GET /mesh?link_proxies=0", async () => { const r = await fetch(`http://127.0.0.1:${p}/mesh?link_proxies=0&t=${TOKEN}`); return `${r.status}`; }],
+];
+for (const [what, run] of points) {
+  await cold();
+  let a = null, b = null;
+  try { a = await run(); } catch (e) { a = `threw ${e.message}`; }
+  const ok1 = await alive().catch(() => false);
+  await cold();
+  try { b = await run(); } catch (e) { b = `threw ${e.message}`; }
+  const ok2 = await alive().catch(() => false);
+  check(`cold link, then after its meshes were dropped: ${what}: answered, the same both times`, ok1 && ok2 && a === b && /^20\d/.test(a), `${a} | ${b}`);
+}
+console.log(`${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);

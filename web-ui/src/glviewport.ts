@@ -85,20 +85,24 @@ import {
   type VisibilitySets,
 } from "./bimble";
 import { drawMeasure } from "./gl/measure";
-import { BATCH_TRIS, boxInFrustum, budgetCut, cutEnd, frustumPlanes, makeBatches, MIN_MOVING_TRIS, type Batch, type Cut } from "./gl/cull"; // 3D1
+import { BATCH_TRIS, boxInFrustum, budgetCut, budgetCutFast, cutEnd, frustumPlanes, makeBatches, MIN_MOVING_TRIS, type Batch, type Cut } from "./gl/cull"; // 3D1
 import { batchShown, IDENTITY_XF, packState, sameXf, STATE_NONE, STATE_TEX_W, xfBox, xfPoint, xfRayToLocal, xfRows, type ModelXf } from "./gl/cull"; // LNK3D
 import { cutProxies, fitProxies, parseBprx, standIns, usableCells, type Proxies } from "./gl/proxies"; // 3D2
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
-import { autoGpuBudget, linkDetail } from "./gl/linkmem"; // LNK3D (D)
+import { gpuBudget, linkGpu, linkDetail } from "./gl/linkmem"; // LNK3D (D)
 import { farModels, linkFar } from "./gl/farlinks"; // REAL1
-import { bmsh4ToBmsh3 } from "./gl/bmsh4"; // SIZE2
+import { bmsh3Size, bmsh4Decode, bmsh4RowsBoxes, bmsh4RowsDecode, bmsh4Stats, type Bmsh4Rows } from "./gl/bmsh4"; // SIZE2; SIZE3: in a worker
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
 import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
 import { drawRefPlanes, type RefPlaneDrawn } from "./gl/refplanes"; // WAVE1B: reference planes
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
-import { perfFrame, perfInputs, perfMesh, renderer as perfRenderer } from "./perf"; // GPU1: the performance panel's counters (LNK3D: the renderer's reason)
-import { gpuSwitch, type GpuRenderer, type GpuView } from "./gpu/switch"; // GPU1: the WebGPU renderer (ADR 0083)
+import { frameTimer, type FrameRec } from "./gl/frametime";
+import { sceneTarget } from "./gl/target";
+import { hizBuilder } from "./gl/hiz";
+import { maskBatch, runsOf } from "./gl/visible";
+import { perfFrame, perfInputs, perfMesh, perfPreview, renderer as perfRenderer } from "./perf"; // GPU1: the performance panel's counters (LNK3D: the renderer's reason)
+import { gpuSwitch, type GlStream, type GpuModels, type GpuRenderer, type GpuView } from "./gpu/switch"; // GPU1: the WebGPU renderer (ADR 0083)
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -193,6 +197,49 @@ interface Bmsh {
   ranges?: { e0: number; e1: number; v0: number; v1: number; i0: number; i1: number; s0: number; s1: number }[];
   /** SIZE2: per model its heavy arrays (mergeMesh), null once dropped (a link's, on the GPU). Absent: one model. */
   parts?: (MeshPart | null)[];
+  /** SIZE3 (B): a link's mesh whose heavy arrays were dropped as soon as read (the open's decoded budget): its
+   *  array lengths (vertices, indices, segments) and its elements' boxes (its own frame, as upload computes
+   *  them), so that its rows, ranges, boxes and batches stand without them (its detail is asked again). */
+  dropped?: { nv: number; ni: number; ns: number; boxes: Float32Array };
+  /** SIZE3 (B): a merged mesh: per element its box when its model's arrays were dropped (else unused). */
+  preBox?: Float32Array;
+}
+
+/** SIZE3 (B): element e's box from its model's vertices `P` (its first vertex `a`, `n` of them), placed by `pl`
+ *  (a shape's placement) when given, into out[6 * at ..]: upload's arithmetic (f32, the same order). */
+function elementBox(P: Float32Array, a: number, n: number, pl: Float32Array | null, out: Float32Array, at: number): void {
+  const f = Math.fround;
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+  for (let v = 3 * a; v < 3 * (a + n); v += 3) {
+    let x = P[v] ?? 0, y = P[v + 1] ?? 0, z = P[v + 2] ?? 0;
+    if (pl) { // (3D2, step 5: no array a vertex)
+      const qx = f(f(f(f(pl[0]! * x) + f(pl[3]! * y)) + f(pl[6]! * z)) + pl[9]!), qy = f(f(f(f(pl[1]! * x) + f(pl[4]! * y)) + f(pl[7]! * z)) + pl[10]!);
+      z = f(f(f(f(pl[2]! * x) + f(pl[5]! * y)) + f(pl[8]! * z)) + pl[11]!), x = qx, y = qy;
+    }
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+    if (z < z0) z0 = z;
+    if (z > z1) z1 = z;
+  }
+  out[6 * at] = x0, out[6 * at + 1] = y0, out[6 * at + 2] = z0, out[6 * at + 3] = x1, out[6 * at + 4] = y1, out[6 * at + 5] = z1;
+}
+
+/** SIZE3 (B): a link's mesh from its rows and boxes (gl/bmsh4.ts bmsh4Rows, read in the worker): no heavy arrays. */
+function rowsMesh(r: Bmsh4Rows): Bmsh {
+  return { rev: r.rev, origin: r.origin, ids: r.ids, cats: r.cats, v0: r.v0, nv: r.nv, i0: r.i0, ni: r.ni, s0: r.s0, ns: r.ns,
+    pos: new Float32Array(0), idx: new Uint32Array(0), edges: new Float32Array(0), normals: new Int8Array(0), size: r.size,
+    shape: r.shape, place: r.place, dropped: { ...r.counts, boxes: r.boxes } };
+}
+
+/** SIZE3 (B): link mesh `m` without its heavy arrays (its boxes and lengths kept, its rows compact): the decoded
+ *  buffer they were views of can go. */
+export function dropArrays(m: Bmsh): Bmsh {
+  const nE = m.ids.length, boxes = new Float32Array(6 * nE);
+  for (let e = 0; e < nE; e++) elementBox(m.pos, m.v0[e] ?? 0, m.nv[e] ?? 0, m.shape?.[e] ? m.place!.subarray(12 * e, 12 * e + 12) : null, boxes, e);
+  return { ...m, pos: new Float32Array(0), idx: new Uint32Array(0), edges: new Float32Array(0), normals: new Int8Array(0),
+    dropped: { nv: m.pos.length / 3, ni: m.idx.length, ns: m.edges.length / 6, boxes } };
 }
 
 /** 3D1: a shape with fewer copies, or fewer triangles, is baked into the merged buffers (placed like an
@@ -200,6 +247,8 @@ interface Bmsh {
  *  and an instance has a cost of its own (SwiftShader: 20,000 instanced boxes of 12 triangles drew in
  *  1.2 s against 0.19 s merged; frames.md, ADR 0078). */
 const INSTANCE_MIN_COPIES = 4, INSTANCE_MIN_TRIS = 64;
+/** SIZE3 (B): the decoded link arrays an open keeps to upload at once (the rest: dropped, asked again when needed). */
+const OPEN_KEEP_BYTES = 128 << 20;
 
 /** Parses BMSH version 1 (ccore/session/mesh.c) at byte `at`; `exact`: it must end the buffer.
  *  Throws on a malformed buffer. */
@@ -387,8 +436,9 @@ export function mergeMesh(main: Bmsh, heads: LinkHead[], size: number): Bmsh {
     rev: main.rev, origin: main.origin, ids: [], cats: new Uint8Array(nE), v0: new Uint32Array(nE), nv: new Uint32Array(nE),
     i0: new Uint32Array(nE), ni: new Uint32Array(nE), s0: new Uint32Array(nE), ns: new Uint32Array(nE),
     pos: main.pos, idx: main.idx, edges: main.edges, normals: main.normals,
-    size, model: new Uint8Array(nE), links: [], parts: all.map((m) => ({ pos: m.pos, idx: m.idx, edges: m.edges, normals: m.normals })),
+    size, model: new Uint8Array(nE), links: [], parts: all.map((m) => (m.dropped ? null : { pos: m.pos, idx: m.idx, edges: m.edges, normals: m.normals })),
   };
+  if (all.some((m) => m.dropped)) out.preBox = new Float32Array(6 * nE); // SIZE3 (B)
   if (placed) out.shape = new Uint32Array(nE), out.place = new Float32Array(12 * nE);
   let e0 = 0, v0 = 0, i0 = 0, s0 = 0, sh0 = 0;
   all.forEach((m, k) => {
@@ -410,7 +460,8 @@ export function mergeMesh(main: Bmsh, heads: LinkHead[], size: number): Bmsh {
       out.shape![e0 + e] = sh + sh0;
       out.place!.set(m.place!.subarray(12 * e, 12 * e + 12), 12 * (e0 + e));
     }
-    const nv = m.pos.length / 3, ni = m.idx.length, ns = m.edges.length / 6;
+    const nv = m.dropped?.nv ?? m.pos.length / 3, ni = m.dropped?.ni ?? m.idx.length, ns = m.dropped?.ns ?? m.edges.length / 6; // SIZE3 (B)
+    if (m.dropped) out.preBox!.set(m.dropped.boxes, 6 * e0);
     ranges.push({ e0, e1: e0 + m.ids.length, v0, v1: v0 + nv, i0, i1: i0 + ni, s0, s1: s0 + ns });
     e0 += m.ids.length, v0 += nv, i0 += ni, s0 += ns, sh0 += shMax;
   });
@@ -487,7 +538,9 @@ uniform float u_zbias; // NDC depth pulled toward the eye (a plan's edges: over 
 out vec3 v_pos;
 out vec3 v_col;
 flat out float v_back;
+flat out uint v_el; // VIS1: the element (its id drawn by the ground-truth pass)
 void main() {
+  v_el = a_el;
   vec3 p = a_ix * a_pos.x + a_iy * a_pos.y + a_iz * a_pos.z + a_it;
   mat3 lin = mat3(a_ix, a_iy, a_iz); // the face normals turn as cc_scene_world_mesh turns them
   vec3 col = a_col;
@@ -513,6 +566,9 @@ precision highp float;
 in vec3 v_pos;
 in vec3 v_col;
 flat in float v_back;
+flat in uint v_el;
+uniform int u_cheap; // VIS1 (a bench hook): 1: the colour unlit, no sRGB conversion, no derivative normal
+uniform int u_id; // VIS1: 1: the element's index + 1 as the colour (24 bits; the ground-truth pass), 0: shaded
 uniform vec3 u_light;
 uniform int u_clip;      // 1: the section box is on
 uniform vec3 u_clip_min; // scene coordinates
@@ -521,20 +577,28 @@ uniform vec2 u_clip_rot; // ISS71: (cos, sin) of the box's yaw: the fragment tur
 uniform float u_cut;     // brightness of cut surfaces (back faces while the box is on)
 uniform float u_ambient; // < 0: unlit (edges)
 uniform float u_alpha;
-out vec4 o;
+uniform highp int u_model; // VIS1: the draw's model (the element attachment's alpha)
+layout(location = 0) out vec4 o;
+layout(location = 1) out vec4 o_id; // VIS1 (gl/target.ts): the element (index + 1; 0xffffff: none) and the model + 1
+layout(location = 2) out vec4 o_n;  // VIS1: the face's normal (0.5 + n / 2)
 vec3 to_linear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 to_srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 void main() {
   vec3 q = vec3(u_clip_rot.x * v_pos.x + u_clip_rot.y * v_pos.y, u_clip_rot.x * v_pos.y - u_clip_rot.y * v_pos.x, v_pos.z);
   if (u_clip == 1 && (any(lessThan(q, u_clip_min)) || any(greaterThan(q, u_clip_max)))) discard;
+  if (u_id == 1) { uint k = v_el + 1u; o = vec4(float(k & 255u), float((k >> 8u) & 255u), float((k >> 16u) & 255u), 255.0) / 255.0; return; }
   if (u_ambient < 0.0) {
     if (u_clip == 1 && v_back > 0.5) discard; // a back edge, only ever seen through the cut
     o = vec4(v_col, u_alpha);
     return;
   }
-  if (u_clip == 1 && !gl_FrontFacing) { o = vec4(to_srgb(to_linear(v_col) * u_cut), u_alpha); return; }
   vec3 n = cross(dFdx(v_pos), dFdy(v_pos));
   float len2 = dot(n, n);
+  uint ke = v_el == 0xffffffffu ? 0xffffffu : v_el + 1u;
+  o_id = vec4(float(ke & 255u), float((ke >> 8u) & 255u), float((ke >> 16u) & 255u), float(u_model + 1)) / 255.0;
+  o_n = vec4((len2 > 1e-30 ? n * inversesqrt(len2) : vec3(0.0, 0.0, 1.0)) * 0.5 + 0.5, 1.0);
+  if (u_cheap == 1) { o = vec4(v_col, 1.0); return; }
+  if (u_clip == 1 && !gl_FrontFacing) { o = vec4(to_srgb(to_linear(v_col) * u_cut), u_alpha); return; }
   float lambert = len2 > 1e-30 ? abs(dot(n, u_light)) * inversesqrt(len2) : 1.0;
   float k = u_ambient + (1.0 - u_ambient) * lambert;
   o = vec4(to_srgb(to_linear(v_col) * k), u_alpha);
@@ -645,7 +709,9 @@ interface GlStats {
   navEye?: () => number[] | null;
   elementBox?: (id: string) => { min: number[]; max: number[] } | null;
   /** Q2: the ribbon's switches as drawn: edges on, the 3D camera orthographic, edge segments drawn last frame. */
-  q2?: { edges: boolean; ortho: boolean; edgeSegs: number };
+  q2?: { edges: boolean; ortho: boolean; edgeSegs: number;
+    /** VIS1: how the edges were drawn: "screen" (found on screen: no segments), "lines" (edgeSegs counts them), "none". */
+    edgeMode?: "screen" | "lines" | "none" };
   /** BUG1: frame loops run (each one takes the page's state and draws it when it changed), and what the last
    *  draw drew: its frame number, the mesh's rev, the buffer size. A test reads the pixels after a loop that
    *  began after its action, with the state's rev drawn at the canvas's layout size (no fixed sleep). */
@@ -660,8 +726,43 @@ interface GlStats {
   gpuBytes?: number;
   /** 3D1: the moving budget of the last frame (px at the target, the size left out under in mm), the
    *  batches and how many drew nothing; a test hook to turn frustum culling off (the same picture). */
-  moving?: { moving: boolean; slice: boolean; budget: number; t: number; batches: number; culled: number; outlines: number; tris: number; proxied?: number };
+  moving?: { moving: boolean; slice: boolean; budget: number; t: number; batches: number; culled: number; outlines: number; tris: number; proxied?: number;
+    /** VIS1 (P0-a): in motion (the camera changed within the motion window); capped: moving_fps 0 kept under 100 ms. */
+    motion?: boolean; capped?: boolean };
+  /** VIS1 (P0-a): the last frame's time, draw start to the GPU's end (a fence polled each loop). */
+  frameMs?: number;
+  /** VIS1: the frames drawn (gl/frametime.ts; the last 2,000) and whether the GPU's time comes from a timer query. */
+  frameRecs?: FrameRec[];
+  gpuTimer?: boolean;
   noCull?: boolean;
+  /** VIS1 (bench hooks): back faces culled in the face pass; a still frame leaves out what is under stillPx pixels. */
+  cullBack?: boolean;
+  stillPx?: number;
+  /** VIS1 (bench hooks): every model drawn without reading the state texture (one grey); faces unlit, no sRGB. */
+  noState?: boolean;
+  cheapFrag?: boolean;
+  /** VIS1: edges found on screen in 3D (on, off, failed: the depth could not be copied); lineEdges, a bench hook: the line pass. */
+  screenEdges?: string;
+  lineEdges?: boolean;
+  /** VIS1: where the last pick came from (id: the element attachment, then that element's triangles; id-background; scan),
+   *  and a bench hook (false: always the scan). */
+  pickFrom?: string;
+  idPick?: boolean;
+  /** VIS1: "draw only what can be seen" (false: off, a bench hook until the setting) and what the last frame left out:
+   *  whether a pyramid of this camera was there and used, the items and triangles left out, the batches tested, ms. */
+  visible?: boolean;
+  vis?: { on: boolean; used: boolean; pyramid: boolean; hidden: number; hiddenTris: number; masked: number; ms: number };
+  /** VIS1 (a bench hook): every slice of the fill presented as it is drawn (before: one by one on screen). */
+  showSlices?: boolean;
+  /** VIS1 (a bench hook): the merged ranges nearest first (off: Apple's GPUs remove hidden surfaces per tile, so the order
+   *  gains nothing there, and with culling it changed which of two coplanar faces won: edges found on screen moved). */
+  frontToBack?: boolean;
+  /** VIS1 (a bench hook): a visibility change's feedback drawn as a whole frame whatever the model's size. */
+  wholeFeedback?: boolean;
+  /** VIS1 (a bench hook): the budget's cut by bisection (budgetCut) whatever the number of batches. */
+  exactCut?: boolean;
+  /** VIS1: per model whether its draws skip the state texel (u_plain). */
+  plain?: boolean[];
   /** 3D2 (ADR 0078): HLOD proxies: the tree served (cells, cells with a proxy, proxy triangles, bytes, the
    *  steps asked and the ms from the first ask to the upload), what the last frame drew of it (cells, triangles), and a test hook
    *  to draw without them (the full-detail picture). */
@@ -709,6 +810,26 @@ interface GlStats {
   linkRefetches?: number;
   linkRefetchMs?: number;
   gpuPickReads?: number;
+  /** SIZE3 (E): links whose proxies came after they were drawn (baked once they were ready). */
+  linkProxiesLate?: number;
+  /** SIZE3 (B): the open's decoded link arrays at most at once and those kept to upload (bytes); when every link a
+   *  frame wanted in detail was on the GPU, none asked (performance.now(), null until then); the decodes made in
+   *  the worker and on the page's thread, the longest slice on the page's thread (ms). */
+  openPeakDecoded?: number;
+  /** SIZE3 (B): a test hook: the open's decoded budget (bytes; unset: OPEN_KEEP_BYTES). */
+  openKeepBytes?: number;
+  /** SIZE3 (B): a test hook: false opens links from their meshes within openKeepBytes, not from the host's rows answer. */
+  openRows?: boolean;
+  /** SIZE3 (B): the last link detail asked again: fetch, read (worker), upload ms. */
+  refetchSteps?: { fetch: number; decode: number; upload: number };
+  openKeptBytes?: number;
+  /** SIZE3 (C): the links' GPU budget in force (bytes: the setting link_gpu_mb, or the test hook gpuBudget) and what their detail takes. */
+  linkGpuBudget?: number;
+  linkGpuUsed?: number;
+  linksDetailedAt?: number | null;
+  decodes?: { worker: number; page: number; maxPageSliceMs: number };
+  /** GPU2: under WebGPU, the bytes each renderer holds and the models taken over (gpu/render.ts). */
+  gpuSplit?: { webgpu: number; webgl: number; taken: number; models: number };
   /** SIZE2: the heavy arrays the page keeps (bytes), per model (the open model first). */
   partBytes?: number[];
   /** 3D2 (step 4): ms of the last pick's ray scan in the page (pickHit). */
@@ -717,7 +838,11 @@ interface GlStats {
   proxiesPending?: boolean;
   bench?: { frame: (dyaw: number, moving: boolean) => number; zoom: (k: number) => void; snap: (dyaw: number, dpitch: number) => { w: number; h: number; rgba: Uint8Array };
     look?: (t: number[], d: number) => void; read?: () => { w: number; h: number; rgba: Uint8Array };
-    stateCost?: (n: number, v: number) => { texMs: number; texBytes: number; bufMs: number; bufBytes: number } };
+    stateCost?: (n: number, v: number) => { texMs: number; texBytes: number; bufMs: number; bufBytes: number };
+    /** VIS1: the ground truth (idCount) and the never-missing check (missing). */
+    idCount?: () => { w: number; h: number; pixels: number; elements: number; tris: number; submitted: number; ms: number };
+    missing?: () => { n: number; first: string[] } | null;
+    drawCalls?: (n: number, reps?: number, multi?: boolean) => { n: number; draws: number; tris: number; models: number; submit: number; total: number } | null };
 }
 declare global {
   interface Window {
@@ -741,7 +866,9 @@ export interface MeshSource {
   linkProxies?(k: number): Promise<{ status: number; bytes: ArrayBuffer }>;
   /** SIZE2: link k's mesh on its own (GET /mesh?link=k, BMSH version 4 read back as version 3 by gl/bmsh4.ts),
    *  with the bytes served. Present: `mesh()` answers the links' heads only (LNKS version 3). */
-  linkMesh?(k: number, name: string, key: number): Promise<{ bytes: ArrayBuffer; served: number }>;
+  linkMesh?(k: number, name: string, key: number, keep?: number): Promise<{ bytes?: ArrayBuffer; rows?: Bmsh4Rows; served: number }>;
+  /** SIZE3 (B): link k's rows and its elements' boxes from the host (no mesh): what an open needs before any detail. */
+  linkRows?(k: number, name: string, key: number): Promise<{ rows?: Bmsh4Rows; served: number }>;
 }
 
 /** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
@@ -774,27 +901,105 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // ---- GPU1 (ADR 0083): the WebGPU renderer when asked (gpu/switch.ts; null: WebGL2 draws). It only turns the
   // scene, the camera and the states into pixels on its own canvas; everything else of the viewport is shared. ----
   let gpuR: GpuRenderer | null = null;
-  gpuSwitch(canvas, stats, (r) => { gpuR = r; dirty = true; });
+  gpuSwitch(canvas, stats, (r) => { gpuR = r; dirty = true; }, () => gpuView());
+  // ---- GPU2 (ADR 0083, amended): WebGPU draws the viewport's own models (each link in its own buffers, placed by its
+  // row, its elements' state texels, its proxies, the memory budget) and takes their buffers over from WebGL2's:
+  // read back once, WebGL2's emptied (never both on the GPU), given back before WebGL2 draws again ----
+  const GL_BUFS = ["pos", "el", "edge", "edgeNrm", "edgeEl", "shapeIdx", "idx", "edgeIdx", "instMat", "instEl"] as const;
+  const gpuOwned = new WeakSet<object>(); // ModelGl whose buffers WebGPU holds (WebGL2's emptied)
+  let prxEmptied = false, ghostKey: { tool: unknown; n: number } | null = null, ghostArrays: ReturnType<GpuModels["ghost"]> = null;
+  const glRead = (b: WebGLBuffer): ArrayBuffer | null => {
+    gl.bindBuffer(gl.COPY_READ_BUFFER, b);
+    const n = gl.getBufferParameter(gl.COPY_READ_BUFFER, gl.BUFFER_SIZE) as number;
+    const out = n > 0 ? new ArrayBuffer(n) : null;
+    if (out) gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, new Uint8Array(out));
+    gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+    return out;
+  };
+  const glPut = (b: WebGLBuffer, d: ArrayBuffer | null) => {
+    gl.bindBuffer(gl.COPY_WRITE_BUFFER, b);
+    if (d) gl.bufferData(gl.COPY_WRITE_BUFFER, new Uint8Array(d), gl.STATIC_DRAW);
+    else gl.bufferData(gl.COPY_WRITE_BUFFER, 0, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+  };
+  const gpuModels = (): GpuModels => ({
+    slots, dbs, groups, states: stateTexels, statesKey: stats.stateUpload, xf: modelXf, plain: plainOf, lboxes, listsKey: stats.listsBuilt ?? 0,
+    linkedSel: state.value.linked ? { link: state.value.linked.link, id: state.value.linked.id } : null,
+    linkPrx: modelPrx, prePrx, linkColour: (c) => LINK_SRGB[c] ?? REFERENCE_SRGB,
+    cutLink: (x, xf, usable, planes, eye, px) => cutLinkPrx(x as LinkPrx, xf, usable, planes, eye as V3, px),
+    need: (k) => { const x = slots[k]; if (x && k > 0) x.needFrame = drawFrame, x.needAt = performance.now(); },
+    want: (k, sz) => { wanted.add(k); if (sz > (wantScore.get(k) ?? 0)) wantScore.set(k, sz); }, // (SIZE3 (B): the largest on screen asked first)
+    notWanted: (k) => wantedLast.get(k) === false,
+    readGl: (g) => { // (each buffer streamed in chunks by its reader: never a whole copy in the page)
+      const mg = g as ModelGl, out: GlStream[] = [];
+      for (const n of GL_BUFS) {
+        const b = mg[n];
+        gl.bindBuffer(gl.COPY_READ_BUFFER, b);
+        const size = gl.getBufferParameter(gl.COPY_READ_BUFFER, gl.BUFFER_SIZE) as number;
+        gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+        if (size > 0) out.push({ name: n, size, read: (off, dst) => { gl.bindBuffer(gl.COPY_READ_BUFFER, b); gl.getBufferSubData(gl.COPY_READ_BUFFER, off, dst); gl.bindBuffer(gl.COPY_READ_BUFFER, null); } });
+      }
+      return out;
+    },
+    emptyGl: (g) => { for (const n of GL_BUFS) glPut((g as ModelGl)[n], null); gpuOwned.add(g); if (!prxEmptied) gpuModels().emptyPrx(); },
+    fillGl: (g, n, size) => {
+      const b = (g as ModelGl)[n];
+      gl.bindBuffer(gl.COPY_WRITE_BUFFER, b);
+      gl.bufferData(gl.COPY_WRITE_BUFFER, size, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+      return (off, src) => { gl.bindBuffer(gl.COPY_WRITE_BUFFER, b); gl.bufferSubData(gl.COPY_WRITE_BUFFER, off, src); gl.bindBuffer(gl.COPY_WRITE_BUFFER, null); };
+    },
+    ownGl: (g, gpu) => { if (gpu) gpuOwned.add(g); else gpuOwned.delete(g); },
+    emptyPrx: () => {
+      prxEmptied = true;
+      for (const x of linkPrx.values()) for (const b of x.bufs) glPut(b, null);
+      for (const b of [prxPos, prxCol, prxIdx, prxEdge, prxNrm]) glPut(b, null);
+    },
+    fillPrx: () => {
+      if (!prxEmptied) return;
+      prxEmptied = false;
+      for (const x of linkPrx.values()) glPut(x.bufs[0]!, x.p.pos.slice().buffer), glPut(x.bufs[1]!, x.p.idx.slice().buffer);
+      if (prx) uploadProxies(prx);
+    },
+    recover: () => { // the device lost with WebGL2's buffers emptied: the open model from the page, the links asked back
+      for (const x of slots) if (x.gl && gpuOwned.has(x.gl)) { gpuOwned.delete(x.gl); if (x.k === 0) loadSlot(x); else releaseSlot(x); }
+      gpuModels().fillPrx();
+      dirty = true;
+    },
+    glHeld: () => 4 * STATE_TEX_W * stateRows + (prxEmptied ? 0 : prxBytes + [...linkPrx.values()].reduce((n, x) => n + x.bytes, 0)) +
+      slots.reduce((n, x) => n + (x.gl && !gpuOwned.has(x.gl) ? x.bytes : 0), 0),
+    ghost: () => {
+      if (!ghostN && !markN) return null;
+      const n = ghostN * 7 + ghostEdgeN * 3 + markN;
+      if (!ghostKey || ghostKey.tool !== tool || ghostKey.n !== n) { // (read back once a tool's answer: small)
+        ghostKey = { tool, n };
+        const f = (b: WebGLBuffer, k: number) => { const d = k ? glRead(b) : null; return d ? new Float32Array(d) : new Float32Array(0); };
+        const i = ghostN ? glRead(ghostIdx) : null;
+        ghostArrays = { key: ghostKey, pos: f(ghostPos, ghostN), idx: i ? new Uint32Array(i, 0, ghostN) : new Uint32Array(0), edges: f(ghostEdges, ghostEdgeN).subarray(0, 3 * ghostEdgeN), marks: f(markBuf, markN).subarray(0, 3 * markN) };
+      }
+      return ghostArrays;
+    },
+  });
   const gpuView = (): GpuView => {
     const { e, mvp } = matrices(), m = mesh, sel = new Set(state.value.linked ? [] : state.value.selection), k = (2 * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.height);
     return { mesh: m, boxes, shown, colour: elColour, selected: (el) => sel.has(m?.ids[el] ?? ""), prx, proxiesOn: proxiesOn(), mvp, eye: e, target,
       ortho: plan !== null || ortho3d(), plan: plan !== null, mirror: mirror(), clip: clipBox(), edges: pressed("edges", true), camKey: camKey(),
-      held: () => drag !== null, fps: userSettings.value?.values.moving_fps ?? 30, mmPerPx: ortho3d() ? () => distance * k : (d) => d * k,
+      held: () => drag !== null, fps: userSettings.value?.values.moving_fps ?? 30, mmPerPx: plan ? () => (2 * half) / Math.max(1, canvas.height) : ortho3d() ? () => distance * k : (d) => d * k,
       zbias: plan ? (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1) : 0, w: canvas.width, h: canvas.height,
-      noCull: stats.noCull === true, noProxies: stats.noProxies === true, noEdges: stats.noEdges === true };
+      noCull: stats.noCull === true, noProxies: stats.noProxies === true, noEdges: stats.noEdges === true, models: gpuModels() };
   };
-  /** The frame drawn by WebGPU (true), or by WebGL2 below (the place tool's ghost and markers: WebGL2's). */
-  // LNK3D (ADR 0078 amendment 3): the WebGPU renderer does not know a link's placement, its proxies nor its
-  // budget (each model in its own frame, buffers, uniforms): with links loaded WebGL2 draws, live, and the
-  // performance panel says why; WebGPU takes over again when the links go
-  const LINKS_WEBGL2 = "linked models are drawn by WebGL2 for now";
+  /** The frame drawn by WebGPU (true), or by WebGL2 below (while WebGPU takes the open model over). */
   const gpuDraw = (): boolean => {
-    const linksNow = (mesh?.links?.length ?? 0) > 0 || prePrx.length > 0; // (also their proxies before the mesh)
-    if (gpuR && linksNow && perfRenderer.reason !== LINKS_WEBGL2) perfRenderer.using = "WebGL2", perfRenderer.reason = LINKS_WEBGL2;
-    else if (gpuR && !linksNow && perfRenderer.reason === LINKS_WEBGL2) perfRenderer.using = "WebGPU", perfRenderer.reason = null;
-    gpuR?.show(!ghostN && !markN && !linksNow);
-    if (!gpuR || ghostN || markN || linksNow) return false;
-    gpuR.frame(gpuView());
+    if (!gpuR) return false;
+    if (state.value.file === null && !mesh) { gpuR.show(false); return false; } // (no model: WebGL2 clears the view)
+    const v = gpuView();
+    const ready = !gpuR.prepare || gpuR.prepare(v); // GPU2: WebGL2 draws until WebGPU holds the open model
+    if (ready && (perfRenderer.using !== "WebGPU" || perfRenderer.reason)) perfRenderer.using = "WebGPU", perfRenderer.reason = null;
+    gpuR.show(ready);
+    if (!ready) { dirty = true; return false; }
+    drawFrame++; // SIZE2FIX: the budget's clock counts WebGPU's frames too
+    gpuR.frame(v);
+    if (perfRenderer.progress) dirty = true; // GPU2: links still being taken over (or given back): another frame
     const b = clipBox();
     stats.boxHandles = b && !plan ? boxHandles(b) : [];
     drawOverlay();
@@ -816,12 +1021,21 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (!r.ok) throw new Error(`mesh: HTTP ${r.status} ${await r.text()}`);
       return r.arrayBuffer();
     },
-    linkMesh: async (k: number, name: string, key: number) => { // SIZE2; SIZE2FIX: the link by its name and the heads' key
+    linkMesh: async (k: number, name: string, key: number, keep?: number) => { // SIZE2; SIZE2FIX: by its name and the heads' key; SIZE3: `keep`: past these decoded bytes, its rows and boxes only
       const r = await fetch(`${base}/mesh?t=${t}&link=${k}&name=${encodeURIComponent(name)}&key=${key}`, { cache: "no-store" });
       if (r.status === 204) throw new Superseded(name); // removed, replaced or read again since the heads: not an error
       if (!r.ok) throw new Error(`mesh of link ${k}: HTTP ${r.status} ${await r.text()}`);
       const ab = await r.arrayBuffer();
-      return { bytes: await bmsh4ToBmsh3(ab, 2 ** 31, () => new Promise<void>((res) => setTimeout(res, 0))), served: ab.byteLength };
+      const served = ab.byteLength;
+      if (keep !== undefined && bmsh3Size(ab) > keep) return { rows: await bmsh4RowsDecode(ab, INSTANCE_MIN_COPIES, INSTANCE_MIN_TRIS), served };
+      return { bytes: await bmsh4Decode(ab, 2 ** 31), served }; // SIZE3: off the page's thread
+    },
+    linkRows: async (k: number, name: string, key: number) => { // SIZE3 (B): by its name and the heads' key, as linkMesh
+      const r = await fetch(`${base}/mesh?t=${t}&link=${k}&rows=1&name=${encodeURIComponent(name)}&key=${key}`, { cache: "no-store" });
+      if (r.status === 204) throw new Superseded(name);
+      if (!r.ok) throw new Error(`rows of link ${k}: HTTP ${r.status} ${await r.text()}`);
+      const ab = await r.arrayBuffer();
+      return { rows: bmsh4RowsBoxes(ab, INSTANCE_MIN_COPIES, INSTANCE_MIN_TRIS), served: ab.byteLength };
     },
     proxies: async (budget: number) => { // 3D2
       const r = await fetch(`${base}/mesh?t=${t}&proxies=${budget}`, { cache: "no-store" });
@@ -859,6 +1073,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const uClipRot = gl.getUniformLocation(prog, "u_clip_rot"); // ISS71
   const uCut = gl.getUniformLocation(prog, "u_cut");
   const uZbias = gl.getUniformLocation(prog, "u_zbias");
+  const uId = gl.getUniformLocation(prog, "u_id"), uCheap = gl.getUniformLocation(prog, "u_cheap"); // VIS1
   // 3D1: outside an instanced draw a vertex is placed by the identity (generic attribute values: context state)
   gl.vertexAttrib3f(4, 1, 0, 0), gl.vertexAttrib3f(5, 0, 1, 0), gl.vertexAttrib3f(6, 0, 0, 1), gl.vertexAttrib3f(7, 0, 0, 0);
   // ---- LNK3D (ADR 0078 amendment 3): the per-element state texture (unit 1) and the per-model placements
@@ -870,6 +1085,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const uPlain = gl.getUniformLocation(prog, "u_plain"), uPlainCol = gl.getUniformLocation(prog, "u_plain_col");
   /** Per model: its one colour when every element of it is shown in it (u_plain), else null (colours()). */
   let plainOf: ([number, number, number] | null)[] = [];
+  const NO_STATE_SRGB: [number, number, number] = [200, 200, 200];
   const stateTex = gl.createTexture();
   for (const [unit, tex] of [[1, stateTex]] as const) {
     gl.activeTexture(gl.TEXTURE0 + unit);
@@ -907,7 +1123,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const xfRow = new Float32Array(12);
   const setModel = (k: number) => {
     gl.uniform1i(uModel, k);
-    const pc = k ? plainOf[k] ?? null : null;
+    const pc = stats.noState ? NO_STATE_SRGB : k ? plainOf[k] ?? null : null; // (VIS1: noState, a bench hook)
     gl.uniform1i(uPlain, pc ? 1 : 0);
     if (pc) gl.uniform3f(uPlainCol, pc[0] / 255, pc[1] / 255, pc[2] / 255);
     if (!k) return;
@@ -1083,12 +1299,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   const dropLinkPrx = (x: LinkPrx) => { gl.deleteVertexArray(x.vao); for (const b of x.bufs) gl.deleteBuffer(b); };
   /** Asks every link's proxies not held yet (rows: query link_draw, in link order). */
+  /** SIZE3 (E): per link the proxies' generation its proxies were asked at (query link_draw "proxies"). */
+  const prxGen = new Map<string, number>();
   const fetchLinkProxies = async (rows: LinkDraw[]): Promise<number> => {
     const ask = source.linkProxies;
     if (!ask || !proxiesOn()) return 0;
     let got = 0;
     await Promise.all(rows.map(async (r, k) => {
       if (linkPrx.has(r.name)) return;
+      prxGen.set(r.name, r.proxies ?? 0);
       try {
         const a = await ask(k);
         if (a.status !== 200) return;
@@ -1164,6 +1383,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       tris += drawLinkCells(q.x, cells, 1 + prePrx.indexOf(q), q.colour);
     });
     stats.proxyPreview = { at: performance.now(), links: all.length, tris };
+    if (tris > 0) perfPreview(); // VIS1 (P0-b): the first picture of stand-ins counts in the panel
   };
   // ---- end LNK3D (C) ----
   // ---- end 3D2 ----
@@ -1172,6 +1392,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** 3D1 (steps 2, 3): a batch of the merged lists (g null: faces from index f0, edges from e0) or of a
    *  group's instances (from g.first + b.first), and how many of its items this frame draws (k). */
   interface DrawBatch { b: Batch; f0: number; e0: number; link: boolean; g: InstGroup | null; k0: number; k1: number; o?: OccState;
+    /** VIS1 (gl/visible.ts): its items that may be seen (made per pyramid) and this frame's runs of them (null: all of [k0, k1)). */
+    vmask?: Uint8Array | null; vkey?: string; runs?: number[] | null; dist?: number; runsMemo?: number[]; runsSerial?: number; runsK0?: number; runsK1?: number; hid?: number; hidTris?: number;
     /** LNK3D: its model (0 the open one, k + 1 link k) and its elements in batch order (their state: batchShown). */
     model: number; items: Uint32Array;
     /** LNK3D (F): no edges this frame (its box spans under EDGE_MIN_PX on screen, or a moving frame left part of it out). */
@@ -1180,6 +1402,16 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
    *  box; `qAt` the camera then), and whether its faces were found hidden (`hidAt`: at which camera). */
   interface OccState { q: WebGLQuery | null; box: boolean; qAt: string; hidden: boolean; hidAt: string }
   let dbs: DrawBatch[] = [];
+  /** VIS1 (P0-c): the batches of each model (made once per list of batches). */
+  let byModelOf: { dbs: DrawBatch[]; by: Map<number, DrawBatch[]> } | null = null;
+  const dbsOf = (mdl: number): DrawBatch[] => {
+    if (!byModelOf || byModelOf.dbs !== dbs) {
+      const by = new Map<number, DrawBatch[]>();
+      for (const d of dbs) { let l = by.get(d.model); if (!l) by.set(d.model, (l = [])); l.push(d); }
+      byModelOf = { dbs, by };
+    }
+    return byModelOf.by.get(mdl) ?? [];
+  };
   let groups: InstGroup[] = [];
   /** Per shape (k + 1 - 1): its first index in the packed shape indices. */
   let shapeI0 = new Uint32Array(0);
@@ -1280,6 +1512,72 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const EDGE_MIN_PX = 16; // LNK3D (F): a batch's edges are drawn when its box spans at least this (device px)
   const MOVING_PROXY_PX = 3, STILL_PROXY_PX = 1, PROXY_MIN_TRIS = 250000, PROXY_STEP_TRIS = 20000, PROXY_STEP_MS = 25;
   let lastCamKey: string | null = null, stillDue = 0, lastFrameAt = 0, lastFrameTris = 0, trisPerMs = 0, lastBudgeted = false;
+  // ---- VIS1 (P0-a, ADR 0078 amendment 7): "moving" follows input, not only the camera key between two frames
+  // drawn: a frame within MOTION_MS (or twice the last frame's time) of a camera change is a moving frame, and
+  // the fill waits as long after the last input (a held pointer, a wheel step, a key). ADR 0074's 200 ms is a
+  // floor for every setting: with moving_fps 0 ("Draw everything") the whole picture is drawn while moving as
+  // long as a whole frame takes at most CAP_MS; above, a budget sized to CAP_TARGET_MS applies (capped) and the
+  // whole picture comes in slices once the input stops. A frame's time: a fence polled each loop (no stall). ----
+  const MOTION_MS = 250, CAP_MS = 100, CAP_TARGET_MS = 60;
+  /** VIS1: the frame being drawn is the ground-truth pass (element ids into idFbo, faces only, every element). */
+  /** VIS1: item i of batch d left out of the last frame by the visibility test. */
+  const visSkip = (d: { runs?: number[] | null }, i: number): boolean => {
+    const r = d.runs;
+    if (!r) return false;
+    for (let k = 0; k < r.length; k += 2) if (i >= r[k]! && i < r[k + 1]!) return false;
+    return true;
+  };
+  /** VIS1: the camera, size and visibility of the last complete picture presented (its element attachment answers picks), or null. */
+  let idPickKey: string | null = null, lastPresented = false, lastPresentAt = 0;
+  const PRESENT_MS = 250;
+  let idMode = false, idFbo: { fb: WebGLFramebuffer; col: WebGLRenderbuffer; dep: WebGLRenderbuffer; w: number; h: number } | null = null;
+  let lastCamChangeAt = -Infinity, lastInputAt = -Infinity, lastFrameMs = 0, wholeRate = 0, lastAllTris = 0, capped = false;
+  let frameFence: { s: WebGLSync; t0: number; tris: number; whole: boolean; rec: FrameRec } | null = null;
+  const ftime = frameTimer(gl); // VIS1: the frame log (gl/frametime.ts)
+  // VIS1: the offscreen target (gl/target.ts): faces, elements, normals and depth; presented with the edges found on screen
+  const tgt = (() => { try { return sceneTarget(gl); } catch (e) { console.warn("scene target:", e); return null; } })();
+  const BG01 = [BACKGROUND_SRGB[0]! / 255, BACKGROUND_SRGB[1]! / 255, BACKGROUND_SRGB[2]! / 255];
+  const E0 = [EDGE_SRGB[0]! / 255, EDGE_SRGB[1]! / 255, EDGE_SRGB[2]! / 255], E1 = [REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255];
+  const multiDraw = gl.getExtension("WEBGL_multi_draw"); // VIS1: the ranges that may be seen in one call
+  // VIS1: the depth pyramid of the last picture (gl/hiz.ts) and its key: what it is valid for
+  const hiz = (() => { try { return tgt ? hizBuilder(gl) : null; } catch (e) { console.warn("hiz:", e); return null; } })();
+  // (the setting, off by default until exact on a real project of links; the bench hook `visible` overrides it either way)
+  const visibleOn = () => stats.visible !== undefined ? stats.visible : (userSettings.value?.values.draw_visible ?? false);
+  // (detailGen: a link's detail loaded or released, element boxes placed: the pyramid and the masks made before are stale)
+  const visKeyOf = (key: string, box: unknown) => `${key}|${canvas.width}x${canvas.height}|${visGen}|${listsGen}|${JSON.stringify(box)}|${state.value.links ?? 0}|${detailGen}`;
+  /** Edges found on screen: in 3D (not in a plan, where the drawing's lines stay), with the target, unless a bench hook asks the line pass. */
+  const screenEdgesNow = () => !!tgt && !plan && stats.lineEdges !== true && opt().edge_mode === "screen" && pressed("edges", true) && !stats.noEdges;
+  /** VIS1: the 3D view's optimisations as stored (the owner: each a setting with a good default and an exact value). */
+  const opt = () => { const v = userSettings.value?.values; return { edge_mode: v?.edge_mode ?? "screen", cull_back: v?.cull_back ?? false, still_px: v?.still_px ?? 0, refill_offscreen: v?.refill_offscreen ?? true }; };
+  stats.frameRecs = ftime.log, stats.gpuTimer = ftime.timer;
+  const motionWin = () => Math.max(MOTION_MS, 2 * lastFrameMs);
+  /** VIS1: a hide, an isolate, a link shown or hidden: when a whole frame is estimated over FEEDBACK_MS, the next frame
+   *  is drawn as a moving one (the largest first, within the budget: the input's feedback) and the picture is completed
+   *  after it (the fill, offscreen); a small model's whole frame stays the feedback. */
+  const FEEDBACK_MS = 60;
+  const feedbackFrame = () => {
+    const rate = trisPerMs || wholeRate;
+    if (rate > 0 && lastAllTris / rate > FEEDBACK_MS && stats.wholeFeedback !== true) lastCamChangeAt = performance.now(), feedbackPending = true;
+  };
+  let feedbackPending = false, wholeNext = false, wholeAt = 0; // (after such a frame the next one is the whole picture)
+  const inputNow = () => { lastInputAt = performance.now(); };
+  canvas.addEventListener("pointermove", (ev) => { if (ev.buttons) inputNow(); }, { capture: true, passive: true });
+  canvas.addEventListener("wheel", inputNow, { capture: true, passive: true });
+  window.addEventListener("keydown", inputNow, true);
+  /** The last frame's fence: its time (draw start to the GPU's end, to a loop's resolution) and, for a whole
+   *  frame, the triangles a ms a whole picture is drawn at. */
+  const pollFence = () => {
+    ftime.poll();
+    const f = frameFence;
+    if (!f || gl.getSyncParameter(f.s, gl.SYNC_STATUS) !== gl.SIGNALED) return;
+    const ms = performance.now() - f.t0;
+    lastFrameMs = ms, f.rec.fence = ms;
+    if (f.whole && f.tris > 0) wholeRate = wholeRate ? 0.5 * wholeRate + 0.5 * (f.tris / ms) : f.tris / ms;
+    gl.deleteSync(f.s);
+    frameFence = null;
+    stats.frameMs = ms;
+  };
+  // ---- end VIS1 (P0-a) ----
   /** The progressive fill after a stop: the screen threshold drawn down to (null: none running). */
   let fill: { t: number } | null = null, fillEdges = false;
   /** 3D2 (step 5): the first frame of a new mesh is drawn within the moving budget, the rest in slices at
@@ -1295,11 +1593,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const n = m.ids.length, size = new Float32Array(n);
     for (let e = 0; e < n; e++) size[e] = m.nv[e] ? Math.hypot(boxes[6 * e + 3]! - boxes[6 * e]!, boxes[6 * e + 4]! - boxes[6 * e + 1]!, boxes[6 * e + 5]! - boxes[6 * e + 2]!) : -1;
     const order = [...Array(n).keys()].filter((e) => size[e]! >= 0).sort((a, b) => size[b]! - size[a]!).slice(0, PREVIEW_BOXES);
+    if (tgt) tgt.bind(canvas.width, canvas.height), tgt.clear(BG01), tgt.colourOnly(true); // VIS1
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(BACKGROUND_SRGB[0]! / 255, BACKGROUND_SRGB[1]! / 255, BACKGROUND_SRGB[2]! / 255, 1);
     gl.clearDepth(1);
     gl.depthMask(true);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (!tgt) gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const { e, mvp } = matrices();
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uMvp, false, mvp);
@@ -1308,6 +1607,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.uniform1f(uPoint, 1), gl.uniform1f(uAlpha, 1), gl.uniform1i(uClip, 0), gl.uniform1f(uZbias, 0);
     gl.enable(gl.DEPTH_TEST);
     drawOutlines(order.map((el) => boxes.subarray(6 * el, 6 * el + 6)));
+    if (tgt) tgt.present(false, E0, E1); // VIS1
     stats.previewAt = performance.now();
   };
   // (not the canvas size: a panel shown by a selection resizes it, and that is not a camera move)
@@ -1315,7 +1615,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** This frame's triangle budget (Infinity: no budget). */
   const frameBudget = (): number => {
     const fps = userSettings.value?.values.moving_fps ?? 30;
-    if (fps <= 0) return Infinity;
+    if (fps <= 0) return capped ? Math.max(MIN_MOVING_TRIS, (trisPerMs || wholeRate) * CAP_TARGET_MS) : Infinity; // VIS1 (P0-a)
     return Math.max(MIN_MOVING_TRIS, trisPerMs * (1000 / fps));
   };
   // ---- end 3D1 ----
@@ -1466,6 +1766,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const t0 = performance.now();
     if (hi > lo || stateRows === 0) uploadStates(lo, hi);
     stats.stateUpload = { elements: Math.max(0, hi - lo), ms: performance.now() - t0 };
+    stats.plain = plainOf.map((x) => x !== null); // VIS1
   };
 
   // ---- 3D2 (step 4; Rust's #3, highlights over the kept picture): a change of colours alone (a selection)
@@ -1491,6 +1792,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     const tOver = performance.now(); // GPU1
     const { e, mvp } = matrices();
+    const scr = screenEdgesNow(); // VIS1: the kept picture is the target's; its edges found again on presenting
+    if (tgt) tgt.bind(canvas.width, canvas.height);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uMvp, false, mvp);
@@ -1524,7 +1827,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.bindVertexArray(vao);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL);
-    if (pressed("edges", true)) {
+    if (tgt) tgt.colourOnly(true);
+    if (pressed("edges", true) && !scr) {
       gl.uniform1f(uAmbient, -1);
       gl.uniform1i(uElCol, 0); // LNK3D: edges in their constant colour
       gl.depthMask(false);
@@ -1550,6 +1854,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.uniform1i(uElCol, 1);
     useModel(host), setModel(0);
     gl.bindVertexArray(null);
+    if (tgt) tgt.present(scr, E0, E1); // VIS1
     drawOverlay();
     stats.frames++;
     perfFrame(false, tOver, gl); // GPU1
@@ -1562,7 +1867,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** LNK3D: per element its box in its model's own frame; the GPU bytes of the element ids. */
   let lboxes = new Float32Array(0), elBytes = 0;
   /** LNK3D: link elements [a, b) placed by x: their scene boxes from their own. */
-  const placeLinkBoxes = (a: number, b: number, x: ModelXf) => { for (let e = a; e < b; e++) xfBox(x, lboxes, 6 * e, boxes, 6 * e); };
+  const placeLinkBoxes = (a: number, b: number, x: ModelXf) => { detailGen++; for (let e = a; e < b; e++) xfBox(x, lboxes, 6 * e, boxes, 6 * e); };
+  /** VIS1: bumped when a link's detail comes or goes, or element boxes are placed (part of the visible set's key). */
+  let detailGen = 0;
   let meshBytes = 0, listBytes = 0; // 3D1: the model's GPU bytes (stats.gpuBytes)
   // ---- LNK3D (D): a model's slot: its ranges in the mesh, its GPU buffers (null: released), its draw lists
   // (kept in the page: a release frees the GPU's copy only), when it was last needed and its GPU bytes ----
@@ -1610,6 +1917,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   /** Uploads slot x's mesh (and its lists, when made) into new buffers (SIZE2: from its heavy arrays; false: dropped). */
   const loadSlot = (x: Slot): boolean => {
+    detailGen++; // VIS1
     const m = mesh, P = partOf(x.k);
     if (!m || !P) return false;
     if (!x.gl) x.gl = makeModelGl();
@@ -1699,6 +2007,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     try {
       const name = m.links?.[x.k - 1]?.name ?? "";
       const r = await ask(x.k - 1, name, linkKeys[x.k - 1] ?? 0);
+      if (!r.bytes) return;
+      const td = performance.now();
       const lm = parseBmsh(r.bytes, 0, true);
       stats.meshBytesServed = (stats.meshBytesServed ?? 0) + r.served;
       if (mesh !== m || lm.ids.length !== x.e1 - x.e0 || lm.rev !== linkKeys[x.k - 1]) return; // another mesh since (it is asked again whole)
@@ -1706,6 +2016,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (!x.gl || !x.listsOnGpu) { loadSlot(x); x.lists = modelLists(x); if (x.lists) uploadLists(x); }
       dropPart(x);
       stats.linkRefetches = (stats.linkRefetches ?? 0) + 1, stats.linkRefetchMs = performance.now() - t0;
+      stats.refetchSteps = { fetch: td - t0, decode: 0, upload: performance.now() - td };
       dirty = true;
     } catch (e) {
       if (e instanceof Superseded) stats.linkSuperseded = (stats.linkSuperseded ?? 0) + 1; // SIZE2FIX: the mesh follows (links_mesh)
@@ -1716,6 +2027,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const gpuNow = () => slots.reduce((n, x) => n + x.bytes, 0) + 4 * STATE_TEX_W * stateRows + prxBytes + [...linkPrx.values()].reduce((n, x) => n + x.bytes, 0);
   /** Frees slot x's GPU buffers (its proxies, when it has some, stand for it). */
   const releaseSlot = (x: Slot) => {
+    detailGen++; // VIS1
     if (!x.gl) return;
     freeModelGl(x.gl);
     x.gl = null, x.bytes = 0, x.listsOnGpu = false;
@@ -1728,23 +2040,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const f = Math.fround;
     const vbase = (m.ranges ?? []).flatMap((r) => new Array<number>(r.e1 - r.e0).fill(r.v0)); // SIZE2: each model's first vertex
     for (let e = 0; e < m.ids.length; e++) {
-      let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
-      const a = (m.v0[e] ?? 0) - (vbase[e] ?? 0), n = m.nv[e] ?? 0, P = m.parts?.[m.model?.[e] ?? 0]?.pos ?? m.pos; // SIZE2: its model's own vertices
+      const part = m.parts ? m.parts[m.model?.[e] ?? 0] : undefined;
+      if (part === null && m.preBox) { boxes.set(m.preBox.subarray(6 * e, 6 * e + 6), 6 * e); continue; } // SIZE3 (B): read before its arrays went
+      const a = (m.v0[e] ?? 0) - (vbase[e] ?? 0), n = m.nv[e] ?? 0, P = part?.pos ?? m.pos; // SIZE2: its model's own vertices
       const pl = m.shape?.[e] ? m.place!.subarray(12 * e, 12 * e + 12) : null; // 3D1: a placed shape: its placed vertices
-      for (let v = 3 * a; v < 3 * (a + n); v += 3) {
-        let x = P[v] ?? 0, y = P[v + 1] ?? 0, z = P[v + 2] ?? 0;
-        if (pl) { // (3D2, step 5: no array a vertex)
-          const qx = f(f(f(f(pl[0]! * x) + f(pl[3]! * y)) + f(pl[6]! * z)) + pl[9]!), qy = f(f(f(f(pl[1]! * x) + f(pl[4]! * y)) + f(pl[7]! * z)) + pl[10]!);
-          z = f(f(f(f(pl[2]! * x) + f(pl[5]! * y)) + f(pl[8]! * z)) + pl[11]!), x = qx, y = qy;
-        }
-        if (x < x0) x0 = x;
-        if (x > x1) x1 = x;
-        if (y < y0) y0 = y;
-        if (y > y1) y1 = y;
-        if (z < z0) z0 = z;
-        if (z > z1) z1 = z;
-      }
-      boxes.set([x0, y0, z0, x1, y1, z1], 6 * e);
+      elementBox(P, a, n, pl, boxes, e);
     }
     // LNK3D: a link's boxes in its own frame (lboxes), placed by its matrix into the scene's (boxes: culling,
     // picking, the budget, the fit); a move places them again, nothing else
@@ -1764,6 +2064,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     slots = (m.ranges ?? [{ e0: 0, e1: m.ids.length, v0: 0, v1: m.pos.length / 3, i0: 0, i1: m.idx.length, s0: 0, s1: m.edges.length / 6 }])
       .map((r, k) => ({ k, ...r, gl: null, lists: null, bytes: 0, needAt: performance.now(), loads: 0 }));
     ownOrd = [], instOfNow = [], pickCache.clear(), pickCacheBytes = 0; // SIZE2
+    wantedLast.clear(); // SIZE3 (B)
     for (const x of slots) loadSlot(x);
     useModel(slots[0]?.gl ?? g0); // (the buffers of the mesh before are gone)
     meshBytes = slots.reduce((n, x) => n + x.bytes, 0) + 4 * m.ids.length; // (LNK3D: + the state texture)
@@ -1900,16 +2201,31 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const keys: number[] = [];
       if (lazy) {
         if (!source.linkMesh) throw new Error("LNKS version 3 without a way to ask a link's mesh");
-        for (let k = 0; k < heads.length; k++) {
+        // SIZE3 (B): one link at a time, the smallest first; each read (in a worker), its boxes taken, and its heavy
+        // arrays kept only while the decoded bytes kept stay within OPEN_KEEP_BYTES: the others are dropped at once
+        // (their rows, boxes and batches stand; their detail is asked again when a frame needs it, budgetStep)
+        for (const h of heads) keys.push(h.key);
+        const order = heads.map((_, k) => k).filter((k) => heads[k]!.nE).sort((a, b) => heads[a]!.nE - heads[b]!.nE || a - b);
+        let kept = 0, full = true;
+        stats.openPeakDecoded = 0;
+        for (const k of order) {
           const h = heads[k]!;
-          keys.push(h.key);
-          if (!h.nE) continue;
-          const r = await source.linkMesh(k, h.name, h.key);
+          const keep = stats.openKeepBytes ?? OPEN_KEEP_BYTES;
+          // SIZE3 (B): each link's mesh while the open's budget lasts (uploaded with the open); once a link did not fit,
+          // the rest open as their rows and boxes from the host (no mesh moves), their detail asked when a frame wants it
+          const r: { bytes?: ArrayBuffer; rows?: Bmsh4Rows; served: number } = full || !source.linkRows || stats.openRows === false
+            ? await source.linkMesh(k, h.name, h.key, Math.max(0, keep - kept)) : await source.linkRows(k, h.name, h.key);
           served += r.served;
-          const lm = parseBmsh(r.bytes, 0, true);
+          let lm = r.rows ? rowsMesh(r.rows) : parseBmsh(r.bytes!, 0, true);
           if (lm.ids.length !== h.nE || lm.rev !== h.key) throw new Superseded(h.name); // (the host checks it too)
+          const b = lm.pos.byteLength + lm.idx.byteLength + lm.edges.byteLength + lm.normals.byteLength;
+          stats.openPeakDecoded = Math.max(stats.openPeakDecoded, kept + b);
+          if (!lm.dropped && kept + b > keep) lm = dropArrays(lm);
+          else kept += b;
+          if (lm.dropped) full = false; // (the budget is spent: the host's rows answers from now on)
           h.m = lm;
         }
+        stats.openKeptBytes = kept, stats.linksDetailedAt = null;
       }
       const m = heads.length ? mergeMesh(main, heads, served) : main;
       stats.meshBytes = served, stats.meshBytesServed = (stats.meshBytesServed ?? 0) + served;
@@ -1955,9 +2271,37 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!m) return;
     bounds = sceneBounds(m) ?? bounds;
   };
+  /** SIZE3 (E): link k's proxies baked after it was ready: asked, then its batches made again by its proxies' leaves
+   *  (its detail released: asked again when a frame wants it, grouped). */
+  const refreshLinkProxies = async (k: number, r: LinkDraw) => {
+    const ask = source.linkProxies, m = mesh;
+    if (!ask || !m || !proxiesOn()) return;
+    try {
+      const a = await ask(k);
+      if (a.status !== 200 || mesh !== m) return;
+      const p = parseBprx(a.bytes);
+      const l = m.links?.[k];
+      if (!p.cells.length || !l || p.nElements !== l.elements) return;
+      const old = linkPrx.get(r.name);
+      if (old) dropLinkPrx(old);
+      const x = makeLinkPrx(r.name, p);
+      linkPrx.set(r.name, x);
+      modelPrx[k + 1] = x;
+      const sl = slots[k + 1];
+      if (sl) releaseSlot(sl);
+      ownOrd[k + 1] = undefined;
+      stats.linkProxiesLate = (stats.linkProxiesLate ?? 0) + 1;
+      visKey = "\u0000", dirty = true;
+    } catch (err) { console.warn("gl viewport: link proxies:", err); }
+  };
   const applyLinkDraw = (rows: LinkDraw[]) => {
     const m = mesh, L = m?.links;
     if (!m || !L || rows.length !== L.length || rows.some((r, k) => r.name !== L[k]!.name)) return; // the mesh follows (links_mesh)
+    rows.forEach((r, k) => { // SIZE3 (E): proxies baked since
+      if ((r.proxies ?? 0) === (prxGen.get(r.name) ?? 0)) return;
+      prxGen.set(r.name, r.proxies ?? 0);
+      void refreshLinkProxies(k, r);
+    });
     let vis = false, col = false;
     const moved: number[] = [];
     rows.forEach((r, k) => {
@@ -2064,6 +2408,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
    *  none is skipped, the budget counts the shown ones) and the state texture (colours() next, by selKey).
    *  A linked element is hidden by its GlobalId as the core hid it (M1LINKS: the sets hold its id). */
   const applyVisibility = () => {
+    feedbackFrame(); // VIS1: the input's own feedback a cheap frame on a large model (ADR 0074), the complete one after
     const m = mesh;
     if (!m) return;
     const t0 = performance.now();
@@ -2217,6 +2562,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     stats.listsBuilt = (stats.listsBuilt ?? 0) + 1;
     elDb = new Int32Array(m.ids.length).fill(-1);
     dbs.forEach((d, i) => { for (const e of d.items) elDb[e] = i; });
+    // VIS1: each batch's box from its items' boxes as they are now (a link's batches are kept from its first list,
+    // made before its boxes were placed: the frustum's test then left out elements on screen)
+    for (const d of dbs) {
+      const bx = d.b.box;
+      bx.set([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+      for (const e of d.items) for (let a = 0; a < 3; a++) bx[a] = Math.min(bx[a]!, boxes[6 * e + a]!), bx[3 + a] = Math.max(bx[3 + a]!, boxes[6 * e + 3 + a]!);
+    }
     applyVisibility();
   };
   /** The box that cuts now: the drag's preview, else the session's box when it is on. */
@@ -2297,8 +2649,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   const draw = () => {
     if (gpuDraw()) return; // GPU1: the seam (else the WebGL2 frame below, untouched)
+    if (tgt && !idMode) tgt.bind(canvas.width, canvas.height); // VIS1: the frame is drawn offscreen, then presented
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(BACKGROUND_SRGB[0]! / 255, BACKGROUND_SRGB[1]! / 255, BACKGROUND_SRGB[2]! / 255, 1);
+    if (idMode) gl.clearColor(0, 0, 0, 0); // VIS1: the ground-truth pass (no element: 0)
     gl.clearDepth(1);
     gl.depthMask(true);
     // 3D1: what this frame is: moving (the camera changed), a slice of the fill after a stop (added to
@@ -2306,18 +2660,31 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const key = camKey(), tNow = performance.now();
     const first = firstOfMesh && !!mesh; // 3D2: the first frame of a mesh, budgeted
     if (first) firstOfMesh = false;
-    const movingNow = (first || (lastCamKey !== null && key !== lastCamKey)) && frameBudget() < Infinity && !ghostN && !markN;
+    // VIS1 (P0-a): in motion when the camera changed, or changed within motionWin() (a frame for another reason
+    // meanwhile); budgeted (movingNow) when this setting has a budget for it (moving_fps 0: only once capped)
+    const camChanged = first || (lastCamKey !== null && key !== lastCamKey);
+    if (camChanged) lastCamChangeAt = tNow;
+    const motion = (camChanged || tNow - lastCamChangeAt < motionWin()) && !ghostN && !markN;
+    const fps0 = (userSettings.value?.values.moving_fps ?? 30) <= 0, rate = trisPerMs || wholeRate;
+    const sliceNext = !motion && (fill !== null || fillEdges);
+    capped = fps0 && (motion || (sliceNext && capped)) && rate > 0 && lastAllTris / rate > CAP_MS;
+    const movingNow = motion && frameBudget() < Infinity;
     lastCamKey = key;
     if (movingNow || (fill === null && !fillEdges)) fill = null, fillEdges = false;
     const slice = !movingNow && (fill !== null || fillEdges);
-    if (!slice || fill?.t === Infinity) gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); // a fill's first slice starts over
+    if (!slice || fill?.t === Infinity) { // a fill's first slice starts over
+      if (tgt && !idMode) tgt.clear(BG01);
+      else gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    }
     const m = mesh;
-    if (!m) { stats.boxHandles = []; drawProxyPreview(); drawOverlay(); return; } // ISS71: no handles (LNK3D: the links' proxies before their mesh)
+    if (!m) { stats.boxHandles = []; drawProxyPreview(); if (tgt) tgt.present(screenEdgesNow(), E0, E1); drawOverlay(); return; } // ISS71: no handles (LNK3D: the links' proxies before their mesh)
     const { e, mvp } = matrices();
+    ftime.begin(); // VIS1
     const light = norm(add(norm(sub(e, target)), [-0.3, -0.2, 0.9]));
     const box = clipBox();
     stats.clip = box;
     gl.useProgram(prog);
+    gl.uniform1i(uId, idMode ? 1 : 0), gl.uniform1i(uCheap, stats.cheapFrag ? 1 : 0); // VIS1 (uCheap: a bench hook)
     gl.uniformMatrix4fv(uMvp, false, mvp);
     gl.uniform3fv(uLight, light);
     // A plan's eye is at infinity: the back-edge test takes its direction (a vertical side's edges stay).
@@ -2388,7 +2755,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         }
         const normal = cutLinkPrx(x, l.xf, x.usable, planes, e, movingNow ? MOVING_PROXY_PX : STILL_PROXY_PX);
         // LNK3D (D): its detail released: its coarsest usable proxies stand for it until it is back
-        const { cells, replaced: r } = slots[k + 1]?.gl ? normal : cutLinkPrx(x, l.xf, x.usable, planes, e, Infinity);
+        // SIZE3 (B): a released link the last frame did not want in detail (its proxies' normal cut covers what is in
+        // view) is drawn by that cut, as it would be with its detail on the GPU
+        const { cells, replaced: r } = slots[k + 1]?.gl || wantedLast.get(k + 1) === false ? normal : cutLinkPrx(x, l.xf, x.usable, planes, e, Infinity);
         linkRep[k + 1] = r, linkNeed[k + 1] = normal.replaced;
         if (cells.length) linkCut.push({ x, cells, mdl: k + 1, colour: l.colour ?? -1 });
       });
@@ -2405,7 +2774,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (sl && !sl.gl) { // LNK3D (D): its link's detail released: asked again when this frame would draw it
         if (!planes || boxInFrustum(planes, d.b.box, 0)) {
           const nr = linkNeed[d.model], r2 = linkRep[d.model];
-          if (!(nr && d.b.group >= 0 && nr[d.b.group])) wanted.add(d.model), need(d.model);
+          if (!(nr && d.b.group >= 0 && nr[d.b.group])) {
+            wanted.add(d.model), need(d.model);
+            const bx = d.b.box, q = [0, 1, 2].map((a) => Math.min(Math.max(e[a]!, bx[a]!), bx[3 + a]!)); // SIZE3 (B): its size on screen
+            const sz = Math.hypot(bx[3]! - bx[0]!, bx[4]! - bx[1]!, bx[5]! - bx[2]!) / (orthoEye ? 1 : Math.max(1, Math.hypot(q[0]! - e[0], q[1]! - e[1], q[2]! - e[2])));
+            if (sz > (wantScore.get(d.model) ?? 0)) wantScore.set(d.model, sz);
+          }
           if (!(r2 && d.b.group >= 0 && r2[d.b.group])) missing.push(d.b.box);
         }
         d.k0 = d.k1 = 0;
@@ -2415,10 +2789,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (rp && d.b.group >= 0 && rp[d.b.group]) { d.k0 = d.k1 = 0; continue; } // 3D2: a proxy stands for it
       if (planes && !boxInFrustum(planes, d.b.box, 0)) { d.k0 = d.k1 = 0; culled++; continue; }
       // the nearest point of the batch's box: its items are at most that near (largest on screen first)
-      const bx = d.b.box, q = [0, 1, 2].map((a) => Math.min(Math.max(e[a]!, bx[a]!), bx[3 + a]!));
-      const dist = orthoEye ? 1 : Math.max(1, Math.hypot(q[0]! - e[0], q[1]! - e[1], q[2]! - e[2]));
+      const bx = d.b.box; // (VIS1 P0-c: no array, no Math.hypot a batch: 46,800 of them a frame on a project of links)
+      const qx = Math.min(Math.max(e[0]!, bx[0]!), bx[3]!) - e[0]!, qy = Math.min(Math.max(e[1]!, bx[1]!), bx[4]!) - e[1]!, qz = Math.min(Math.max(e[2]!, bx[2]!), bx[5]!) - e[2]!;
+      const dist = orthoEye ? 1 : Math.max(1, Math.sqrt(qx * qx + qy * qy + qz * qz));
       // LNK3D (F): edges only where they read: a batch whose box spans at least EDGE_MIN_PX on screen
-      d.noEdge = Math.hypot(bx[3]! - bx[0]!, bx[4]! - bx[1]!, bx[5]! - bx[2]!) / (orthoEye ? orthoMmPx : dist * pxK) < EDGE_MIN_PX;
+      const sx = bx[3]! - bx[0]!, sy = bx[4]! - bx[1]!, sz = bx[5]! - bx[2]!;
+      d.noEdge = Math.sqrt(sx * sx + sy * sy + sz * sz) / (orthoEye ? orthoMmPx : dist * pxK) < EDGE_MIN_PX;
+      d.dist = dist; // (VIS1: front to back)
       seen.push({ d, c: { b: d.b, dist, k0: slice && fill ? cutEnd({ b: d.b, dist, k0: 0 }, fill.t) : 0 } });
       need(d.model); // SIZE2FIX: in view and not stood for by a proxy: needed, whatever this frame's budget or pass draws
     }
@@ -2427,11 +2804,42 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (movingNow || slice) budget = frameBudget();
       // 3D2: while moving, the batches take what the proxies leave of the budget
       if (movingNow && prxCells.length && budget < Infinity) budget = Math.max(MIN_MOVING_TRIS, budget - prxCells.reduce((n, k) => n + prx!.tris[k]!, 0));
-      const cut = budgetCut(seen.map((x) => x.c), budget);
+      // VIS1 (P0-c): many batches (a project of links): the bucketed cut (gl/cull.ts budgetCutFast), the same rule
+      const cut = seen.length > 2000 && budget < Infinity && stats.exactCut !== true ? budgetCutFast(seen.map((x) => x.c), budget, `${visGen}|${listsGen}`) : budgetCut(seen.map((x) => x.c), budget);
       cutT = cut.t;
+      const stillPx = stats.stillPx ?? opt().still_px; // VIS1: the setting still_px (0: off; a bench hook overrides)
+      if (!movingNow && !slice && !idMode && stillPx > 0) { // VIS1 (option 3): what is under stillPx px left out of a still frame
+        cutT = stillPx * (orthoEye ? orthoMmPx : pxK);
+        for (const { d, c } of seen) d.k1 = cutEnd(c, cutT);
+      }
+      if (!slice) { let all = 0; for (const { c } of seen) { const k = c.b.vcum ?? c.b.cum; all += k[c.b.n]! - k[c.k0]!; } lastAllTris = all; } // VIS1 (P0-a)
       for (const { d, c } of seen) d.k0 = c.k0, d.k1 = cutEnd(c, cut.t);
     }
     if (movingNow) for (const { d } of seen) if (d.k1 < d.b.n) d.noEdge = true; // LNK3D (F): a part drawn while moving: faces only
+    // ---- VIS1: what the last picture at this camera hides (gl/hiz.ts, gl/visible.ts) is left out: still frames and the
+    // fill's slices in 3D, when the pyramid's key is this frame's (camera, size, what is shown, lists, section box, links) ----
+    const vkey = visKeyOf(key, box);
+    const pyr = hiz && visibleOn() && !movingNow && !plan && !idMode ? hiz.ready : null;
+    const useVis = pyr !== null && pyr.key === vkey;
+    for (const d of dbs) d.runs = null;
+    let visHid = 0, visHidTris = 0, visMasked = 0;
+    const tVis = performance.now();
+    const vk = useVis ? `${pyr.key}#${pyr.serial}` : "";
+    if (useVis) for (const { d } of seen) {
+      if (d.k1 <= d.k0) continue;
+      if (d.vkey !== vk || !d.vmask) { maskBatch(pyr, d, boxes, shown, d.g ? () => d.g!.ni / 3 : (i) => (m.ni[d.items[i]!] ?? 0) / 3); visMasked++; d.runsSerial = -1; }
+      // the runs and what they leave out, kept per mask and range (a still picture's frames and slices repeat them)
+      if (d.runsSerial !== pyr.serial || d.runsK0 !== d.k0 || d.runsK1 !== d.k1) {
+        const mask = d.vmask!;
+        let h = 0, ht = 0;
+        for (let i = d.k0; i < d.k1; i++) if (!mask[i]) h++, ht += d.g ? d.g.ni / 3 : (m.ni[d.items[i]!] ?? 0) / 3;
+        d.runsMemo = runsOf(mask, d.k0, d.k1), d.runsSerial = pyr.serial, d.runsK0 = d.k0, d.runsK1 = d.k1, d.hid = h, d.hidTris = ht;
+      }
+      d.runs = d.runsMemo!;
+      visHid += d.hid!, visHidTris += d.hidTris!;
+    }
+    if (!idMode) stats.vis = { on: visibleOn(), used: useVis, pyramid: hiz?.ready ? hiz.ready.key === vkey : false, hidden: visHid, hiddenTris: visHidTris, masked: visMasked, ms: performance.now() - tVis };
+    // ---- end VIS1 ----
     // the outlines of what a moving frame could not draw (its batches not finished)
     let unDs = movingNow ? seen.filter(({ d }) => d.k1 < d.b.n) : [];
     // 3D2: a leaf it could not finish is drawn as the proxy of the deepest usable cell holding it instead
@@ -2450,10 +2858,30 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         unDs = unDs.filter(({ d }) => !(d.b.group >= 0 && r[d.b.group]));
       }
     }
+    // VIS1 (C-i): a link's batches a moving frame could not finish are drawn as its proxies (the deepest usable cell
+    // holding each leaf, within half the budget), not as their boxes' outlines; outlines stay where no cell has one
+    if (movingNow && unDs.length && !box && !plan && proxiesOn() && !stats.noProxies && m.links) {
+      const byModel = new Map<number, Set<number>>();
+      for (const { d } of unDs) if (d.model > 0 && d.b.group >= 0) { let set = byModel.get(d.model); if (!set) byModel.set(d.model, (set = new Set())); set.add(d.b.group); }
+      let room = Math.max(0, frameBudget() / 2 - linkCut.reduce((n, c) => n + c.cells.reduce((t, k) => t + c.x.p.tris[k]!, 0), 0));
+      for (const [mdl, leaves] of byModel) {
+        const x = modelPrx[mdl], r = linkRep[mdl];
+        if (!x || !r || !x.usable.length) continue;
+        const extra = standIns(x.p, x.usable, leaves, r, room);
+        if (!extra.length) continue;
+        room = Math.max(0, room - extra.reduce((n, k) => n + x.p.tris[k]!, 0));
+        const ent = linkCut.find((c) => c.mdl === mdl);
+        if (ent) ent.cells.push(...extra);
+        else linkCut.push({ x, cells: extra, mdl, colour: m.links[mdl - 1]?.colour ?? -1 });
+        nStand += extra.length;
+        for (const { d } of seen) if (d.model === mdl && d.b.group >= 0 && r[d.b.group]) d.k0 = d.k1 = 0;
+        unDs = unDs.filter(({ d }) => !(d.model === mdl && d.b.group >= 0 && r[d.b.group]));
+      }
+    }
     const unfinished = [...unDs.map(({ d }) => d.b.box), ...missing];
     for (const x of slots) x.drawn = false; // LNK3D (D): a link drawn in detail by the last frame is needed (on screen)
     for (const d of dbs) if (d.k1 > d.k0 && d.model > 0) { const x = slots[d.model]; if (x) x.drawn = true; }
-    stats.moving = { moving: movingNow, slice, budget, t: cutT, batches: dbs.length, culled, outlines: unfinished.length, tris: 0, proxied: prxCells.length };
+    stats.moving = { moving: movingNow, slice, budget, t: cutT, batches: dbs.length, culled, outlines: unfinished.length, tris: 0, proxied: prxCells.length, motion, capped };
     // 3D2: the proxies' runs (cells in order: their parts lie side by side), faces in a frame that starts
     // over, edges then and in the last pass of a fill
     const drawPrx = prxCells.length > 0 && (!slice || fill?.t === Infinity);
@@ -2557,9 +2985,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         };
         for (const d of g.dbs) {
           if (d.k1 <= d.k0) continue;
-          const s = g.first + d.b.first + d.k0, t = g.first + d.b.first + d.k1;
-          if (s === z) z = t;
-          else flush(), a = s, z = t;
+          const rr = d.runs ?? [d.k0, d.k1]; // VIS1: the runs that may be seen
+          // (a gap of hidden copies is drawn when it costs less than a draw call: about 2,000 triangles)
+          const gapMax = Math.floor(2000 / Math.max(1, g.ni / 3));
+          for (let r = 0; r < rr.length; r += 2) {
+            const s = g.first + d.b.first + rr[r]!, t = g.first + d.b.first + rr[r + 1]!;
+            if (s >= z && s - z <= gapMax && z > a) z = t;
+            else flush(), a = s, z = t;
+          }
         }
         flush();
       }
@@ -2567,14 +3000,25 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     };
     const merged = (mdl: number) => { // runs of the merged index list, neighbouring batches joined (LNK3D (D): one model's)
       let a = -1, z = -1;
-      const flush = () => { if (z > a) gl.drawElements(gl.TRIANGLES, z - a, gl.UNSIGNED_INT, 4 * a), fDraws++, fTris += (z - a) / 3; };
-      for (const d of dbs) {
-        if (d.g || d.model !== mdl || d.k1 <= d.k0) continue;
-        const s = d.f0 + 3 * d.b.cum[d.k0]!, t = d.f0 + 3 * d.b.cum[d.k1]!;
-        if (s === z) z = t;
-        else flush(), a = s, z = t;
+      // VIS1: the ranges gathered, then one multi-draw (WEBGL_multi_draw) or a draw each
+      const offs: number[] = [], cnts: number[] = [], near: number[] = [];
+      let dn = 0;
+      const flush = () => { if (z > a) offs.push(4 * a), cnts.push(z - a), near.push(dn), fTris += (z - a) / 3; };
+      const add = (s: number, t: number, dd: number) => { if (s === z) z = t, dn = Math.min(dn, dd); else flush(), a = s, z = t, dn = dd; };
+      for (const d of dbsOf(mdl)) { // (VIS1 P0-c: this model's batches, not every batch once per model)
+        if (d.g || d.k1 <= d.k0) continue;
+        if (d.runs) { for (let r = 0; r < d.runs.length; r += 2) add(d.f0 + 3 * d.b.cum[d.runs[r]!]!, d.f0 + 3 * d.b.cum[d.runs[r + 1]!]!, d.dist ?? 0); continue; }
+        add(d.f0 + 3 * d.b.cum[d.k0]!, d.f0 + 3 * d.b.cum[d.k1]!, d.dist ?? 0);
       }
       flush();
+      // VIS1 (option 6): the ranges nearest first, so the depth test rejects what is behind before shading it
+      if (multiDraw && offs.length > 1 && stats.frontToBack === true) {
+        const ord = [...offs.keys()].sort((i, j) => near[i]! - near[j]!);
+        const o2 = new Int32Array(ord.length), c2 = new Int32Array(ord.length);
+        ord.forEach((k, i) => { o2[i] = offs[k]!, c2[i] = cnts[k]!; });
+        multiDraw.multiDrawElementsWEBGL(gl.TRIANGLES, c2, 0, gl.UNSIGNED_INT, o2, 0, ord.length), fDraws++;
+      } else if (multiDraw && offs.length > 1) multiDraw.multiDrawElementsWEBGL(gl.TRIANGLES, Int32Array.from(cnts), 0, gl.UNSIGNED_INT, Int32Array.from(offs), 0, offs.length), fDraws++;
+      else for (let i = 0; i < offs.length; i++) gl.drawElements(gl.TRIANGLES, cnts[i]!, gl.UNSIGNED_INT, offs[i]!), fDraws++;
     };
     const hostGl = slots[0]?.gl ?? g0;
     const faces = (push: number) => {
@@ -2584,10 +3028,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       else merged(0), instFaces(0);
       prxFaces(); // 3D2 (none with a section box)
       gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
-      for (const x of slots) if (x.k > 0 && x.gl) { useModel(x.gl), setModel(x.k), gl.bindVertexArray(vao); merged(x.k); instFaces(x.k); } // LNK3D (D): each link's loaded detail
+      // LNK3D (D): each link's loaded detail (VIS1: the nearest link first)
+      const near = new Map<number, number>();
+      if (stats.frontToBack === true) for (const { d } of seen) if (d.k1 > d.k0) near.set(d.model, Math.min(near.get(d.model) ?? Infinity, d.dist ?? Infinity));
+      for (const x of [...slots].sort((p, q) => (near.get(p.k) ?? Infinity) - (near.get(q.k) ?? Infinity))) if (x.k > 0 && x.gl) { useModel(x.gl), setModel(x.k), gl.bindVertexArray(vao); merged(x.k); instFaces(x.k); }
       if (!slice || fill?.t === Infinity) for (const c of linkCut) { const n = drawLinkCells(c.x, c.cells, c.mdl, c.colour); fTris += n, fDraws++, linkPrxTris += n; } // LNK3D (C)
       useModel(hostGl), setModel(0), gl.bindVertexArray(vao);
     };
+    if ((stats.cullBack ?? opt().cull_back) && !box && !idMode) gl.enable(gl.CULL_FACE), gl.cullFace(gl.BACK), gl.frontFace(gl.CCW); // VIS1: the setting cull_back (option 4; a bench hook overrides)
     if (!box) faces(0);
     else {
       // ADR 0014: outward faces lit, then inward faces (seen only through the cut) unlit at the cut
@@ -2606,6 +3054,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.disable(gl.CULL_FACE);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.disable(gl.CULL_FACE); // (VIS1: the bench hook's)
+    if (idMode) { // VIS1: faces only
+      gl.uniform1i(uId, 0), gl.uniform1i(uClip, 0), gl.bindVertexArray(null); stats.frameTris = fTris, stats.frameDraws = fDraws;
+      ftime.end({ at: tNow, kind: "i", js: performance.now() - tNow, draws: fDraws, tris: fTris, culled, batches: dbs.length, proxied: 0, outlines: 0, linkPrxTris: 0, budget: Infinity, gpu: null, fence: null });
+      return;
+    }
     // Edges: their VAO (with the face normals for the back-edge test), a constant colour.
     gl.uniform1f(uAmbient, -1);
     gl.uniform1i(uElCol, 0); // LNK3D: not the element's colour (its drawn flag and model still apply)
@@ -2614,7 +3068,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.depthMask(false);
     // A plan: edges 2 mm ahead, so the outline of a cut drawn where it stands on something stays.
     if (plan) gl.uniform1f(uZbias, (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1));
-    const edgesOn = pressed("edges", true) && !stats.noEdges; // Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off (3D2: a bench hook too)
+    const edgesOn0 = pressed("edges", true) && !stats.noEdges && opt().edge_mode !== "none"; // (VIS1: edge_mode none) Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off (3D2: a bench hook too)
+    // VIS1: in 3D, edges found on screen (gl/screenedges.ts) instead of the line pass, when the depth can be copied
+    const scrEdges = edgesOn0 && !idMode && screenEdgesNow();
+    if (tgt) tgt.colourOnly(true); // VIS1: lines, outlines, the box and the ghost: colour only
+    const edgesOn = edgesOn0 && !scrEdges;
     let instSegs = 0, segs = 0;
     stats.linkProxies = [...linkPrx.values()].map((x) => ({ name: x.name, cells: x.p.cells.length, tris: x.p.tris.reduce((a, b) => a + b, 0), bytes: x.bytes,
       drawnCells: x.drawnCells, drawnTris: x.drawnTris })); // LNK3D (C)
@@ -2643,8 +3101,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const mergedEdges = (mdl: number) => {
       let a = -1, z = -1;
       const flush = () => { if (z > a) gl.drawElements(gl.LINES, z - a, gl.UNSIGNED_INT, 4 * a), fDraws++, segs += (z - a) / 2; };
-      for (const d of dbs) {
-        if (d.g || d.model !== mdl || d.k1 <= d.k0 || d.noEdge) continue; // LNK3D (F)
+      for (const d of dbsOf(mdl)) {
+        if (d.g || d.k1 <= d.k0 || d.noEdge) continue; // LNK3D (F)
         const s = d.e0 + 2 * d.b.ecum[d.k0]!, t = d.e0 + 2 * d.b.ecum[d.k1]!;
         if (s === z) z = t;
         else flush(), a = s, z = t;
@@ -2667,7 +3125,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       for (const x of slots) if (x.k > 0 && x.gl) { useModel(x.gl), setModel(x.k), gl.bindVertexArray(edgeVao); mergedEdges(x.k); instEdges(x.k); } // LNK3D (D)
       useModel(hostGl), setModel(0), gl.bindVertexArray(edgeVao);
     }
-    stats.q2 = { edges: edgesOn, ortho: ortho3d(), edgeSegs: edgesOn ? segs + instSegs : 0 };
+    stats.screenEdges = scrEdges ? "on" : tgt ? "off" : "no target";
+    stats.q2 = { edges: edgesOn0, ortho: ortho3d(), edgeSegs: edgesOn ? segs + instSegs : 0, edgeMode: !edgesOn0 ? "none" : scrEdges ? "screen" : "lines" };
     if (unfinished.length) drawOutlines(unfinished), fDraws++;
     stats.frameTris = fTris, stats.frameDraws = fDraws; // 3D1
     stats.moving.tris = fTris;
@@ -2681,10 +3140,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       trisPerMs = trisPerMs ? 0.5 * trisPerMs + 0.5 * r : r;
     }
     lastFrameAt = tNow, lastFrameTris = fTris, lastBudgeted = movingNow || slice;
-    if (movingNow) stillDue = first ? tNow : tNow + STILL_MS; // 3D2: after a first frame, the fill at once
+    if (movingNow) stillDue = first ? tNow : tNow + Math.max(STILL_MS, motionWin());
+    if (feedbackPending && movingNow) wholeNext = true, wholeAt = tNow + 50; // the complete picture 50 ms later (no gesture goes on): the feedback is on screen first
+    feedbackPending = false; // 3D2: after a first frame, the fill at once (VIS1: after the motion's window)
     if (slice) {
       if (fillEdges) fillEdges = false;
-      else if (cutT === 0) fill = null, fillEdges = true;
+      else if (cutT === 0) fill = null, fillEdges = !scrEdges; // (VIS1: edges found on screen need no last pass of lines)
       else fill = { t: cutT };
     }
     // 3D2: the picture complete (every batch drawn): a whole frame, the end of a fill, a moving frame that drew all
@@ -2703,9 +3164,25 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (box && !plan) drawBox(box);
     stats.boxHandles = box && !plan ? boxHandles(box) : []; // ISS71: drawn by drawOverlay
     if (!slice) drawGhost(); // (a slice adds to the kept picture: the ghost is drawn once)
+    // VIS1 (C-iv): the fill's slices complete the picture offscreen: the canvas keeps the moving frame's picture
+    // and shows the target when the fill is done, or every PRESENT_MS meanwhile (a long fill still shows progress)
+    const holdSlice = !!tgt && slice && (fill !== null || fillEdges) && performance.now() - lastPresentAt < PRESENT_MS && stats.showSlices !== true && opt().refill_offscreen;
+    if (tgt && !holdSlice) tgt.present(scrEdges, E0, E1), fDraws++, lastPresented = true, lastPresentAt = performance.now(); // VIS1: onto the canvas, with its edges
+    // VIS1: this picture's pyramid, once per key (the masks are made once per pyramid: 40 ms for 83,000 elements), and
+    // once more when the picture completes after a pyramid of a partial one (a moving frame's, a slice's: fewer occluders)
+    const complete = cutT === 0 && !unfinished.length && (!slice || (fill === null && !fillEdges));
+    if (hiz && tgt && !plan && visibleOn() && (hiz.ready?.key !== vkey || (!hiz.ready.complete && complete))) hiz.request(tgt.depth!, tgt.ids!, canvas.width, canvas.height, vkey, mvp, complete);
+    // VIS1: a complete picture (nothing left out by the budget, no outlines, no proxies) answers picks from its element attachment
+    // (a proxy's pixel answers nothing: the scan decides there)
+    idPickKey = tgt && cutT === 0 && !unfinished.length && !(stats.stillPx ?? 0) && (!slice || (fill === null && !fillEdges))
+      ? `${key}|${canvas.width}x${canvas.height}|${visGen}` : null;
     drawOverlay();
     stats.frames++;
-    perfFrame(movingNow, tNow, gl); // GPU1
+    const rec: FrameRec = { at: tNow, kind: movingNow ? "m" : slice ? "s" : "w", js: performance.now() - tNow, draws: fDraws, tris: fTris, culled, batches: dbs.length,
+      proxied: prxCells.length + linkCut.reduce((n, c) => n + c.cells.length, 0), outlines: unfinished.length, linkPrxTris, budget, gpu: null, fence: null };
+    ftime.end(rec); // VIS1: the frame log
+    if (!frameFence) frameFence = { s: gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!, t0: tNow, tris: fTris, whole: !movingNow && !slice && cutT === 0, rec }; // VIS1 (P0-a)
+    perfFrame(motion, tNow, gl, movingNow && fps0); // GPU1 (VIS1: moving = in motion; capped: "draw everything" kept under 100 ms)
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
   };
 
@@ -3217,9 +3694,29 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** The element under canvas pixel (x, y) (CSS px from the top-left), or -1. */
   const pick = (x: number, y: number): number => pickHit(x, y)?.el ?? -1;
   /** The element under canvas pixel (x, y) and the point hit (scene mm), or null. */
-  const pickHit = (x: number, y: number): { el: number; point: V3 } | null => {
-    const t0 = performance.now(), h = pickScan(x, y);
-    stats.pickMs = performance.now() - t0; // 3D2 (step 4): the page's ray scan alone
+  const pickHit = (x: number, y: number, readout = false): { el: number; point: V3 } | null => {
+    const t0 = performance.now();
+    // VIS1: the status bar's readout (each frame the pointer moved, the camera moving too): the last frame's element
+    // under the pixel, whatever its camera, tested alone; no scan of every element (it took 0.7 s a session of orbits)
+    if (readout && tgt && lastPresented) {
+      const X = (x * canvas.width) / Math.max(1, canvas.clientWidth), Y = canvas.height - 1 - (y * canvas.height) / Math.max(1, canvas.clientHeight);
+      const a = tgt.elementAt(X, Y);
+      const h = a && a.el < (mesh?.ids.length ?? 0) ? pickScan(x, y, a.el) : null;
+      stats.pickMs = performance.now() - t0, stats.pickFrom = "readout";
+      return h;
+    }
+    // VIS1: the element under the pixel from the last presented frame's element attachment (one pixel read), when
+    // that frame was complete at this camera: then the ray is tested against that element alone (its point); the
+    // background answers none at once. Else (a moving frame, a proxy, another camera) the scan of every element.
+    let h: { el: number; point: V3 } | null | undefined;
+    if (tgt && idPickKey !== null && idPickKey === `${camKey()}|${canvas.width}x${canvas.height}|${visGen}` && stats.idPick !== false) {
+      const X = (x * canvas.width) / Math.max(1, canvas.clientWidth), Y = canvas.height - 1 - (y * canvas.height) / Math.max(1, canvas.clientHeight);
+      const a = tgt.elementAt(X, Y);
+      if (a === null && tgt.isBackground(X, Y)) h = null, stats.pickFrom = "id-background";
+      else if (a && a.el < (mesh?.ids.length ?? 0)) { h = pickScan(x, y, a.el) ?? undefined; if (h) stats.pickFrom = "id"; }
+    }
+    if (h === undefined) h = pickScan(x, y), stats.pickFrom = "scan";
+    stats.pickMs = performance.now() - t0; // 3D2 (step 4): the page's ray scan alone (VIS1: or the id read)
     return h;
   };
   /** SIZE2: element el's triangles for a pick: from its model's heavy arrays, or (a link's, dropped) read back
@@ -3235,6 +3732,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (hit) { pickCache.delete(key), pickCache.set(key, hit); return { P: hit.pos, I: hit.idx, k0: 0, k1: hit.idx.length }; }
     const lv = (m.v0[el] ?? 0) - x.v0, nv = m.nv[el] ?? 0, at = sh ? shapeI0[sh - 1] ?? -1 : elFace[el] ?? -1;
     if (at < 0) return null;
+    if (gpuR?.tris && gpuOwned.has(x.gl)) { const r = gpuR.tris(mdl, key, lv, nv, at, ni, !!sh); return r ? { P: r.pos, I: r.idx, k0: 0, k1: ni } : null; } // GPU2: WebGPU holds its buffers
     const pos = new Float32Array(3 * nv), idx = new Uint32Array(ni);
     gl.bindBuffer(gl.COPY_READ_BUFFER, x.gl.pos);
     gl.getBufferSubData(gl.COPY_READ_BUFFER, 12 * lv, pos);
@@ -3247,7 +3745,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     for (const [k, v] of pickCache) { if (pickCacheBytes <= PICK_CACHE_BYTES) break; pickCache.delete(k), pickCacheBytes -= v.pos.byteLength + v.idx.byteLength; }
     return { P: pos, I: idx, k0: 0, k1: ni };
   };
-  const pickScan = (x: number, y: number): { el: number; point: V3 } | null => {
+  const pickScan = (x: number, y: number, only = -1): { el: number; point: V3 } | null => {
     const m = mesh;
     if (!m) return null;
     const r = rayAt(x, y);
@@ -3268,7 +3766,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       for (let k = 0; k < 3; k++) if (p[k]! < (box.min[k] ?? 0) || p[k]! > (box.max[k] ?? 0)) return true;
       return false;
     };
-    for (let el = 0; el < m.ids.length; el++) {
+    for (let el = only >= 0 ? only : 0; el < (only >= 0 ? only + 1 : m.ids.length); el++) { // (VIS1: one element, from the id)
       if (!shown[el]) continue; // hidden: not drawn, not picked (Reveal hidden: drawn and picked)
       const o = 6 * el;
       let tn = -Infinity, tf = Infinity;
@@ -3621,7 +4119,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.addEventListener("pointermove", (e) => { const r = canvas.getBoundingClientRect(); ptrAt = [e.clientX - r.left, e.clientY - r.top]; });
   canvas.addEventListener("pointerleave", () => { ptrAt = null; ptrDone = ""; pointer.value = null; });
   const pointerWorld = (x: number, y: number): [number, number, number] | null => {
-    const h = pickHit(x, y);
+    const h = pickHit(x, y, true); // VIS1: from the element attachment
     let p: V3 | null = h ? h.point : null;
     const box = plan ? clipBox() : null;
     if (!p && box) {
@@ -3708,15 +4206,31 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
 
   // ---- 3D1 (ccore/tools/frames.mjs): one frame drawn now, finished (a 1x1 readPixels waits for the pixels) ----
   const px1 = new Uint8Array(4);
+  // ---- VIS1: the ground truth's helpers: each element's triangles (its shape's for a placed copy), the last
+  // idCount's visible elements, and the elements the last frame drew (its batches' items [k0, k1) not left out) ----
+  let visibleSet: Uint8Array | null = null, elTrisOf: { dbs: DrawBatch[]; t: Float64Array } | null = null;
+  const elTris = (): Float64Array => {
+    if (elTrisOf && elTrisOf.dbs === dbs) return elTrisOf.t;
+    const m = mesh, t = new Float64Array(m?.ids.length ?? 0);
+    if (m) for (const d of dbs) for (let i = 0; i < d.b.n; i++) { const e = d.items[i]!; t[e] = d.g ? d.g.ni / 3 : (m.ni[e] ?? 0) / 3; }
+    elTrisOf = { dbs, t };
+    return t;
+  };
+  const drawnSet = (): Uint8Array => {
+    const out = new Uint8Array(mesh?.ids.length ?? 0);
+    for (const d of dbs) for (let i = d.k0; i < d.k1; i++) { const e = d.items[i]!; if (!visSkip(d, i)) out[e] = 1; }
+    return out;
+  };
+  // ---- end VIS1 ----
   stats.bench = {
     frame: (dyaw: number, moving: boolean) => {
       void moving;
       const t0 = performance.now();
       yaw += dyaw;
-      if (!moving) fill = null, fillEdges = false; // a still frame: the whole picture
+      if (!moving) fill = null, fillEdges = false, lastCamChangeAt = -Infinity; // a still frame: the whole picture (VIS1: not in motion)
       draw();
       const t1 = performance.now();
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1);
+      if (!gpuR) gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1); // GPU2: under WebGPU the caller waits for its queue (WebGL2 drew nothing)
       const t2 = performance.now();
       (stats as unknown as { split?: number[] }).split = [t1 - t0, t2 - t1];
       return t2 - t0;
@@ -3748,6 +4262,95 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.activeTexture(gl.TEXTURE0);
       return { texMs, texBytes: texels.byteLength, bufMs, bufBytes: flags.byteLength };
     },
+    /** VIS1: the ground truth of what is visible from the current camera: every shown element's faces drawn
+     *  (no culling but the frustum's, no proxies, no budget, the section box's clip) as its index + 1 into an
+     *  offscreen target the canvas's size, read back: the pixels covered, the distinct elements with at least one
+     *  pixel and the sum of their triangles. `visibleSet` keeps the elements (a flag each) for `missing`. */
+    idCount: () => {
+      const w = canvas.width, h = canvas.height;
+      if (!idFbo || idFbo.w !== w || idFbo.h !== h) {
+        if (idFbo) gl.deleteFramebuffer(idFbo.fb), gl.deleteRenderbuffer(idFbo.col), gl.deleteRenderbuffer(idFbo.dep);
+        const fb = gl.createFramebuffer()!, col = gl.createRenderbuffer()!, dep = gl.createRenderbuffer()!;
+        gl.bindRenderbuffer(gl.RENDERBUFFER, col), gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, w, h);
+        gl.bindRenderbuffer(gl.RENDERBUFFER, dep), gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, col);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, dep);
+        idFbo = { fb, col, dep, w, h };
+      }
+      const keep = { np: stats.noProxies, ne: stats.noEdges, cb: stats.cullBack, sp: stats.stillPx, fill, fillEdges };
+      gl.bindFramebuffer(gl.FRAMEBUFFER, idFbo.fb);
+      stats.noProxies = stats.noEdges = true, stats.cullBack = false, stats.stillPx = 0, idMode = true;
+      lastCamKey = camKey(), lastCamChangeAt = -Infinity, fill = null, fillEdges = false;
+      const t0 = performance.now();
+      try { draw(); } finally { idMode = false; }
+      const px = new Uint8Array(4 * w * h);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      const ms = performance.now() - t0;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      const put = <K extends "noProxies" | "noEdges" | "cullBack" | "stillPx">(k: K, v: GlStats[K] | undefined) => { if (v === undefined) delete stats[k]; else stats[k] = v; };
+      put("noProxies", keep.np), put("noEdges", keep.ne), put("cullBack", keep.cb), put("stillPx", keep.sp);
+      fill = keep.fill, fillEdges = keep.fillEdges;
+      const n = mesh?.ids.length ?? 0, vis = new Uint8Array(n), tris = elTris();
+      let pixels = 0, elements = 0, t = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        const k = px[i]! | (px[i + 1]! << 8) | (px[i + 2]! << 16);
+        if (!k) continue;
+        pixels++;
+        const e = k - 1;
+        if (e < n && !vis[e]) vis[e] = 1, elements++, t += tris[e]!;
+      }
+      visibleSet = vis;
+      dirty = true; // the canvas is drawn again (this pass drew offscreen)
+      return { w, h, pixels, elements, tris: t, submitted: stats.frameTris ?? 0, ms };
+    },
+    /** VIS1 (draw-call cost): every loaded model's merged faces (the open model's and each link's whole face list,
+     *  not the instanced copies) drawn as `n` draw calls in all (each model's range cut in equal parts, at least one a
+     *  model), `multi`: one multiDrawElementsWEBGL a model with the same parts; the script's ms to submit them and
+     *  the ms to the pixels (a 1x1 readPixels), best of `reps`. The canvas is drawn again after. */
+    drawCalls: (n: number, reps = 3, multi = false) => {
+      const rng = new Map<number, [number, number]>();
+      for (const d of dbs) {
+        if (d.g || !slots[d.model]?.gl && d.model > 0) continue;
+        const a = d.f0, z = d.f0 + 3 * d.b.cum[d.b.n]!, r = rng.get(d.model);
+        rng.set(d.model, r ? [Math.min(r[0], a), Math.max(r[1], z)] : [a, z]);
+      }
+      const T = [...rng.values()].reduce((t, [a, z]) => t + z - a, 0);
+      const md = multi ? gl.getExtension("WEBGL_multi_draw") : null;
+      if (multi && !md) return null;
+      let best = { submit: Infinity, total: Infinity }, draws = 0;
+      gl.useProgram(prog), gl.uniform1f(uAmbient, AMBIENT), gl.uniform1i(uElCol, 1), gl.enable(gl.DEPTH_TEST);
+      for (let r = 0; r < reps; r++) {
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        const t0 = performance.now();
+        draws = 0;
+        for (const [k, [a, z]] of rng) {
+          const x = k === 0 ? (slots[0]?.gl ?? g0) : slots[k]!.gl!;
+          useModel(x), setModel(k), gl.bindVertexArray(vao);
+          const parts = Math.max(1, Math.round((n * (z - a)) / Math.max(1, T))), step = 3 * Math.ceil((z - a) / 3 / parts);
+          const offs: number[] = [], cnts: number[] = [];
+          for (let s0 = a; s0 < z; s0 += step) offs.push(4 * s0), cnts.push(Math.min(step, z - s0));
+          if (md) md.multiDrawElementsWEBGL(gl.TRIANGLES, Int32Array.from(cnts), 0, gl.UNSIGNED_INT, Int32Array.from(offs), 0, cnts.length), draws++;
+          else for (let i = 0; i < cnts.length; i++) gl.drawElements(gl.TRIANGLES, cnts[i]!, gl.UNSIGNED_INT, offs[i]!), draws++;
+        }
+        const t1 = performance.now();
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1);
+        const t2 = performance.now();
+        if (t2 - t0 < best.total) best = { submit: t1 - t0, total: t2 - t0 };
+      }
+      useModel(slots[0]?.gl ?? g0), setModel(0), gl.bindVertexArray(null);
+      dirty = true;
+      return { n, draws, tris: T / 3, models: rng.size, ...best };
+    },
+    /** VIS1: the elements of the last idCount that the last frame drawn did not draw (their faces): the
+     *  never-missing assertion (0 expected); with their triangles. */
+    missing: () => {
+      const vis = visibleSet, drawnEls = drawnSet();
+      if (!vis) return null;
+      const out: number[] = [];
+      for (let e = 0; e < vis.length; e++) if (vis[e] && !drawnEls[e]) out.push(e);
+      return { n: out.length, first: out.slice(0, 10).map((e) => mesh?.ids[e] ?? String(e)) };
+    },
     /** LNK3D: the canvas as last drawn (RGBA, bottom row first), no new frame. */
     read: () => {
       const out = new Uint8Array(4 * canvas.width * canvas.height);
@@ -3761,6 +4364,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       fit();
       fitCanvas();
       lastCamKey = camKey(); // 3D1: a still picture (not a moving frame)
+      lastCamChangeAt = -Infinity; // VIS1 (P0-a)
       fill = null, fillEdges = false;
       draw();
       const out = new Uint8Array(4 * canvas.width * canvas.height);
@@ -3776,6 +4380,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // least recently needed (hidden ones, those drawn as proxies, those out of view) give their buffers back,
   // never the selected element's link nor one needed in the last NEED_MS. ----
   const wanted = new Set<number>();
+  /** SIZE3 (B): per wanted link the largest of its wanted batches on screen (box diagonal over distance). */
+  const wantScore = new Map<number, number>();
+  /** SIZE3 (B): per link whether the last frame wanted its detail (unknown until a frame ran). */
+  const wantedLast = new Map<number, boolean>();
   const NEED_MS = 2000, NEED_FRAMES = 3;
   const budgetStep = () => {
     const m = mesh;
@@ -3784,17 +4392,21 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const selK = sel === null ? -1 : 1 + (m.links ?? []).findIndex((l) => l.name === sel);
     if (selK > 0 && slots[selK]) slots[selK]!.needAt = now, slots[selK]!.needFrame = drawFrame;
     let changed = false;
-    const w = [...wanted].filter((k) => slots[k] && !slots[k]!.gl && m.links?.[k - 1]?.visible);
-    wanted.clear();
-    if (w.length) {
-      const x = slots[w.sort((a, b) => slots[b]!.needAt - slots[a]!.needAt)[0]!]!;
+    const w = [...wanted].filter((k) => slots[k] && !slots[k]!.gl && !slots[k]!.fetching && m.links?.[k - 1]?.visible); // (SIZE3: not one on its way)
+    const score = new Map(wantScore);
+    for (const x of slots) if (x.k > 0) wantedLast.set(x.k, wanted.has(x.k)); // SIZE3 (B)
+    wanted.clear(), wantScore.clear();
+    // SIZE3 (B): links' meshes asked in a pipeline of 2 at most (fetch, read in a worker, upload, its arrays dropped:
+    // then the next), the largest on screen first (one at a time made a link shown again wait for another's)
+    if (w.length && slots.filter((x) => x.fetching).length < 2) {
+      const x = slots[w.sort((a, b) => (score.get(b) ?? 0) - (score.get(a) ?? 0) || slots[b]!.needAt - slots[a]!.needAt)[0]!]!;
       const t0 = performance.now();
       if (partOf(x.k)) loadSlot(x); // (its lists with it, when the page still has them)
       else void refetchSlot(x); // SIZE2: its mesh asked again, then uploaded and dropped from the page
       x.needAt = now, changed = true, dirty = true;
       stats.linkReloadMs = performance.now() - t0;
     }
-    const budget = stats.gpuBudget ?? autoGpuBudget(userSettings.value?.values.memory_share);
+    const budget = stats.gpuBudget ?? gpuBudget(userSettings.value?.values.link_gpu_mb); // SIZE3: a setting in MB
     let total = gpuNow();
     if (total > budget) {
       const shownK = (x: Slot) => (m.links?.[x.k - 1]?.visible ? 1 : 0);
@@ -3812,6 +4424,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
     }
     stats.gpuBytes = gpuNow();
+    { // SIZE3 (C): the links' detail on the GPU against the budget (the performance panel)
+      const used = slots.reduce((n, x) => n + (x.k > 0 ? x.bytes : 0), 0);
+      stats.linkGpuBudget = budget, stats.linkGpuUsed = used;
+      if (linkGpu.value?.used !== used || linkGpu.value?.budget !== budget) linkGpu.value = { used, budget };
+    }
+    if (!w.length && !slots.some((x) => x.fetching) && !loading && stats.linksDetailedAt === null) stats.linksDetailedAt = performance.now(); // SIZE3 (B)
+    stats.decodes = { ...bmsh4Stats };
     if (changed || Object.keys(linkDetail.value).length !== (m.links?.length ?? 0)) {
       const d: Record<string, boolean> = {};
       (m.links ?? []).forEach((l, k) => { d[l.name] = !!slots[k + 1]?.gl; });
@@ -3933,7 +4552,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // 3D1: STILL_MS after the camera stopped (no button held), the picture is completed in slices, one a
     // frame; anything else that redraws (a move, a selection) abandons the fill
     let fillStep = false;
-    if (!dirty && stillDue && !drag && performance.now() >= stillDue) {
+    pollFence(); // VIS1 (P0-a)
+    if (wholeNext && !dirty && performance.now() >= wholeAt) wholeNext = false, lastCamChangeAt = -Infinity, stillDue = 0, fill = null, fillEdges = false, dirty = true; // VIS1: after a feedback frame
+    hiz?.poll(); // VIS1: the last picture's pyramid, when the GPU has it
+    if (!dirty && stillDue && !drag && performance.now() >= stillDue && performance.now() - lastInputAt >= motionWin()) {
       stillDue = 0;
       if ((stats.moving?.t ?? 0) > 0 || (stats.moving?.outlines ?? 0) > 0 || (stats.moving?.proxied ?? 0) > 0) fill = { t: Infinity }, fillEdges = false, dirty = fillStep = true; // 3D2: proxies at 3 px
     } else if (!dirty && (fill !== null || fillEdges)) dirty = fillStep = true;

@@ -158,7 +158,7 @@ void cc_vis_fit_session(cc_session *s, cc_vis *v, const cc_scene *sc, const cc_g
 
 void cc_link_texts(const cc_link *k, size_t i, cc_str *cls, cc_str *name, cc_str *storey, cc_str *material) {
     static const cc_str none = {"", 0};
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k); /* SIZE3: rows only */
     const cc_scene_element *e = &sc->elements[i];
     *cls = e->class_name, *name = none, *storey = none, *material = none;
     if (k->kind == CC_LINK_IFC) {
@@ -210,7 +210,7 @@ int cc_links_by_view(cc_session *s, const cc_visibility *w, cc_gidset *set) {
         const cc_link *k = &s->links[li];
         if (!k->kind) continue;
         int whole = strs_has(&w->hidden_links, k->name, strlen(k->name));
-        const cc_scene *sc = cc_link_scene(k);
+        const cc_scene *sc = cc_link_rows(k); /* SIZE3: rows only */
         char id[22];
         for (size_t i = 0; i < sc->nelements; i++) {
             cc_str cls, nm, st, mt;
@@ -251,7 +251,7 @@ static int lrow_cmp(const void *x, const void *y) {
 }
 
 static lrow *link_rows(const cc_link *k, size_t *n) {
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k); /* SIZE3: rows only */
     *n = sc->nelements;
     lrow *r = malloc((*n ? *n : 1) * sizeof *r);
     if (!r) return NULL;
@@ -459,7 +459,7 @@ static int packed_read(void *ctx, uint64_t off, size_t n, void *dst) {
 }
 
 int cc_link_psets_json(cc_session *s, const cc_link *k, size_t i, Buf *out) {
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k); /* SIZE3: rows only */
     if (i >= sc->nelements) return -1;
     size_t idx = k->kind == CC_LINK_VIEW ? sc->elements[i].model_index : i;
     const uint8_t *p = NULL;

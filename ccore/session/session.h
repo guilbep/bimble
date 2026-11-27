@@ -11,6 +11,7 @@
 #include "buf.h"
 #include "history.h"
 #include "hlod.h" /* 3D2 */
+#include "tiles.h" /* TILE1 */
 #include "ifc_read.h"
 #include "measure.h"
 #include "model.h"
@@ -109,6 +110,17 @@ typedef struct cc_session {
     Buf link_mesh_out; /* SIZE2: the last link mesh answered (mesh.h cc_link_mesh) */
     double links_retry_at; /* SIZE2: when refused links were last checked against the free memory */
     double hlod_ms;  /* build time so far */
+    /* TILE1 (ADR 0078 amendment 6): the open scene's tile pyramid (mesh.h cc_mesh_tiles), built in steps per (scene, rev);
+     * an opened view file's own section TILE (view_tiles); one small link's pyramid built at once (link_tiles). */
+    cc_tiles *tiles;
+    const cc_scene *tiles_scene;
+    uint32_t tiles_rev;
+    int tiles_status;
+    double tiles_ms;
+    Buf tiles_out, tiles_err, view_tiles, link_tiles;
+    uint64_t link_tiles_uid, link_tiles_gen;
+    int link_tiles_none; /* the last cc_link_tiles' 204 meant "no tiles", not superseded */
+    cc_tiles_opts tiles_opts; /* TILE1: the pyramids' bake settings (zero: the defaults; BIMBLE_TILES); a cache baked otherwise is indexed again */
     cc_persist *persist;
     /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link
      * order; dropped with the open model (lib.rs:1668). links_gen + 1 on every change to them
@@ -133,6 +145,7 @@ typedef struct cc_session {
      * its id text as the link's BMSH rows give it. The open model's selection is then empty. */
     int link_sel;
     char link_sel_id[22];
+    char paper_notice[160]; /* SIZE3: the last drawing's notice (links too large to cut exactly), "" none */
     /* The last sheet drawn (sheet_svg.h): what it was made for (rev, sheet, date, path), the
      * sheet_svg answer, and each drawn placed view's box (sheet_layout). */
     Buf paper_svg, paper_key;
@@ -199,6 +212,9 @@ typedef struct cc_session {
     uint32_t link_uid_next;
     uint64_t link_cache_min;      /* CC_LINK_CACHE_MIN unless the carrier sets less (BIMBLE_LINK_CACHE_MIN) */
     int link_no_beside;           /* 1: caches only in the platform's cache folder (BIMBLE_LINK_CACHE_BESIDE=0) */
+    uint64_t link_mesh_budget;    /* SIZE3: links.h CC_LINK_MESH_BUDGET unless the carrier sets another (BIMBLE_LINK_MESH_BUDGET_MB) */
+    double link_keep_ms;
+    double link_index_delay_ms;   /* SIZE3 (E): tests: each indexing job waits this long first (BIMBLE_LINK_INDEX_DELAY_MS) */          /* SIZE3: links.h CC_LINK_KEEP_MS unless the carrier sets another (BIMBLE_LINK_KEEP_MS, tests) */
     struct cc_links_undo *links_undo, *links_redo; /* link_folder's undo and redo steps (links.h) */
     size_t nlinks_undo, nlinks_redo, caplinks_undo, caplinks_redo;
     /* ---- end LNK1 ---- */

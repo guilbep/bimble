@@ -20,6 +20,7 @@
 #include "links.h" /* LINKF: cc_links_tick */
 #include "mesh.h"
 #include "session.h"
+#include "strtod.h" /* TILE1: tiles_frame */
 
 #define MAX_BODY (1u << 20)        /* serve.rs:14 */
 #define MAX_HEADER (16u << 10)     /* serve.rs:15 */
@@ -397,6 +398,20 @@ static int hexv(char c) {
 }
 
 /* serve.rs:377-394; 0 on a bad escape, invalid UTF-8 or a NUL (a C string cannot hold it). */
+/* TILE1: "x,y,z" (or one number when n == 1) into v; 1 ok */
+static int parse_nums(Str q, double *v, int n) {
+    size_t at = 0;
+    for (int k = 0; k < n; k++) {
+        size_t e = at;
+        while (e < q.n && q.p[e] != ',') e++;
+        if (e == at) return 0;
+        v[k] = cc_strtod(q.p + at, e - at);
+        if (!(v[k] - v[k] == 0)) return 0;
+        at = e + 1;
+    }
+    return at >= q.n;
+}
+
 static int percent_decode(Str s, Buf *out) {
     buf_clear(out);
     for (size_t i = 0; i < s.n; i++) {
@@ -600,11 +615,72 @@ static void handle_one(Conn *c, int *again) {
             uint64_t key = 0;
             int has_name = query_param(query, "name", &nm) && percent_decode(nm, &nb) == 1;
             int has_key = query_param(query, "key", &ky) && parse_u64(ky, &key);
-            int st = cc_link_mesh(cfg->session, budget, has_name ? (nb.p ? nb.p : "") : NULL, has_name ? nb.len : 0, has_key, key, &mp, &mn);
+            Str rw; /* SIZE3: &rows=1, its rows and boxes only (mesh.h cc_link_rows_answer), the same rule for name and key */
+            int rows = query_param(query, "rows", &rw) && str_eq(rw, "1");
+            const char *np = has_name ? (nb.p ? nb.p : "") : NULL;
+            size_t nn = has_name ? nb.len : 0;
+            Str tq; /* TILE1: &tiles=toc or &tile=a,b,c (mesh.h cc_link_tiles), the same rule for name and key */
+            int tiles = query_param(query, "tiles", &tq) || query_param(query, "tile", &tq);
+            Buf tb;
+            buf_init(&tb);
+            if (tiles && percent_decode(tq, &tb) != 1) buf_clear(&tb);
+            int st = tiles  ? cc_link_tiles(cfg->session, budget, np, nn, has_key, key, tb.p ? tb.p : "", tb.len, &mp, &mn)
+                     : rows ? cc_link_rows_answer(cfg->session, budget, np, nn, has_key, key, &mp, &mn)
+                            : cc_link_mesh(cfg->session, budget, np, nn, has_key, key, &mp, &mn);
+            buf_free(&tb);
             buf_free(&nb);
-            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 204 ? "X-Superseded: 1\r\nAccess-Control-Expose-Headers: X-Superseded\r\n" : NULL, mp, mn, keep);
+            const char *h204 = tiles && cfg->session->link_tiles_none ? "X-Tiles: none\r\nAccess-Control-Expose-Headers: X-Tiles\r\n" /* TILE1 */
+                                                                       : "X-Superseded: 1\r\nAccess-Control-Expose-Headers: X-Superseded\r\n";
+            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 204 ? h204 : NULL, mp, mn, keep);
             buf_free(&cfg->session->link_mesh_out), buf_init(&cfg->session->link_mesh_out); /* copied into the answer: none kept */
             goto mesh_done;
+        }
+        { /* TILE1: what the reference walker draws for a camera (mesh.h cc_tiles_frame) */
+            Str fq, x;
+            if (query_param(query, "tiles_frame", &fq)) {
+                cc_tiles_frame_q q;
+                memset(&q, 0, sizeof q);
+                double fov = 60, nb = 0;
+                q.w = 1920, q.h = 1080, q.error_px = 1, q.budget = UINT64_MAX;
+                q.bounds_only = str_eq(fq, "bounds");
+                int ok = q.bounds_only || (query_param(query, "eye", &x) && parse_nums(x, q.eye, 3) && query_param(query, "at", &x) && parse_nums(x, q.at, 3));
+                if (query_param(query, "fov", &x)) ok &= parse_nums(x, &fov, 1);
+                if (query_param(query, "w", &x)) ok &= parse_nums(x, &q.w, 1);
+                if (query_param(query, "h", &x)) ok &= parse_nums(x, &q.h, 1);
+                if (query_param(query, "err", &x)) ok &= parse_nums(x, &q.error_px, 1);
+                if (query_param(query, "budget", &x) && parse_nums(x, &nb, 1) && nb > 0) q.budget = (uint64_t)nb;
+                q.leaf_bytes = query_param(query, "leaf_bytes", &x) && str_eq(x, "1");
+                q.occlusion = query_param(query, "occ", &x) && str_eq(x, "1");
+                q.lod = !(query_param(query, "lod", &x) && str_eq(x, "0"));
+                double th = fov * 3.141592653589793 / 360.0; /* tan by its series: no libm here */
+                q.tan_half = th + th * th * th / 3 + 2 * th * th * th * th * th / 15 + 17 * th * th * th * th * th * th * th / 315;
+                Buf fb;
+                buf_init(&fb);
+                if (!ok || fov <= 0 || fov >= 120 || q.h <= 0) respond_s(c, 400, "bad camera", keep);
+                else if (cc_tiles_frame(cfg->session, &q, &fb)) respond_s(c, 500, "out of memory", keep);
+                else respond_x(c, 200, "application/json", NULL, fb.p, fb.len, keep);
+                buf_free(&fb);
+                buf_free(&cfg->session->link_mesh_out), buf_init(&cfg->session->link_mesh_out);
+                goto mesh_done;
+            }
+        }
+        { /* TILE1: the open model's pyramid (mesh.h cc_mesh_tiles): ?tiles=toc[&step=N] (202 "done total" while built,
+           * N triangles more a call), ?tile=a,b,c */
+            Str tq, sq;
+            if (query_param(query, "tiles", &tq) || query_param(query, "tile", &tq)) {
+                Buf tb;
+                buf_init(&tb);
+                if (percent_decode(tq, &tb) != 1) buf_clear(&tb);
+                uint64_t step = 1000000;
+                if (query_param(query, "step", &sq) && !parse_u64(sq, &step)) step = 1000000;
+                int st = cc_mesh_tiles(cfg->session, step, tb.p ? tb.p : "", tb.len, &mp, &mn, &rev);
+                buf_free(&tb);
+                char xr[80];
+                snprintf(xr, sizeof xr, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
+                respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, xr, mp, mn, keep);
+                buf_free(&cfg->session->tiles_out), buf_init(&cfg->session->tiles_out);
+                goto mesh_done;
+            }
         }
         if (query_param(query, "proxies", &prx) && parse_u64(prx, &budget)) {
             int st = cc_mesh_proxies(cfg->session, budget, &mp, &mn, &rev, &ms);
@@ -792,7 +868,7 @@ int cc_host_run(const cc_host_config *config) {
         int want_warm = cfg->warm && cc_session_model(cfg->session) && cc_session_rev(cfg->session) != warmed;
         if (want_warm) timeout = 0;
         /* LINKF: a link conversion runs on its own thread (links.h): look every 100 ms */
-        int linking = cc_links_busy(cfg->session);
+        int linking = cc_links_wants_tick(cfg->session); /* SIZE3: also a refused link to retry, meshes to drop */
         if (linking && timeout > 100) timeout = 100;
         int r = net_poll(pfd, n, timeout);
         if (linking && cc_links_tick(cfg->session)) {

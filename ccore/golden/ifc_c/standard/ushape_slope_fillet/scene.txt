@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 0000000000000000 0000000000000000 407f400000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cUshapeSlopeFille04" "Level 0"
+grids 0
+elements 1 triangles 108 meshes yes
+000 2T2cUshapeSlopeFille10 IfcMember 7 Other v=56 i=108 e=60 n=60 name="ushape_slope_fillet" storey="Level 0" material=""

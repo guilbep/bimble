@@ -1001,6 +1001,19 @@ export interface SettingsValues {
   recent: string[]; text_size: number; theme: string; ui_font: string; user_email: string; user_name: string;
   /** GPU1 (ADR 0083): the lab's 3D renderer (not Rust's; absent from an older core). */
   renderer?: "auto" | "webgl2" | "webgpu";
+  /** SIZE3 (ADR 0078 amendment 5): the GPU memory the links' detail may take, MB (not Rust's; absent from an older core: 768). */
+  link_gpu_mb?: number;
+  /** TESS1 (ADR 0085): the detail linked IFC files are converted at (not Rust's; absent from an older core: standard). */
+  link_detail?: "exact" | "standard" | "light" | "custom";
+  /** TESS1: custom's chord distance (mm, 0.01..1000, 2) and angle per chord (degrees, 1..90, 18). */
+  link_chord_mm?: number;
+  link_max_deg?: number;
+  /** GPU2: `bimble-ccore open` starts a Chromium-family browser in an app window with the WebGPU flags (native host only). */
+  open_app?: boolean;
+  /** VIS1 (ADR 0078 amendment 7): "Draw only what can be seen" (not Rust's; absent from an older core: off). */
+  draw_visible?: boolean;
+  /** VIS1: the 3D view's edges, back faces culled, the still frame's pixel cut, the refill offscreen (not Rust's). */
+  edge_mode?: "screen" | "lines" | "none"; cull_back?: boolean; still_px?: number; refill_offscreen?: boolean;
 }
 /** `query settings`. */
 export interface UserSettings {
@@ -1008,6 +1021,8 @@ export interface UserSettings {
   note: string | null; text_sizes: [number, number]; themes: string[]; values: SettingsValues;
 }
 export const userSettings = shallowRef<UserSettings | null>(null);
+// VIS1: the stored values the performance report names (its optimisations in force), read without an import cycle
+(window as unknown as { __bbSettings?: () => SettingsValues | null }).__bbSettings = () => userSettings.value?.values ?? null;
 let settingsAsked = false;
 /** Reads the settings (the file may have changed: the Rust app shares it) and applies the look. */
 export function loadSettings(): void {
@@ -1751,7 +1766,9 @@ export interface LinkNote { at: [number, number, number]; element: string; index
 export const linkNotes = () => tryQuery<LinkNote[]>("link_notes", []);
 /** LNK3D: how each link is drawn (`query link_draw`, ccore/session/links.h): shown, colour (-1: its own),
  *  its turn about Z (cos, sin) and placed origin (host world mm), in link order. */
-export interface LinkDraw { colour: number; cos: number; name: string; origin: [number, number, number]; sin: number; visible: boolean }
+export interface LinkDraw { colour: number; cos: number; name: string; origin: [number, number, number]; sin: number; visible: boolean;
+  /** SIZE3 (E): moves when the link's proxies were baked after it was ready (ask them again). */
+  proxies?: number }
 export const linkDraw = () => tryQuery<LinkDraw[]>("link_draw", []);
 /** LNK3D: what the mesh holds (`query mesh_key`): `draw` moves with a change that may change what is drawn
  *  (not a hide in a view, a sheet), `links` with the links' geometry. null: not served (the Rust viewer). */
@@ -1769,3 +1786,18 @@ export function noteRemove(link: string, index: number): string | null {
   try { actionWith("manage_links", { op: "note_remove", name: link, index }); return null; } catch (e) { return message(e); }
 }
 // ---- end M1LINKS ----
+
+// ---- TILE1 (ADR 0078 amendment 6, ccore/src/tiles.h): a link's tile pyramid from the native host ----
+/** The answer of GET /mesh?link=k&name=&key=&tiles=toc (`req` "toc"), …&tiles=occ (`req` "occ": the occluders, parseOcc) or
+ *  …&tile=a,b,c (`req` the ids), or, with `link` < 0,
+ *  the open scene's (GET /mesh?tiles=toc&step=N: 202 "done total" while it is built). `status` 200 with the bytes (decode
+ *  with gl/tiles.ts parseToc / parseTils); 202 building or indexing; 204 superseded (`superseded`) or no tiles (`none`). */
+export async function fetchTiles(base: string, token: string, link: number, req: string, opts: { name?: string; key?: number; step?: number } = {}):
+  Promise<{ status: number; bytes: ArrayBuffer; superseded: boolean; none: boolean }> {
+  const q = req === "toc" || req === "occ" ? `tiles=${req}` : `tile=${req}`;
+  const who = link >= 0
+    ? `&link=${link}${opts.name !== undefined ? `&name=${encodeURIComponent(opts.name)}` : ""}${opts.key !== undefined ? `&key=${opts.key}` : ""}`
+    : opts.step ? `&step=${opts.step}` : "";
+  const r = await fetch(`${base}/mesh?t=${token}&${q}${who}`, { cache: "no-store" });
+  return { status: r.status, bytes: r.status === 200 ? await r.arrayBuffer() : new ArrayBuffer(0), superseded: r.headers.get("X-Superseded") === "1", none: r.headers.get("X-Tiles") === "none" };
+}

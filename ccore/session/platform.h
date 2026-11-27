@@ -88,6 +88,10 @@ typedef struct cc_platform {
     int (*map_file)(void *ctx, const char *path, size_t max, const char **p, size_t *n, void **handle);
     void (*unmap_file)(void *ctx, void *handle);
     /* ---- end SIZE2 ---- */
+    /* SIZE3 (NULL: nothing): memory freed by the core (a link's decoded meshes dropped) given back to the
+     * system (the native carrier: glibc's malloc_trim; small blocks otherwise stay in the heap's free
+     * lists and in the RSS). */
+    void (*trim)(void *ctx);
 } cc_platform;
 
 /* WIN2: the last separator of the path `p`, or NULL: '/', and on Windows '\\' too (Rust's

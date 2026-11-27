@@ -84,6 +84,10 @@ struct cc_link {
     double rotation_deg;  /* the manual rotation about Z, degrees */
     int pinned;           /* 1: not moved by accident (default) */
     int colour;           /* -1: its own colours; else a palette index 0..11, flat */
+    /* TESS1 (ADR 0085): its own reader detail, named at a Reload (manage_links reload {detail, chord_mm,
+     * max_deg}); detail_own 0: the settings' link_detail. Kept across reloads, not saved in the .bimble. */
+    int detail_own;
+    cc_ifc_read_opts detail;
     /* where the file says it is (set when it became ready; cc_link_placement) */
     int geo_map;          /* it has a map conversion (IfcMapConversion, a georeference) */
     double geo_e, geo_n, geo_h, geo_rot; /* m, m, m, degrees */
@@ -97,7 +101,27 @@ struct cc_link {
      * cache's stays in its file (vf->has_psets: read lazily) */
     char *psets;
     size_t npsets;
+    /* SIZE3 (ADR 0079 amendment): a cache read in place. `map` is the cache's mapping (pf->map_file) that
+     * `vf` reads (lazy: its meshes' counts only); the meshes are decoded on demand (cc_link_scene,
+     * cc_link_raw_scene) into `marena` (`mbytes`, resident), and dropped again by cc_links_tick past
+     * the session's budget (link_mesh_budget), least recently used first, never one used in the last
+     * CC_LINK_KEEP_MS. `pwant`: its placement is not the identity (pc, ps, pt), pscene built once
+     * resident. */
+    void *map;
+    int resident, pwant;
+    Arena marena;
+    uint64_t mbytes, mused, mused_ms_tick;
+    double mused_ms;
+    const struct cc_platform *map_pf; /* who mapped it */
+    cc_mesh *zshapes; /* SIZE3: the zeroed shapes its scene shows while not decoded (in the scene's arena) */
+    /* SIZE3 (E): ready, its cache without proxies yet: 1 waiting for its indexing job, 2 the job baking them (the
+     * Links panel's "indexing"; cancel stops it: the cache stays without, completed at the next open); then 0 and
+     * proxies_gen moves (query link_draw "proxies": the page asks its proxies again) */
+    int indexing;
+    unsigned proxies_gen;
 };
+#define CC_LINK_MESH_BUDGET ((uint64_t)256 << 20) /* SIZE3: decoded link meshes kept at rest, all links */
+#define CC_LINK_KEEP_MS 10000.0                    /* SIZE3: a link used this recently is kept past the budget */
 
 /* ---- LINKF (ADR 0079, DEVIATIONS 37): link a folder, conversions in turn, positioning ----
  * A link of an IFC (or a .bimbleview) at least s->link_cache_min bytes is not read in the call: it
@@ -155,8 +179,28 @@ void cc_links_undo_clear_redo(cc_session *s);
  * survey coordinates, R = map turn of the link - the host's; else none), then the manual rotation
  * about the host's world Z axis and the offset: R_m (R_r w + t_r) + move. */
 void cc_link_placement(const cc_session *s, const cc_link *k, double *c, double *sn, double t[3]);
-/* The link's scene as read (its own world), whatever its placement: the /mesh trailer's. */
+/* The link's scene as read (its own world), whatever its placement: the /mesh trailer's. SIZE3: a link
+ * read in place has its meshes decoded first (cc_link_scene too): the ONLY way to a link's geometry.
+ * cc_link_rows answers without decoding: its rows (ids, classes, categories, shapes, placements) and its
+ * origin are right, but a link read in place and not decoded shows EMPTY meshes there (counts 0): what a
+ * list or an id needs, never geometry (its counts: cc_link_triangles). */
 const cc_scene *cc_link_raw_scene(const cc_link *k);
+const cc_scene *cc_link_rows(const cc_link *k);
+/* SIZE3: link k's meshes decoded now (they stay until cc_links_tick drops them past the budget). 0 ok
+ * (or nothing to do), -1 out of memory or a cache changed on disk (the link then draws nothing). */
+int cc_link_resident(cc_link *k);
+/* SIZE3: link k's stored triangles (each shared shape once), from its counts: nothing decoded. */
+uint64_t cc_link_triangles(const cc_link *k);
+/* SIZE3: a link read in place and not decoded: its box in the open scene's frame (`org`, the open scene's origin;
+ * its placement applied, from the counts' read: no mesh decoded): 1; else 0 (test it whole). */
+int cc_link_box_lazy(const cc_link *k, const double org[3], double lo[3], double hi[3]);
+/* SIZE3: element i of link k's geometry for a call that needs one element (its volume, its box): a link read in place
+ * and not decoded has that element's block alone decoded into `tmp` (placed as the link), *at = 0; else the link's
+ * scene, *at = i. Free `tmp` with cc_scene_free after (always initialized). */
+const cc_scene *cc_link_element_scene(cc_link *k, size_t i, cc_scene *tmp, size_t *at);
+/* SIZE3: whether the carrier should call cc_links_tick: a conversion queued or running, a refused link
+ * waiting for its automatic retry, or decoded link meshes past the budget waiting to be dropped. */
+int cc_links_wants_tick(const cc_session *s);
 /* Brings every ready link's placed scene (cc_link_scene) up to date with its placement and the
  * host's georeference (the session calls it before each call and each /mesh). 1 when one changed
  * (links_gen bumped). -1 out of memory (that link drawn unplaced). */

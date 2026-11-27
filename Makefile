@@ -3,7 +3,7 @@
 
 S ?=
 
-.PHONY: help doctor deps tools dev dev-wasm build debug test gate full san lab release wasm lab-build weight perf parity flags clean
+.PHONY: help doctor deps tools dev dev-wasm dev-native native native-test build debug test gate full san lab release wasm lab-build weight perf parity flags clean
 
 help: ## List the targets
 	@awk -F':.*## ' '/^[a-z-]+:.*## / {printf "  make %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -15,6 +15,8 @@ doctor: ## Show which prerequisites are found (DEV.md section 1)
 	@printf '  %-12s %s\n' manifold "$$(test -d ccore/out/deps/manifold/lib && echo ccore/out/deps/manifold || echo 'not built: make deps')"
 	@printf '  %-12s %s\n' node_modules "$$(test -e web-ui/node_modules && echo web-ui/node_modules || echo 'missing: cd web-ui && npm ci')"
 	@printf '  %-12s pinned %s\n' tcc "$$(ccore/ci/tcc.sh --commit)"
+	@printf '  %-12s %s\n' sdl3 "$$(pkg-config --modversion sdl3 2>/dev/null || echo 'MISSING (the native app: ccore/ci/sdl3.sh)')"
+	@printf '  %-12s %s\n' glslc "$$(command -v glslc || echo 'MISSING (the native app: shaderc)')"
 
 deps: ## Build the boolean kernel (manifold) into ccore/out/deps (minutes, once)
 	ccore/deps.sh
@@ -25,6 +27,15 @@ tools: ## Install the pinned tcc and wasm-opt into ~/.local (then put their bin/
 
 dev: ## The edit loop: host + Vite, rebuilt and restarted on every save in ccore/src|session|host
 	ccore/dev.sh
+
+native: ## The native Linux app: ccore/out/app/bimble (ticket NUI1; needs SDL3 >= 3.4, FreeType, glslc)
+	ccore/build.sh native-app
+
+dev-native: ## The native app's edit loop: tcc rebuild on every save under ccore/native, then an offscreen shot
+	ccore/native/build.sh watch
+
+native-test: ## The native app's checks: ccore/ci/run.sh native
+	ccore/ci/run.sh native
 
 dev-wasm: ## The lab on the C wasm module in the page (no server)
 	cd web-ui && npm run dev:wasm

@@ -703,6 +703,23 @@ EXPORT("host_proxies") int wa_host_proxies(int budget, cc_wasm_res *r) {
     return answer(r, &b, st);
 }
 
+/* TILE1: the tile pyramid (session/mesh.h): link >= 0: link k's (cc_link_tiles), else the open scene's built in
+ * steps of `budget` triangles (cc_mesh_tiles); `req` "toc" or "a,b,c". */
+EXPORT("host_tiles") int wa_host_tiles(int link, int budget, const char *req, size_t nreq, cc_wasm_res *r) {
+    cc_session *s = host_session();
+    if (!s) return r->value = 0, text(r, 500, "out of memory");
+    const char *p;
+    size_t n;
+    uint32_t rev = 0;
+    int st = link >= 0 ? cc_link_tiles(s, (uint64_t)link, NULL, 0, 0, 0, req, nreq, &p, &n)
+                       : cc_mesh_tiles(s, budget > 0 ? (uint64_t)budget : 1, req, nreq, &p, &n, &rev);
+    r->value = rev;
+    Buf b;
+    buf_init(&b);
+    buf_append(&b, p, n);
+    return answer(r, &b, st);
+}
+
 EXPORT("host_saved") int wa_host_saved(cc_wasm_res *r) {
     r->value = 0;
     if (!wasm_pf_state.has_saved) return text(r, 404, "not saved yet");

@@ -82,6 +82,9 @@ async function pictures(L, q, gpu, id, states) {
   const r = await settled(L, "any");
   if (r.using !== (gpu ? "WebGPU" : "WebGL2")) throw new Error(`${q}: ${r.using} draws: ${r.reason}`);
   await waitFor("proxies asked", 120000, () => L.evalJs("window.__bbGl.proxiesPending !== true"));
+  // VIS1 (ADR 0078 amendment 7): WebGL2 finds its 3D edges on screen; the WebGPU renderer still draws lines (it has no
+  // offscreen target yet): the WebGL2 pictures compared are its line pass (the bench hook lineEdges), like for like
+  if (!gpu) await L.evalJs("(window.__bbGl.lineEdges = true, 0)");
   await sleep(500);
   const out = new Map();
   for (const st of states) {

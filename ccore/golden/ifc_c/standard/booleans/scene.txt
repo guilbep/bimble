@@ -1,0 +1,15 @@
+schema "IFC4"
+origin 0000000000000000 40a3240000000000 4097700000000000
+georef {}
+storeys 0
+grids 0
+elements 7 triangles 196 meshes yes
+000 1YvctVUKr0kugbFTf53O9L IfcBuildingElementProxy 7 Other v=8 i=12 e=12 n=12 name="clipped" storey="" material=""
+001 2YvctVUKr0kugbFTf53O9L IfcBuildingElementProxy 7 Other v=14 i=24 e=21 n=21 name="polygonal" storey="" material=""
+002 3YvctVUKr0kugbFTf53O9L IfcBuildingElementProxy 7 Other v=48 i=96 e=52 n=52 name="drilled" storey="" material=""
+003 4YvctVUKr0kugbFTf53O9L IfcWall 7 Other v=16 i=28 e=24 n=24 name="wall" storey="" material=""
+004 7YvctVUKr0kugbFTf53O9L IfcBuildingElementProxy 7 Other v=8 i=12 e=12 n=12 name="broken boundary" storey="" material=""
+005 8YvctVUKr0kugbFTf53O9L IfcBuildingElementProxy 7 Other v=8 i=12 e=12 n=12 name="open polyline" storey="" material=""
+006 9YvctVUKr0kugbFTf53O9L IfcBuildingElementProxy 7 Other v=8 i=12 e=12 n=12 name="clipped away" storey="" material=""
+warning a clipping plane removed the whole solid; drawn unclipped
+warning polygonal half-space: boundary not closed; cut by its plane alone (×2)

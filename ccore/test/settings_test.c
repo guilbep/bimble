@@ -476,6 +476,180 @@ int main(void) {
         reset_dir();
     }
 
+    /* ---- SIZE3 (ADR 0078 amendment 5): the links' GPU budget in MB, not one of Rust's fields: written only once set.
+     * Fails on the code before SIZE3: an unknown field. ---- */
+    {
+        reset_dir();
+        cc_session *s = session_on_file();
+        free(ask(s, "action", "set_settings", "{\"moving_fps\":60}", &st));
+        size_t n = 0;
+        char *f = read_all(FILE_, &n);
+        check_true("link_gpu_mb: a file written before it is set has none", st == CC_OK && f && !strstr(f, "link_gpu_mb"));
+        free(f);
+        char *q = ask(s, "query", "settings", "", &st);
+        check_true("link_gpu_mb: 768 by default, applies", strstr(q, "\"link_gpu_mb\":768") && strstr(q, "\"link_gpu_mb\":true") != NULL);
+        free(q);
+        free(ask(s, "action", "set_settings", "{\"link_gpu_mb\":512}", &st));
+        f = read_all(FILE_, &n);
+        check_true("link_gpu_mb: set to 512, written in its sorted place", st == CC_OK && f && strstr(f, "\"gpu_cull\":false,\"link_gpu_mb\":512,\"memory_share\":"));
+        free(f);
+        q = ask(s, "query", "settings", "", &st);
+        check_true("link_gpu_mb: 512 read back", strstr(q, "\"link_gpu_mb\":512") != NULL);
+        free(q);
+        char *e = ask(s, "action", "set_settings", "{\"link_gpu_mb\":10}", &st);
+        check_true("link_gpu_mb: under 64 refused", st != CC_OK && strstr(e, "`link_gpu_mb`: a whole number of MB from 64 to 65536"));
+        free(e);
+        cc_settings d;
+        cc_settings_default(&d);
+        Buf b;
+        buf_init(&b);
+        cc_settings_to_json(&d, NULL, 0, &b);
+        buf_append(&b, "", 1);
+        check_true("link_gpu_mb: not in Rust's to_json", b.p && !strstr(b.p, "link_gpu_mb"));
+        buf_free(&b);
+        cc_session_free(s);
+        reset_dir();
+    }
+    /* TESS1 (ADR 0085): link_detail, the reader's detail for the links' conversions: standard by
+     * default, written only once set, in its sorted place; exact, standard or light. Fails on the
+     * code before TESS1: an unknown field. */
+    {
+        reset_dir();
+        cc_session *s = session_on_file();
+        free(ask(s, "action", "set_settings", "{\"moving_fps\":60}", &st));
+        size_t n = 0;
+        char *f = read_all(FILE_, &n);
+        check_true("link_detail: a file written before it is set has none", st == CC_OK && f && !strstr(f, "link_detail"));
+        free(f);
+        cc_ifc_read_opts lo;
+        cc_settings_link_opts(s, &lo);
+        check_true("link_detail: standard by default (2 mm, 18 degrees for custom)", lo.detail == CC_IFC_DETAIL_STANDARD && lo.chord_mm == 2.0 && lo.max_deg == 18.0);
+        char *q = ask(s, "query", "settings", "", &st);
+        check_true("link_detail: listed, applies", strstr(q, "\"link_detail\":\"standard\"") && strstr(q, "\"link_detail\":true") != NULL);
+        free(q);
+        free(ask(s, "action", "set_settings", "{\"link_detail\":\"light\"}", &st));
+        f = read_all(FILE_, &n);
+        check_true("link_detail: set to light, written in its sorted place",
+                   st == CC_OK && f && strstr(f, "\"gpu_cull\":false,\"link_detail\":\"light\",\"memory_share\":"));
+        free(f);
+        cc_settings_link_opts(s, &lo);
+        check_true("link_detail: light read back", lo.detail == CC_IFC_DETAIL_LIGHT);
+        free(ask(s, "action", "set_settings", "{\"link_detail\":\"custom\",\"link_chord_mm\":5,\"link_max_deg\":22.5}", &st));
+        cc_settings_link_opts(s, &lo);
+        check_true("link_detail: custom 5 mm, 22.5 degrees read back", st == CC_OK && lo.detail == CC_IFC_DETAIL_CUSTOM && lo.chord_mm == 5.0 && lo.max_deg == 22.5);
+        f = read_all(FILE_, &n);
+        check_true("link_detail: custom written in the sorted place",
+                   f && strstr(f, "\"gpu_cull\":false,\"link_chord_mm\":5.0,\"link_detail\":\"custom\",\"link_max_deg\":22.5,\"memory_share\":"));
+        free(f);
+        char *e2 = ask(s, "action", "set_settings", "{\"link_max_deg\":120}", &st);
+        check_true("link_max_deg: over 90 refused", st != CC_OK && strstr(e2, "`link_max_deg`: degrees from 1 to 90"));
+        free(e2);
+        e2 = ask(s, "action", "set_settings", "{\"link_chord_mm\":0}", &st);
+        check_true("link_chord_mm: 0 refused", st != CC_OK && strstr(e2, "`link_chord_mm`: millimetres from 0.01 to 1000"));
+        free(e2);
+        char *e = ask(s, "action", "set_settings", "{\"link_detail\":\"fine\"}", &st);
+        check_true("link_detail: another name refused", st != CC_OK && strstr(e, "`link_detail`: exact, standard, light or custom"));
+        free(e);
+        cc_session_free(s);
+        reset_dir();
+    }
+
+    /* ---- GPU2: open_app (`bimble-ccore open` in an app window), a lab field as renderer: written only once set ---- */
+    {
+        reset_dir();
+        cc_session *s = session_on_file();
+        free(ask(s, "action", "set_settings", "{\"moving_fps\":60}", &st));
+        size_t n = 0;
+        char *f = read_all(FILE_, &n);
+        check_true("open_app: a file written before it is set has no open_app member", st == CC_OK && f && !strstr(f, "open_app"));
+        free(f);
+        char *q = ask(s, "query", "settings", "", &st);
+        check_true("open_app: false by default, applies with files", q && strstr(q, "\"open_app\":false,\"recent\"") && strstr(q, "\"open_app\":true"));
+        free(q);
+        free(ask(s, "action", "set_settings", "{\"open_app\":true}", &st));
+        f = read_all(FILE_, &n);
+        check_true("open_app: set, written in its sorted place", st == CC_OK && f && strstr(f, "\"moving_proxies\":true,\"open_app\":true,\"recent\""));
+        cc_settings r;
+        check_true("open_app: read back by the host's parse", f && !cc_settings_parse(f, n, &r) && r.open_app == 1);
+        free(f);
+        char *e = ask(s, "action", "set_settings", "{\"open_app\":\"yes\"}", &st);
+        check_true("open_app: not a boolean refused", st != CC_OK && e && strstr(e, "`open_app`: true or false"));
+        free(e);
+        free(ask(s, "action", "set_settings", "{\"open_app\":false}", &st));
+        f = read_all(FILE_, &n);
+        check_true("open_app: back to false, written (the file had it)", st == CC_OK && f && strstr(f, "\"open_app\":false"));
+        free(f);
+        cc_settings d;
+        cc_settings_default(&d);
+        Buf b;
+        buf_init(&b);
+        cc_settings_to_json(&d, NULL, 0, &b);
+        buf_append(&b, "", 1);
+        check_true("open_app: not in Rust's to_json", b.p && !strstr(b.p, "open_app"));
+        buf_free(&b);
+        cc_session_free(s);
+        reset_dir();
+    }
+
+    /* ---- VIS1 (ADR 0078 amendment 7): "Draw only what can be seen", not one of Rust's fields: written only once set ---- */
+    {
+        reset_dir();
+        cc_session *s = session_on_file();
+        free(ask(s, "action", "set_settings", "{\"moving_fps\":60}", &st));
+        size_t n = 0;
+        char *f = read_all(FILE_, &n);
+        check_true("draw_visible: a file written before it is set has no draw_visible member", st == CC_OK && f && !strstr(f, "draw_visible"));
+        free(f);
+        char *q = ask(s, "query", "settings", "", &st), g[64];
+        value_of(q, "draw_visible", g, sizeof g); /* applies (the first object of the answer) */
+        check_true("draw_visible: false by default, and it applies", strstr(q, "\"draw_visible\":false,\"edge_mode\":\"screen\",\"gpu_cull\":") && !strcmp(g, "true"));
+        free(q);
+        free(ask(s, "action", "set_settings", "{\"draw_visible\":true}", &st));
+        f = read_all(FILE_, &n);
+        check_true("draw_visible: set on, written in its sorted place", st == CC_OK && f && strstr(f, "\"coordinates\":\"survey\",\"draw_visible\":true,\"gpu_cull\":"));
+        free(f);
+        q = ask(s, "query", "settings", "", &st);
+        check_true("draw_visible: on read back", q && strstr(q, "\"draw_visible\":true"));
+        free(q);
+        char *e = ask(s, "action", "set_settings", "{\"draw_visible\":1}", &st);
+        check_true("draw_visible: not a boolean refused", st != CC_OK && strstr(e, "`draw_visible`: true or false"));
+        free(e);
+        free(ask(s, "action", "set_settings", "{\"draw_visible\":false}", &st));
+        f = read_all(FILE_, &n);
+        check_true("draw_visible: back off, written (the file had it)", st == CC_OK && f && strstr(f, "\"draw_visible\":false"));
+        free(f);
+        cc_settings d;
+        cc_settings_default(&d);
+        Buf b;
+        buf_init(&b);
+        cc_settings_to_json(&d, NULL, 0, &b);
+        buf_append(&b, "", 1);
+        check_true("draw_visible: not in Rust's to_json", b.p && !strstr(b.p, "draw_visible"));
+        /* the other optimisations of the 3D view (the owner: each a setting, a good default and an exact value) */
+        check_true("VIS1: edge_mode, cull_back, still_px, refill_offscreen not in Rust's to_json",
+                   b.p && !strstr(b.p, "edge_mode") && !strstr(b.p, "cull_back") && !strstr(b.p, "still_px") && !strstr(b.p, "refill_offscreen"));
+        buf_free(&b);
+        {
+            char *q2 = ask(s, "query", "settings", "", &st);
+            check_true("VIS1: defaults: edges on screen, no back-face culling, no pixel cut, the refill offscreen",
+                       q2 && strstr(q2, "\"cull_back\":false") && strstr(q2, "\"edge_mode\":\"screen\"") && strstr(q2, "\"still_px\":0") && strstr(q2, "\"refill_offscreen\":true"));
+            free(q2);
+            free(ask(s, "action", "set_settings", "{\"edge_mode\":\"lines\",\"cull_back\":true,\"still_px\":1.5,\"refill_offscreen\":false}", &st));
+            char *f2 = read_all(FILE_, &n);
+            check_true("VIS1: set, written in their sorted places", st == CC_OK && f2 && strstr(f2, "\"cull_back\":true,\"draw_visible\":false,\"edge_mode\":\"lines\",\"gpu_cull\":")
+                       && strstr(f2, "\"refill_offscreen\":false,") && strstr(f2, "\"still_px\":1.5,\"text_size\":"));
+            free(f2);
+            char *e2 = ask(s, "action", "set_settings", "{\"edge_mode\":\"dots\"}", &st);
+            check_true("VIS1: an unknown edge mode refused", st != CC_OK && e2 && strstr(e2, "`edge_mode`: screen, lines or none"));
+            free(e2);
+            e2 = ask(s, "action", "set_settings", "{\"still_px\":9}", &st);
+            check_true("VIS1: a pixel cut over 8 refused", st != CC_OK && e2 && strstr(e2, "`still_px`: pixels, from 0 (off) to 8"));
+            free(e2);
+        }
+        cc_session_free(s);
+        reset_dir();
+    }
+
     /* ---- the actions, the capabilities, query about ---- */
     {
         cc_session *s = cc_session_new(cc_platform_native());

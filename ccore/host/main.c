@@ -13,12 +13,19 @@
  *                             with no model. The calls open, create, save and close models later
  *                             (`action new|open|save|save_as|export_ifc4|export_ifc2x3|close`,
  *                             session/calls.c file_action); the session file follows them
- *   bimble-ccore open [--port N] [--no-browser] [--web dir] [--session[=file]] [model]
+ *   bimble-ccore open [--port N] [--no-browser] [--app|--no-app] [--web dir] [--session[=file]] [model]
  *                             the desktop (ADR 0069 rule 2, ticket R1): also serves the built lab
  *                             from <exe dir>/web/ (or --web; static.h), on a free port of
  *                             127.0.0.1 (or N), prints the lab's URL on stdout and starts xdg-open
  *                             (`open` on macOS)
  *                             on it (not with --no-browser). Always --warm.
+ *                             --app (GPU2; or the setting open_app, --no-app to refuse it): a
+ *                             Chromium-family browser (BIMBLE_BROWSER, else chromium, google-chrome…
+ *                             on PATH; Chrome or Chromium in /Applications) in an app window
+ *                             (--app=<url>) with its own profile (<config dir>/browser) and, on
+ *                             Linux, the flags that give WebGPU there (--use-angle=vulkan
+ *                             --enable-features=Vulkan --enable-unsafe-webgpu: Chromium 153 on Asahi
+ *                             gives WebGPU no adapter without them); none found: the opening above
  *   bimble-ccore --version    prints ccore/VERSION (build.sh passes it as CC_RELEASE_VERSION)
  *   FS1, in both modes:      --root <dir> (repeatable): a folder the page's file dialog may list
  *                             beside the home folder and the model's folder (fs.h, the path rule);
@@ -59,6 +66,7 @@
 #include "static.h"
 #include "fs.h"            /* FS1 */
 #include "settings_file.h" /* FS1 */
+#include "settings.h"      /* GPU2: open_app */
 #include "link_cache.h"    /* LINKF: link-convert */
 
 #ifdef __APPLE__
@@ -112,7 +120,45 @@ static int parse_port(const char *s, unsigned *out) {
 typedef struct {
     const char *token;
     int browser;
+    /* GPU2: an app window of a Chromium-family browser (its path) with its own profile folder; "" none */
+    char app_bin[1024];
+    char app_profile[4300];
 } OpenCtx;
+
+/* ---- GPU2: `open --app` ---- */
+#ifndef _WIN32
+/* The flags a Chromium-family browser needs for WebGPU on this platform (only those found needed). */
+static const char *const APP_GPU_FLAGS[] = {
+#if defined(__linux__)
+    "--use-angle=vulkan", "--enable-features=Vulkan", "--enable-unsafe-webgpu", /* verified: Chromium 153, Asahi (REAL1, GPU2) */
+#endif
+    NULL};
+
+/* A Chromium-family browser: BIMBLE_BROWSER (a path), else the first of the usual names on PATH, else (macOS) an
+ * app bundle. 1 when found (its path in out). */
+static int find_app_browser(char *out, size_t n) {
+    const char *e = cc_host_getenv("BIMBLE_BROWSER");
+    if (e && *e) return access(e, X_OK) == 0 && snprintf(out, n, "%s", e) < (int)n;
+    static const char *const NAMES[] = {"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "brave-browser", "microsoft-edge", NULL};
+    const char *path = cc_host_getenv("PATH");
+    for (int k = 0; path && NAMES[k]; k++) {
+        const char *p = path;
+        while (*p) {
+            const char *c = strchr(p, ':');
+            size_t L = c ? (size_t)(c - p) : strlen(p);
+            if (L && snprintf(out, n, "%.*s/%s", (int)L, p, NAMES[k]) < (int)n && access(out, X_OK) == 0) return 1;
+            p += L + (c ? 1 : 0);
+        }
+    }
+#ifdef __APPLE__
+    static const char *const APPS[] = {"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", NULL};
+    for (int k = 0; APPS[k]; k++)
+        if (access(APPS[k], X_OK) == 0) return snprintf(out, n, "%s", APPS[k]) < (int)n;
+#endif
+    return 0;
+}
+#endif
+/* ---- end GPU2 ---- */
 
 static void url_put_token(Buf *b, const char *t) { /* encodeURIComponent's unreserved set */
     static const char hex[] = "0123456789ABCDEF";
@@ -148,6 +194,18 @@ static void on_listen(uint16_t port, void *ctx) {
     }
 #else
     if (o->browser && !url.oom) {
+        /* GPU2: an app window: --app=<url>, its own profile, the WebGPU flags (else the opener below) */
+        char app[4200], prof[4400];
+        const char *argv_app[16];
+        int na = 0;
+        if (o->app_bin[0]) {
+            snprintf(app, sizeof app, "--app=%s", u), snprintf(prof, sizeof prof, "--user-data-dir=%s", o->app_profile);
+            argv_app[na++] = o->app_bin, argv_app[na++] = app, argv_app[na++] = prof;
+            argv_app[na++] = "--no-first-run", argv_app[na++] = "--no-default-browser-check";
+            for (int k = 0; APP_GPU_FLAGS[k]; k++) argv_app[na++] = APP_GPU_FLAGS[k];
+            argv_app[na] = NULL;
+            fprintf(stderr, "bimble-ccore: opening %s in an app window (profile %s)\n", o->app_bin, o->app_profile);
+        }
         /* Two forks: the browser opener is not our child, so no zombie and no wait. */
         pid_t p = fork();
         if (p == 0) {
@@ -158,6 +216,7 @@ static void on_listen(uint16_t port, void *ctx) {
                 /* The listening socket and the rest are not the browser's: a browser started
                  * by xdg-open would keep the port after the host stopped. */
                 for (int fd = 3; fd < 1024; fd++) close(fd);
+                if (na) execv(argv_app[0], (char *const *)argv_app); /* GPU2 */
                 execlp(BROWSER_OPENER, BROWSER_OPENER, u, (char *)NULL);
                 _exit(127);
             }
@@ -305,6 +364,14 @@ static int serve(unsigned port, Serve *sv) {
         if (cm && *cm) ses->link_cache_min = strtoull(cm, NULL, 10);
         const char *cb = cc_host_getenv("BIMBLE_LINK_CACHE_BESIDE"); /* "0": only the cache folder */
         ses->link_no_beside = cb && !strcmp(cb, "0");
+        const char *mb = cc_host_getenv("BIMBLE_LINK_MESH_BUDGET_MB"); /* SIZE3: decoded link meshes kept at rest */
+        if (mb && *mb) ses->link_mesh_budget = strtoull(mb, NULL, 10) << 20;
+        const char *km = cc_host_getenv("BIMBLE_LINK_KEEP_MS"); /* SIZE3: tests */
+        if (km && *km) ses->link_keep_ms = strtod(km, NULL);
+        const char *id = cc_host_getenv("BIMBLE_LINK_INDEX_DELAY_MS"); /* SIZE3 (E): tests */
+        if (id && *id) ses->link_index_delay_ms = strtod(id, NULL);
+        const char *tl = cc_host_getenv("BIMBLE_TILES"); /* TILE1: the pyramids' bake settings ("leaf=40000 occ=64 …") */
+        if (tl && *tl) cc_tiles_opts_parse(&ses->tiles_opts, tl);
     }
     const char *model = sv->model;
     if (model && *model) {
@@ -362,7 +429,7 @@ static int serve(unsigned port, Serve *sv) {
 }
 
 static const char OPEN_USAGE[] =
-    "usage: bimble-ccore open [--port N] [--no-browser] [--web dir] [--session[=file]] [--root dir]... [--config-dir dir] [model]\n";
+    "usage: bimble-ccore open [--port N] [--no-browser] [--app|--no-app] [--web dir] [--session[=file]] [--root dir]... [--config-dir dir] [model]\n";
 
 /* bimble-ccore open ... (see the header). argv[0] is "open". */
 static int open_main(const char *argv0, int argc, char **argv) {
@@ -370,7 +437,9 @@ static int open_main(const char *argv0, int argc, char **argv) {
     memset(&sv, 0, sizeof sv);
     sv.warm = 1;
     sv.default_config = 1; /* FS1: the desktop keeps Rust's settings file */
-    OpenCtx oc = {NULL, 1};
+    static OpenCtx oc; /* (its path buffers: not on the stack of a fork's parent frame) */
+    oc.token = NULL, oc.browser = 1;
+    int app = -1; /* GPU2: --app 1, --no-app 0, else the setting open_app */
     unsigned port = 0;
     const char *web = NULL;
     int i = 1;
@@ -380,6 +449,8 @@ static int open_main(const char *argv0, int argc, char **argv) {
         if (ff < 0) return 2;
         if (ff) continue;
         if (!strcmp(a, "--no-browser")) oc.browser = 0;
+        else if (!strcmp(a, "--app")) app = 1; /* GPU2 */
+        else if (!strcmp(a, "--no-app")) app = 0;
         else if (!strcmp(a, "--session")) sv.want_session = 1;
         else if (!strncmp(a, "--session=", 10) && a[10]) sv.want_session = 1, sv.session = a + 10;
         else if (!strcmp(a, "--port") && i + 1 < argc) {
@@ -401,6 +472,35 @@ static int open_main(const char *argv0, int argc, char **argv) {
         return 2;
     }
     sv.model = i < argc ? argv[i] : NULL;
+    /* GPU2: an app window (--app, or the setting open_app in settings.json): a Chromium-family browser and a
+     * profile folder beside the settings; none found: the system's opener */
+    {
+        char dbuf[4200];
+        const char *dir = settings_dir(&sv, dbuf, sizeof dbuf);
+        if (app < 0 && dir) {
+            char f[4300];
+            snprintf(f, sizeof f, "%s/settings.json", dir);
+            FILE *fp = fopen(f, "rb");
+            if (fp) {
+                char *txt = malloc(CC_SETTINGS_MAX_BYTES + 1);
+                size_t n = txt ? fread(txt, 1, CC_SETTINGS_MAX_BYTES, fp) : 0;
+                cc_settings st;
+                if (txt && !cc_settings_parse(txt, n, &st)) app = st.open_app;
+                free(txt);
+                fclose(fp);
+            }
+        }
+#ifndef _WIN32
+        if (app > 0 && oc.browser) {
+            if (!dir) fprintf(stderr, "bimble-ccore: --app: no settings folder for its profile: the usual opening\n");
+            else if (!find_app_browser(oc.app_bin, sizeof oc.app_bin)) fprintf(stderr, "bimble-ccore: --app: no Chromium-family browser found: the usual opening\n");
+            else snprintf(oc.app_profile, sizeof oc.app_profile, "%s/browser", dir);
+            if (!dir) oc.app_bin[0] = 0;
+        }
+#else
+        if (app > 0 && oc.browser) fprintf(stderr, "bimble-ccore: --app: not on Windows yet: the usual opening\n");
+#endif
+    }
     static char defweb[PATH_MAX + 8];
     if (!web) {
         if (!default_web(argv0, defweb, sizeof defweb)) {
@@ -441,17 +541,20 @@ static char **utf8_argv(int *argc) {
 }
 #endif
 
-/* LINKF: bimble-ccore link-convert [--cache-dir DIR] [--keep] FILE...: each file through a link's
+/* LINKF: bimble-ccore link-convert [--cache-dir DIR] [--keep] [--index|--reindex] FILE...: each file through a link's
  * conversion (session/link_cache.h), one at a time, in the order given; with --cache-dir the
  * caches go only there (nothing written beside the files). One line per file: bytes, ms, elements,
  * shapes, triangles, cache bytes, from the cache or read. --keep: every scene kept until the end,
- * then the totals (all of them loaded together). Exit 1 when one failed. */
+ * then the totals (all of them loaded together). TILE1: --index runs the indexing job (proxies, tile pyramid) after a
+ * conversion, --reindex also on a complete cache (its time and the process's peak alone). Exit 1 when one failed. */
 static int link_convert_main(int argc, char **argv) {
     const cc_platform *pf = cc_platform_native();
-    int keep = 0, no_beside = 0, bad = 0;
+    int keep = 0, no_beside = 0, bad = 0, index = 0;
     int i = 1;
     for (; i < argc && !strncmp(argv[i], "--", 2); i++) {
         if (!strcmp(argv[i], "--keep")) keep = 1;
+        else if (!strcmp(argv[i], "--index")) index = 1; /* TILE1 */
+        else if (!strcmp(argv[i], "--reindex")) index = 2; /* TILE1: a complete cache indexed again (timing, peak) */
         else if (!strcmp(argv[i], "--cache-dir") && i + 1 < argc) {
 #ifndef _WIN32
             setenv("BIMBLE_CACHE_DIR", argv[++i], 1);
@@ -460,17 +563,20 @@ static int link_convert_main(int argc, char **argv) {
 #endif
             no_beside = 1;
         } else {
-            fprintf(stderr, "usage: bimble-ccore link-convert [--cache-dir DIR] [--keep] FILE...\n");
+            fprintf(stderr, "usage: bimble-ccore link-convert [--cache-dir DIR] [--keep] [--index|--reindex] FILE...\n");
             return 2;
         }
     }
     cc_link_job **kept = calloc((size_t)argc, sizeof *kept);
     if (!kept) return 1;
+    cc_tiles_opts topts; /* TILE1: BIMBLE_TILES, else the defaults */
+    cc_tiles_opts_parse(&topts, cc_host_getenv("BIMBLE_TILES"));
     double t0 = pf->now_ms(pf->ctx);
     uint64_t te = 0, tt = 0, ts = 0;
     for (int k = 0; i < argc; i++, k++) {
         cc_link_job *j = cc_link_job_new(pf, argv[i]);
         if (!j) return 1;
+        j->topts = topts;
         j->cache_min = 0, j->no_beside = no_beside;
         cc_link_job_run(j);
         if (j->rc) {
@@ -487,6 +593,32 @@ static int link_convert_main(int argc, char **argv) {
                (unsigned long long)j->bytes, j->ms, ne, ns, (unsigned long long)nt, (unsigned long long)j->cache_bytes,
                j->from_cache ? "from-cache" : "read");
         fflush(stdout);
+        if (index && (j->incomplete || index == 2) && j->cache[0]) { /* TILE1: the indexing job (proxies, tiles) run here, timed */
+            cc_link_job *x = cc_link_job_new(pf, argv[i]);
+            if (!x) return 1;
+            x->topts = topts;
+            x->index_only = 1;
+            snprintf(x->cache, sizeof x->cache, "%s", j->cache);
+            snprintf(x->log, sizeof x->log, "%s", j->log);
+            cc_link_job_free(j); /* its mapping goes before the cache is rewritten */
+            j = NULL;
+            cc_link_job_run(x);
+            long pk = 0;
+#ifndef _WIN32
+            struct rusage ru2;
+            if (!getrusage(RUSAGE_SELF, &ru2)) pk = (long)ru2.ru_maxrss;
+#endif
+            printf("file %d: indexed %s ms %.0f hlod_ms %.0f tiles %llu levels %llu proxy_tris %llu tiles_bytes %llu tiles_ms %.0f cache_bytes %llu peak_rss_kB %ld%s%s\n",
+                   k + 1, x->rc ? "failed" : "ok", x->ms, x->hlod_ms, (unsigned long long)x->tiles_count, (unsigned long long)x->tiles_levels,
+                   (unsigned long long)x->tiles_proxy_tris, (unsigned long long)x->tiles_bytes, x->tiles_ms, (unsigned long long)x->cache_bytes, pk,
+                   x->tiles_why[0] ? " " : "", x->tiles_why);
+            fflush(stdout);
+            if (x->rc) bad = 1;
+            if (keep) kept[k] = x;
+            else cc_link_job_free(x);
+            te += ne, ts += ns, tt += nt;
+            continue;
+        }
         te += ne, ts += ns, tt += nt;
         if (keep) kept[k] = j;
         else cc_link_job_free(j);

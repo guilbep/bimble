@@ -28,20 +28,24 @@ int cc_links_panel_json(struct cc_session *s, Buf *out) {
         char ext[32];
         ext_of(k->name, ext);
         /* LINKF: the conversion's state and the link's numbers (links.h) */
-        const cc_scene *sc = cc_link_scene(k);
-        uint64_t tris = 0;
-        for (size_t e = 0; e < sc->nelements; e++) {
-            const cc_mesh *lm = cc_scene_local_mesh(sc, e);
-            if (lm && (sc->elements[e].shape < 0)) tris += lm->ni / 3;
-        }
-        for (size_t e = 0; e < sc->nshapes; e++) tris += sc->shapes[e].ni / 3; /* each shared shape once */
+        const cc_scene *sc = cc_link_rows(k); /* SIZE3: rows only (a link read in place is not decoded for it) */
+        uint64_t tris = cc_link_triangles(k); /* SIZE3: from the counts */
         jw_obj_begin(&w);
         jw_key(&w, "bytes"), jw_u64(&w, k->bytes);
         jw_key(&w, "cache"), k->cache ? jw_str(&w, k->cache) : jw_null(&w);
         jw_key(&w, "cache_mtime_s"), jw_i64(&w, k->cache ? k->cache_mtime_s : 0);
         jw_key(&w, "colour"), k->colour >= 0 ? jw_u64(&w, (uint64_t)k->colour) : jw_null(&w);
+        if (k->detail_own) { /* TESS1: its own reader detail (named at a Reload); absent: the settings' */
+            static const char *const D[] = {"exact", "standard", "light", "custom"};
+            jw_key(&w, "detail"), jw_obj_begin(&w);
+            if (k->detail.detail == CC_IFC_DETAIL_CUSTOM)
+                jw_key(&w, "chord_mm"), jw_f64(&w, k->detail.chord_mm), jw_key(&w, "max_deg"), jw_f64(&w, k->detail.max_deg);
+            jw_key(&w, "name"), jw_str(&w, D[(int)k->detail.detail & 3]);
+            jw_obj_end(&w);
+        }
         jw_key(&w, "elements"), jw_u64(&w, sc->nelements);
         jw_key(&w, "from_cache"), jw_bool(&w, k->from_cache);
+        jw_key(&w, "indexing"), jw_bool(&w, k->indexing != 0); /* SIZE3 (E): ready, its proxies being baked */
         jw_key(&w, "kind"), jw_str(&w, ext);
         jw_key(&w, "log"), k->log ? jw_str(&w, k->log) : jw_null(&w);
         jw_key(&w, "message"), k->msg ? jw_str(&w, k->msg) : jw_null(&w);

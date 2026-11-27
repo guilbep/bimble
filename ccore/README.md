@@ -29,7 +29,7 @@ independent tasks on pthreads natively (serial in wasm), with one global, the th
 | L3 api | verbs, query | `src/verbs`, `query` |
 | L4 store | journal, repo, remote | `src/repo` (the history store, read only: ticket H1), `diff` (`version::diff`) |
 | L5 session | call router, sessions (handles: `cc_session *`), selection, placing, scene and /mesh caches, session file, platform interface | `session/calls`, `session`, `mesh`, `mesh_model`, `platform`, `versions` (the history queries), `settings_file` (the recent files, FS1), `settings` (the user's settings, About: SET1) |
-| L6 carriers | wasm module, HTTP host (native platform, `main`), MCP over stdio, later cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/static.c`, `host/platform_native.c`, `host/main.c`, `host/mcp.c`, `host/fs.c` (the page's file dialog, `POST /stage`: FS1) |
+| L6 carriers | wasm module, HTTP host (native platform, `main`), MCP over stdio, later cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/static.c`, `host/platform_native.c`, `host/main.c`, `host/mcp.c`, `host/fs.c` (the page's file dialog, `POST /stage`: FS1); the native Linux app `bimble` (`native/`: ADR 0084, NUI1; SDL3, its GPU, threads) |
 
 A process holds any number of sessions (`cc_session_new(platform)`); the native host serves one
 (`main.c` creates it and passes it to `server.c` in `cc_host_config`), the wasm module's `host_*`
@@ -42,6 +42,7 @@ Build (from the repo root; output goes to `ccore/out/`, which git ignores):
     ccore/build.sh release  # the Linux release archive (see "Release")
     ccore/build.sh wasm     # clang freestanding wasm32, no libc
     ccore/build.sh wasm-view  # the viewer-only wasm32 (ADR 0069), fails over 1,000,000 bytes
+    ccore/build.sh native-app # the native Linux app, out/app/bimble (ADR 0084; DEV.md section 2b)
 
 The viewer-only wasm (`out/wasm/ccore-view.wasm`, ticket W1) is the wasm build without the files in
 `VIEW_DENY` (build.sh: verbs, the verb table, the IFC import and writer), with `-DCC_VIEW_ONLY` and

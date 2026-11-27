@@ -260,6 +260,15 @@ static int fields(cc_scene *s, size_t n, uint32_t g) {
 }
 
 /* SIZE2: the view file of a scene without a model (META from its ids) read back, then compare4. */
+static int mapped_block(const void *ctx, int shape, size_t i, Buf *out) {
+    const cc_viewfile *v = ctx;
+    const uint8_t *p;
+    size_t n;
+    if (cc_viewfile_block(v, shape ? i : v->nshapes + i, &p, &n)) return -1;
+    buf_append(out, p, n);
+    return 0;
+}
+
 static void via_viewfile_meta(const char *what, const cc_scene *s) {
     cc_viewfile_meta mt;
     cc_viewfile_meta_init(&mt);
@@ -284,6 +293,33 @@ static void via_viewfile_meta(const char *what, const cc_scene *s) {
     ok = ok && cc_view_scene(&vs, &v, &err) == 0;
     check_true("a heavy view file's scene read back", ok);
     if (ok) compare4(what, &vs, 1, elem);
+    if (ok) { /* SIZE3: read in place: its version 4 from the file's own blocks is the decoded scene's, byte
+               * for byte (no mesh decoded); materialized, its version 3 is the reader's */
+        cc_viewfile m;
+        cc_scene ms;
+        Buf a4, b4, a3, b3;
+        buf_init(&a4), buf_init(&b4), buf_init(&a3), buf_init(&b3);
+        int mk = cc_viewfile_read_mapped((const uint8_t *)vf.p, vf.len, &m, &err) == 0 && m.lazy && cc_view_scene(&ms, &m, &err) == 0;
+        int none = mk;
+        for (size_t k = 0; mk && k < m.nelements; k++) none &= m.elements[k].mesh.pos == NULL;
+        mk = mk && cc_scene_bmsh4(&vs, NULL, NULL, 7, &a4, &err) == 0 &&
+             cc_scene_bmsh4_blocks(&ms, NULL, NULL, 7, mapped_block, &m, &b4, &err) == 0;
+        check_true("SIZE3: read in place, no mesh array kept", none);
+        check_true("SIZE3: version 4 from the file's blocks = from the decoded scene", mk && a4.len == b4.len && !memcmp(a4.p, b4.p, a4.len));
+        Arena ar;
+        arena_init(&ar, 0);
+        uint64_t mb = 0;
+        int mat = mk && cc_viewfile_materialize(&m, &ar, &mb) == 0;
+        for (size_t k = 0; mat && k < m.nelements; k++) ms.elements[k].mesh = m.elements[k].mesh;
+        mat = mat && cc_scene_bmsh3(&vs, NULL, NULL, 7, &a3, &err) == 0 && cc_scene_bmsh3(&ms, NULL, NULL, 7, &b3, &err) == 0;
+        check_true("SIZE3: materialized, version 3 = the reader's", mat && a3.len == b3.len && !memcmp(a3.p, b3.p, a3.len) && mb > 0);
+        printf("  %s read in place: version 4 %zu bytes from its blocks; %llu bytes decoded on demand\n", what, b4.len, (unsigned long long)mb);
+        if (mk) cc_scene_free(&ms);
+        cc_viewfile_dematerialize(&m);
+        arena_free(&ar);
+        cc_viewfile_free(&m);
+        buf_free(&a4), buf_free(&b4), buf_free(&a3), buf_free(&b3);
+    }
     cc_scene_free(&vs);
     if (ok) cc_viewfile_free(&v);
     buf_free(&vf);

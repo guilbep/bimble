@@ -8,6 +8,9 @@
   path; no file format, no golden). Amendment 2 (ticket 3D2) adds the BPRX answer beside BMSH and
   `src/hlod.c`, `src/bvh.c`: as low. Amendment 3 (ticket LNK3D) adds a section to the link cache
   (format 4: older caches are converted again), two queries and a key in the change JSON with links: low.
+  Amendment 6 (ticket TILE1) adds a section `TILE` to the link cache (format 7: a format 6 cache is
+  indexed again from itself, not converted), three `/mesh` answers and one wasm call; nothing on the page's
+  draw path yet: low.
 
 ## Context / Problem
 
@@ -260,7 +263,8 @@ GPU at once. The choices below by Claude on ticket LNK3D under the same delegati
    are drawn by WebGL2 for now"; WebGPU takes over again when the links go. Without links it stays
    correct: a visibility change gives `shown` a new array, so its lists are made again. **Alternative:**
    the placement rows and a model index in its colour table (`0xMMRRGGBB`, `gl/cull.ts` `xfRows`) and an
-   element per edge vertex in `gpu/` (its edges know no element yet): the follow-up.
+   element per edge vertex in `gpu/` (its edges know no element yet): the follow-up. *(Superseded on 27 Nov 2026 by ADR
+   0083's amendment, ticket GPU2: WebGPU draws links from these same structures; nothing falls back for links.)*
 
 ### Evidence (ticket LNK3D)
 
@@ -348,7 +352,465 @@ links' detail within the default budget); still frame 104 ms (67.9 M triangles d
 peaked at 2.0 GB during the open (every link's mesh read back before the first upload: decision 24 drops them after);
 uploading each link as it arrives would bound that peak.
 
+## Amendment 5 (27 Nov 2026, ticket SIZE3): copies shared as Rust, a folder opened within bounds, the GPU budget a setting
+
+The Rust and C comparison on a real folder (`docs/research/2026-11-27-rust-vs-c-on-a-real-folder.md`) left four gaps for
+the page: an imported `.bimble` model stored 2.0 M triangles where Rust stores 0.30 M, the tab's JS heap peaked at 2.0 GB
+while a folder of 17 links opened, the GPU held 1.62 GB of links (the budget never bit), the first detailed frame came
+after 10.5 s. Choices by Claude on ticket SIZE3 under the same delegation.
+
+27. **A model's copies are shared as Rust's `Scene::from_model` shares them** (`ccore/src/scene.c` `shared_shapes`,
+   `scene.rs:266-312`): elements whose mesh generators hold one positions array (the binary `.bimble`'s table of mesh
+   arrays, ADR 0042 decision 4: one array per IfcMappedItem's shape), uncut, are one shape meshed once (the first one's
+   `element_mesh`: crease edges, no edge normals) and placed by their placement and storey; the scene's origin takes
+   their placed boxes' corners (`Body::Instance`). C meshed each element alone and relied on `share_copies` alone,
+   whose fit finds turned, scaled and stretched copies but not those its bucket cap (16 shapes of one vertex, triangle
+   and edge count) leaves out. Per kind of copy (`test/scene_dedup_test.c`), dedup shares translated, turned (90° about
+   z, 30° about an oblique axis), scaled, stretched and within-0.1-mm copies, not mirrored ones (faces kept outward),
+   faces in another order, nor a corner 0.2 mm off: as `dedup.rs`, whose test is ported. Every Rust golden unchanged.
+   **Alternative:** raise or drop the bucket cap (hostile buckets of thousands of distinct meshes: quadratic fits).
+28. **A folder opens with bounded page memory, its detail on demand.** Each link's mesh (BMSH version 4) is read in a
+   Web Worker (`gl/bmsh4.worker.ts`, the bytes transferred both ways), one link at a time, the smallest first. A link
+   whose version 3 bytes fit what is left of 128 MB (`OPEN_KEEP_BYTES`) is decoded whole and uploaded with the open;
+   the first that does not is read as its rows and its elements' boxes only (`bmsh4Rows`: one block decoded at a time
+   into a scratch, the boxes in `upload`'s arithmetic, `bake`'s rows), and every later one is asked as the host's rows
+   answer (`GET /mesh?link=k&rows=1`, `cc_link_rows_answer`: version 4 with no block, then each element's box computed
+   by the host in the page's f32 arithmetic: no mesh moves), never their whole arrays: its rows, boxes and batches stand without
+   them (`Bmsh.dropped`, `preBox`). Its detail is asked again only when a frame wants it (its batches in view and not
+   replaced by its proxies), two links at most at a time, the largest on screen first (`wantScore`), then uploaded and dropped
+   from the page (amendment 4); until then its proxies stand for it, by their normal cut when the frame does not want its
+   detail (`wantedLast`), else by its coarsest. **Alternative:** a pipeline of 2 (twice the transient memory for little:
+   the fetch is not the slow part); decode on the page's thread in slices (25 ms slices: over a frame).
+29. **The links' GPU budget is a setting in MB** (`link_gpu_mb`, 64 to 65536, 768 by default; `ccore/session/settings.c`,
+   not Rust's: written to the file only once set, as `renderer`), in Settings and in the performance panel and report
+   ("linked files on the GPU: used of budget"). Before: `memory_share` of half of `navigator.deviceMemory` (Chromium caps
+   it at 8 GiB: 3.2 GB here); 1.62 GB of links never reached it. **Alternative:** keep the automatic share (it cannot know
+   the GPU's own memory; the owner asked for a number he can see).
+
+30. **A link's proxies may arrive after it is drawn** (ADR 0079 amendment, decision 23: a link is ready before its
+   proxies are baked): `query link_draw`'s `proxies` counter moves, the page asks that link's proxies, releases its
+   detail and makes its batches again by their leaves (`refreshLinkProxies`); its detail comes back grouped when a frame
+   wants it. **Alternative:** ask the whole mesh again (every link's rows and boxes: 227 MB on the local folder, per
+   link indexed).
+
+### Evidence (ticket SIZE3)
+
+A local imported model (`.bimble`, 1,749 elements, 2.2 M triangles; `scene.c` before and after, one process):
+elements placed as copies 1,081 → 1,472 (Rust: 1,472), stored triangles 1,674,526 → 302,909 (Rust: 304,381), BMSH
+version 3 66.8 → 12.4 MB, version 4 17.4 → 2.7 MB, its scene built in 1,067 → 170 ms (Rust reads and meshes it in
+180-220 ms).
+
+`ccore/tools/frames.mjs --links 17` (the synthetic set), native host, `LAB_GPU=vulkan` (ANGLE, Mesa, Apple M1 Pro), load
+8.7: first picture (proxies) 475 ms, the links in view detailed at 1,074 ms, complete 1,335 ms (SIZE2: 359 → 869 ms: the
+detail now follows the frames' wants), the open's JS heap and array buffers at most 57.5 MB (polled every 250 ms), every
+decode in the worker, GPU 34.4 MB, still 6.4 ms, moving 4.8 ms (SIZE2: 6.6 / 4.7). `lab_links_3d`: an open with a budget
+of 0 decodes no link whole and gives the same picture as an open keeping them all (0 pixels differ by more than 40 levels), once the
+links in view are back.
+
+A local folder of 17 IFC files (4.18 GB, 252,189 elements, 22.5 M stored triangles), from its caches, the same tool's
+folder mode, `LAB_GPU=vulkan`, load 2.6, against SIZE2's run of the day before: first picture 0.76 → 0.88 s (proxies),
+the links in view detailed 10.5 → 5.0 s (14 of 17 links' detail on the GPU, the other three out of view or far), GPU
+1.62 GB → 0.94 GB (the links' detail 0.95 GB against a budget of 0.77 GB: the links on screen are kept past it), still
+frame 104 → 113 ms (67.9 M triangles), moving 77 → 80 ms, JS heap and array buffers after the open 59 + 76 → 62 + 85 MB.
+Their peak: 2.0 GB → 0.59, 0.93 and 1.33 GB in three runs: the open itself stays within 128 MB of decoded arrays plus
+the rows, but a wanted large link's detail is still decoded and uploaded whole (one link of 420 MB of arrays: its
+version 3 bytes, its index lists and its vertex tables at once), and the collector frees the one before late.
+With the host's rows answers (the folder converted fresh by the same build, load 9.2): first picture 0.79 s, the links
+in view detailed at 3.3 s, complete 3.8 s; still 109 ms, moving 84 ms; the links' detail took 1.68 GB at the first
+quiet frame (every link on screen is "needed" and kept past the budget: the budget releases only links off screen or
+far; a tile pyramid per link, not a whole link, is the unit that would bound it), 0.94 GB of GPU in all later.
+## Amendment 6 (27 Nov 2026, ticket TILE1): a tile pyramid per link, baked at conversion, served by tile
+
+The owner, on his folder of 17 linked IFC files (110.5 M triangles): the lab draws 68 to 74 M triangles per still frame
+for 2.4 M pixels; the page's cost is triangle throughput; whole links are the unit of fetch, upload and release. "we should
+have several resolutions like for tiling maps!". Choices by Claude on ticket TILE1 under the same delegation; the page's
+frame over tiles is ticket VIS1's, a native viewer's NAT2's: both read what is below. Code: `ccore/src/tiles.{h,c}`
+(builder, reader, walker), `hlod_grid.h` (hlod.c's clusters shared), `session/link_cache.c` (indexing),
+`session/mesh.c` + `host/server.c` (answers), `src/wasm_api.c` (`host_tiles`), `web-ui/src/gl/tiles.ts` (decoder).
+
+31. **The tree: a loose octree per link, large elements high.** Over the link's elements in its own frame (scene mm, the
+   frame of its rows). A cell is split while it holds more than 40,000 triangles, copies counted (`CC_TILES_LEAF_TRIS`;
+   the ticket's 20 to 60 k), at most 16 levels deep; an element goes to the child holding its centre when its largest
+   extent fits the child's side (so it lies in the child's loose cube, twice the child), else it stays in the cell: such
+   elements (slabs, facades, long walls) become the cell's OWN leaves, cut in Morton order of their centres into chunks
+   of the same target. A cell with one octant and nothing of its own is not kept (the chain of empty levels collapsed).
+   Every element with geometry is in exactly one leaf; each tile's subtree is one range of an element list in depth
+   first order. Above the octree's root, a chain of coarser proxies of the whole, each at most a quarter of the one
+   below, ends at 512 triangles or fewer (`CC_TILES_ROOT_TRIS`): a link seen from afar costs a few hundred. More than 8
+   own leaves are grouped 8 at a time under tiles of their own (no tile has more than 16 children: a parent's proxy and
+   error read its children at once; a link whose elements are all larger than its cells once made a tile of hundreds).
+   **Alternative:** hlod.c's cells (every element in a leaf by its centre: a slab in a leaf whose box is the slab's, the
+   leaves' boxes overlapping) or a box tree (cells that do not halve: the error does not either).
+32. **Proxies: vertex clustering on one lattice, each cluster placed where its quadric is least.** hlod.c's clusters
+   (Rossignac & Borrel on power-of-two grids from the root's corner; a parent clusters its children's clusters) now carry
+   their members' box and the sum of their faces' plane quadrics (area weighted), merged by addition; a cluster's point
+   is the quadric's minimum by a pseudo inverse around the mean (Lindstrom 2000, "out-of-core simplification"), kept in
+   the members' box. Each proxy at most a quarter of its children's triangles and 16,384 (`CC_TILES_PROXY_TRIS`), the grid
+   coarsened until it fits; per material family, its parts' categories kept (the colour of far geometry).
+   **Alternative:** quadric edge collapse per tile (Garland & Heckbert): not built. Measured why it would not change the
+   numbers that matter: on the 20,026-element frame and the buildings scene the largest deviation of every level comes
+   from parts that vanish below the grid (a 2.5 m wall, a 0.8 m chair: 70 to 100 % of each level's error, `TILES_DEBUG`),
+   which edge collapse at the same triangle count removes too; quadric placement left those maxima unchanged (to the mm)
+   and keeps corners where the cluster is not one face. Edge collapse is a few hundred lines more per tile and slower
+   (a heap of edges per tile, against a sort of keys); left for when a picture shows the difference.
+33. **The error: a sampled two-sided distance, not the grid's bound.** A proxy's error (mm) = the largest distance, over
+   up to 16,384 points of the level below (each child's vertices and triangle centres, strided), to the proxy's
+   triangles, and over the proxy's points to the level below's triangles (its children's clusters), plus the largest
+   child error and half the 16-bit quantum's diagonal. A point of an element that vanished counts at most that
+   element's middle extent (its omission draws no more wrong than its size). The walker needs it monotone: a parent's
+   error includes its children's. Measured on the test's buildings scene against the real detail: proxy points at most
+   0.62 of the stated error from the detail, detail points of surface-like elements at most 0.37 of it from the proxy
+   (720 samples, none outside). **Alternative 1:** hlod.c's `grid × √3` (the bound of a point's move): measured 4.2 times
+   the real worst; every site view of the synthetic sets then drew every leaf. **Alternative 2:** the farthest member of
+   a cluster from its point (rigorous one way): 1.7 times the grid bound's tightness only, still 3 to 10 times what the
+   picture shows on beams (points move along the surface, which changes nothing on screen). Cost: the distance queries
+   (a 32³ grid of triangles per tile, rings searched, a vanished part's search stopped at its size) took 55 % of the
+   build on the buildings scene. **The build is parallel** (`cc_jobs`, as the IFC reader: pthreads natively, in order in
+   wasm): runs of leaves (post-order, a run bounded so that memory stays a few leaves' clusters) are read by workers with
+   their own state, and the error's queries are split in chunks; each writes only its own slots, so the bytes do not
+   depend on the threads (the test's builds in steps equal the one build). Buildings scene (6.7 M triangles): 12.9 s
+   single-threaded to 3.5 s.
+34. **Leaves are not copied: a leaf is its elements' blocks in `ELEM`.** The tile table lists a leaf's elements; the answer
+   (`TLF1`) gathers their BMG1 blocks from the mapped cache (each shape once per leaf, its copies as placements: copies
+   stay instanced). Measured on the synthetic links (17 x 93 k triangles): the leaves as served 9.40 MB (5.9 bytes a
+   triangle, edges included); a copy of them in the section would add those bytes to a cache of 22.36 MB (+42 %), or
+   15.82 MB (+71 %) in a raw 21-bit layout; decoding every leaf in JavaScript took 142 ms (11 M triangles a second; a
+   raw layout's copy 2.8 ms). **Alternative:** the leaves duplicated in tile order (one read a tile; a native viewer maps
+   it raw): chosen against by bytes (the cache budget: under 15 % of the IFC) since a leaf's blocks are contiguous enough
+   in the mapping and the decode happens off the drawing thread (worker, native thread).
+35. **Proxies raw and uncompressed: `TPX1`.** u16 positions in the tile's box, u16 indices under 65,536 vertices: 9 bytes
+   a triangle measured (synthetic links: 1.84 MB for 204,425 proxy triangles), uploadable as they are by a native viewer
+   mapping the file. Deflate per tile saves 37 % on proxies (1.16 MB) but 91 % on the leaves' answers (BMG1's regular
+   varints): left for HTTP (`Content-Encoding` on `tile=` answers when the web version streams over a network), not on
+   disk. **Alternative:** BMG1 for proxies too (one codec): about the same bytes, a decode pass for every reader.
+36. **Compact vertices for the GPU** (`tiles.ts` `pack16`, `pack21`; C `cc_tiles_lattice`, `cc_tiles_pack21`): proxies
+   their stored u16 (6 bytes a vertex; the quantum ≤ 1/65,535 of the tile, far under its error); leaves on the link's
+   1/16 mm lattice (BMG1's step), 21 bits an axis in two u32 (8 bytes), the shift growing only past 131 m: two leaves
+   put a shared vertex on one lattice point (no crack; the test and `link_tiles_test` check it), within 1/32 mm of the
+   cache's point. Bytes per triangle on the GPU, synthetic links (0.50 vertex a triangle): today's merged f32 positions,
+   a u32 element id per vertex and u32 indices, 20 bytes; leaves as above with u16 indices, 10; proxies, 9.
+   **Alternative:** u16 for leaves too (6 bytes a vertex): a 60 m leaf's quantum is 0.9 mm and a vertex shared by two
+   leaves of different boxes lands up to 0.5 mm apart in each: a crack of a pixel at half a metre.
+37. **Occluders: a separate conservative set per tile; proxies are never occluders.** Up to 64 real triangles a tile, the
+   largest by area (at least 1/64 of the tile's extent squared), of opaque classes (`IfcWall*`, `IfcSlab`, `IfcRoof`,
+   `IfcFooting`, `IfcColumn`, `IfcBeam`, `IfcCovering`; never the glass family); an inner tile keeps its children's
+   largest. A subset of real surfaces never hides what is in front of one. 36 bytes a triangle, at most 2.3 KB a tile; built
+   while the leaves are read (no extra pass). Kept after the table of contents, not in it (`tiles=occ`): on the synthetic
+   links they were 90 % of the table (0.29 of 0.32 MB), and the table is what every reader loads at open. **Alternative:** shrunken proxies of opaque elements (a second simplified
+   mesh per tile, never outside the solid: a constrained simplification); boxes of elements whose volume fills them (a
+   wall with a window is not conservative).
+38. **Back faces:** a flag per element (in the list's order) "closed and outward": the mesh welded by position, every
+   directed edge met once by its reverse, the signed volume positive (a mirrored placement turns it: the reader flips
+   the front face, as for any mirrored copy). Proxies' parts carry the field, 0 today (clustered meshes are not closed).
+39. **The section and the cache's life** (ADR 0079 amendment): `TILE` written by the indexing job after `HLOD`, before
+   `PRPZ`, from the cache's bytes read in place (one mesh decoded at a time; a shape once per leaf), in steps (cancellable;
+   a crash leaves the incomplete cache, indexed again at the next open), deterministic (a build in steps of 777 or 1,000
+   triangles gives the bytes of one build). `CC_LINK_CACHE_FORMAT` 7; a format 6 cache matches (its geometry sections are
+   format 7's), is served at once and indexed again from itself (HLOD and TILE baked, SRCE turned complete and 7): never
+   read again from the IFC (`link_tiles_test`). Readers skip `TILE` (Rust's and C's: a later addition); this one keeps
+   its place (`has_tiles`, `tiles_off`, `tiles_len`) and leaves it on disk as `HLOD`. **The `HLOD` section stays** until the
+   page draws by tiles (VIS1): the page is unchanged by this ticket; its BPRX could later be served from the pyramid's
+   levels, then `HLOD` dropped.
+40. **Serving** (`session/mesh.h`): `GET /mesh?link=k&name=&key=&tiles=toc` the table of contents; `…&tile=a,b,c` (4,096
+   at most) a `TILS` answer; the link rule of SIZE2FIX (a named or keyed request is never a 404: 204 superseded, with
+   `X-Superseded: 1`); 202 "indexing" while its job runs; 204 with `X-Tiles: none` for a large link whose cache has no
+   `TILE`; a link without a cache (an IFC under 1 MiB, a `.bimbleview` linked as it is) gets its pyramid built at once
+   when it has at most 2 M triangles. The open scene (a model, an IFC, a view file): `GET /mesh?tiles=toc&step=N` builds
+   it in steps after the open (202 "done total"), then answers as a link; an opened view file that holds a `TILE` (a
+   cache opened as it is) is served from it. The section is checked (`cc_tiles_check`) on every answer. The wasm call
+   `host_tiles(link, budget, req)` gives the same answers (`ccore.ts` `ccoreTiles`; native: `bimble.ts` `fetchTiles`).
+   `GET /mesh?tiles_frame=…` runs the reference walker over every link for one camera (the tools' and NAT2's check).
+41. **The reference walker** (`cc_tiles_select`): the frontier starts at the root; the tile of largest projected error
+   (error × k / distance from the eye to its box, k = viewport height / (2 tan(fov/2)); orthographic: × px per mm) is
+   replaced by its children in view while that error is over the threshold and the frontier's triangles stay within the
+   budget; a tile without a proxy, or one the reader marks (a hidden or selected element under it: proxies keep no
+   element boundary), is always replaced; boxes out of the frustum are dropped; the answer front to back. 1 to 30 ms for
+   the synthetic sets' cameras (including a JSON answer). It ignores occlusion: VIS1's depth pyramid over the occluders.
+
+42. **Every optimisation a setting** (the owner's rule, 27 Nov): the walker's inputs are parameters, none baked in: the
+   error in pixels (default 1 still), a triangle budget (default none), levels of detail (default on; off =
+   `CC_TILES_SEL_LEAVES`, `tiles_frame&lod=0`: every leaf in the frustum, tested), occluders (default off in the reference
+   frame query, `occ=1`; the renderers choose). The bake settings (`cc_tiles_opts`: leaf target 40,000, proxy cap
+   16,384, root 512, grid 64 a side, occluders a tile 64, 0 = none) are recorded in the cache's `SRCE` ("tiles":
+   "leaf=40000 proxy=16384 root=512 res=64 occ=64"); a cache baked with other settings is indexed again from itself
+   (`link_tiles_test`). They come from `BIMBLE_TILES` today; their rows in Settings are left to the page's ticket.
+43. **Room for the exterior shell (ticket SHELL1, not built):** element flag 4 EXTERIOR, tile flag 16 "has exterior
+   elements" and the header's bake flags (offset 44, bit 1 "shell computed": a cache without it is unknown, never "found
+   empty") are reserved; readers accept them; a proxy may later depict a subset of its elements.
+
+### The contract (VIS1, NAT2)
+
+Section `TILE` (little-endian; offsets from the section's first byte):
+
+| offset | type | field |
+|---|---|---|
+| 0 | char[4] | "TIL1" |
+| 4 | u32 | version, 1 |
+| 8 | u32 | nT, tiles |
+| 12 | u32 | nE, the link's rows (BMSH row order = the view file's element order) |
+| 16 | u32 | nL, the element list's length (elements with geometry) |
+| 20 | u32 | nO, occluder triangles |
+| 24 | u32 | toc bytes = 48 + 80 nT + 4 nL + pad4(nL): the table of contents; the occluders follow it, the blobs start at pad8(toc + 36 nO) |
+| 28 | u32 | the leaf target (triangles) |
+| 32 | u64 | blob bytes |
+| 40 | u32 | levels |
+| 44 | u32 | bake flags: 1 the exterior shell computed (reserved for SHELL1; 0: not computed, the exterior unknown, never "found empty") |
+| 48 | 80 × nT | tiles, depth-first preorder (tile 0 the root; a subtree is ids [i, i + skip)) |
+| … | u32 × nL | element rows, depth first (a subtree's elements one range) |
+| … | u8 × nL, pad 4 | per list entry: 1 closed and outward, 2 opaque occluder class, 4 exterior (reserved, SHELL1) |
+| toc | f32[9] × nO | occluder triangles, link scene mm (outside the table: asked apart, `tiles=occ`) |
+| pad8(toc + 36 nO) | blobs | a `TPX1` per proxy tile, in post-order (a subtree's proxies one byte range) |
+
+A tile (80 bytes):
+
+| offset | type | field |
+|---|---|---|
+| 0 | u32 | parent (0xFFFFFFFF: the root) |
+| 4 | u32 | skip: tiles in its subtree, itself included (first child id + 1; next sibling c + skip(c)) |
+| 8 | u16 | children |
+| 10 | u8 | level (root 0) |
+| 11 | u8 | flags: 1 LEAF (content: its elements' detail, `TLF1`), 2 PROXY (content: `TPX1`), 4 OWN (a leaf of its parent's large elements), 8 has occluders, 16 has exterior elements (reserved, SHELL1) |
+| 12 | f32[6] | box, min xyz, max xyz, link scene mm: holds its content and every descendant's |
+| 36 | f32 | error mm: 0 a leaf; a proxy's (decision 33); +inf an inner tile without proxy (descend) |
+| 40 | u32, u32 | el0, nel: its subtree's elements list[el0 .. el0 + nel) |
+| 48 | u64 | its blob's offset from the blobs' start (4-aligned); 0 for a leaf |
+| 56 | u32 | blob bytes |
+| 60 | u32 | triangles its content draws (a leaf: copies counted) |
+| 64 | u32 | vertices of its content (a leaf: own meshes and each distinct shape once) |
+| 68 | u32, u16 | first occluder, occluders |
+| 74 | u16 | 0 |
+| 76 | u32 | detail triangles under it (saturating) |
+
+A proxy may later be built from a subset of its elements (SHELL1: the exterior shell only): its element range is what it
+stands for (what to descend into under a hidden or selected element), not necessarily what it depicts.
+
+`TPX1` (a proxy): "TPX1", u32 nv, u32 ni, u32 parts; per part {u32 category (concrete 0 … other 7), u32 flags (1 closed
+and outward: 0 today), u32 first index, u32 indices}; u16[3] × nv (p = lo + q (hi − lo) / 65535, the tile's box); pad 4;
+indices u16 × ni (nv ≤ 65,536) else u32. No edges, no normals (edges are found on screen).
+
+Answers: `tiles=toc` the section's bytes [0, toc); `tiles=occ` the occluders (36 nO bytes); `tile=a,b,c`: "TILS", u32 count, per tile {u32 id, u32 kind (0
+none, 1 leaf, 2 proxy), u32 bytes, the bytes, pad 4}. `TLF1` (a leaf): "TLF1", u32 id, u32 nel, u32 blocks; per element
+{u32 row, u32 block, f32[12] placement: columns x, y, z, then t; the identity for an own mesh}; u32 × blocks (bytes); the
+BMG1 blocks (`meshcodec.h`; edges included, a decoder skips them). `tiles.ts` gives per leaf the own meshes merged
+(one vertex block, one index block, runs of {row, first index, count}) and per shape its vertices, indices and instances.
+
+What a reader does: read the table once per link (80 bytes a tile and 5 an element: 32 kB for 17 synthetic links; their
+occluders, 0.29 MB, apart), walk it each frame
+by `cc_tiles_select`'s rule (or its own with occlusion), ask the tiles it lacks in batches, draw proxies as they are
+(u16 positions, the tile box as uniforms), leaves with their element runs (hide, select, pick by the state texel),
+descend under a hidden or selected element (proxies have no element boundary), and use each tile's occluders before
+deciding what to draw.
+
+### Evidence (ticket TILE1)
+
+`ccore/test/tiles_test.c` (C, also under ASan and UBSan), on a synthetic buildings scene made by the test (6 buildings of
+4 storeys: slabs, facades, glass, furniture as two shared shapes placed turned and mirrored, thin pipes; 1,608 elements,
+173,664 triangles), built from the scene and from its view file read in place: every element in exactly one leaf; every
+leaf's answer is its elements' world meshes within the codec's 0.05 mm; the proxies' error honoured (above); each proxy at
+most a quarter of its children, the root under 512; slabs no deeper than furniture; the same bytes twice and in steps;
+the walker front to back, within a budget, a marked tile descended; 4,000 damaged sections and nine named damages (a
+cycle, a child outside its parent, a range past the list, an element twice, absurd counts…) refused or read without a
+crash; a 397,488-triangle element and non-finite vertices bounded; a build cancelled after one step freed.
+`ccore/test/link_tiles_test.mjs` (host and `tiles.ts`): the phases (202 while indexing), the cache format 7 with `TILE`,
+the table and every tile decoded by the page's decoder, the request rules, the walker's frame, a format 6 cache indexed
+again from itself, a small link and the open model, 2,000 damaged answers in `tiles.ts`.
+
+`ccore/tools/tiles.mjs`, native host (clang), 1920 × 1080, 60°: far = everything in view, close = a fifth of that
+distance, inside = a third into the box at eye height (`ccore/out/tiles/tiles.md`, per-level pictures beside it):
+
+| set | detail triangles | tiles (leaves / proxies), levels | triangles per level, root first | far at 1 px / 2 px | close at 1 px | inside at 1 px | pyramid bytes |
+|---|---|---|---|---|---|---|---|
+| 17 synthetic links (`links_synth.mjs`, 30 m apart) | 1,581,408 | 136 (85 / 51), 4 | 748 / 19,652 / 184,025 / 1,581,408 | 184,025 / 184,025 (1.66 MB to fetch) | 680,184 | 631,536 | 2.16 MB |
+| mesh-heavy (700 × 1,000) | 695,264 | 88 (69 / 19), 5 | 148 / 3,936 / 32,438 / 230,146 / 584,040 | 302,102 / 230,146 | 391,112 | 375,072 | 1.46 MB |
+| 20,026 elements | 270,288 | 38 (32 / 6), 4 | 152 / 1,108 / 46,568 / 270,288 | 270,288 / 270,288 | 227,040 | 161,844 | 0.55 MB |
+| buildings (18 x 10 storeys, 400 parts a storey) | 6,691,680 | 627 (529 / 98), 7 | 60 / 1,584 / 7,620 / 52,968 / 318,410 / 3.3 M / 3.5 M | 6,691,680 / 6,165,312 | 3,965,580 | 3,771,300 | 4.86 MB |
+
+The synthetic links' caches: 22.36 MB for 271.83 MB of IFC (8.2 %; `TILE` 2.16 MB, 0.8 %); indexing 4.0 s for the 17 (of
+which the pyramids 3.6 s), the largest process's peak 77 MB. At 1 px the 20,026-element frame and the buildings draw
+all their detail even from the site view: their beams, walls and furniture are 0.3 to 2.5 m and a pixel there is 0.15 to
+0.25 m: the error rule is right to keep them; what is inside the buildings (95 % of the buildings scene's triangles) is
+hidden, which is occlusion's work (VIS1's depth pyramid over decision 37's occluders), not the levels'.
+
+## Amendment 7 (27 Nov 2026, ticket VIS1): draw only what can be seen, edges found on screen, moving follows input
+
+Pierre, on his project of 17 linked IFC files (252,189 elements, 110.5 M triangles): "it feels like it showing way way
+too many triangles", then four performance reports (moving: none; 4.3-74 M triangles a frame in 1,136-6,233 draws;
+input → frame 400-730 ms; proxies drawn 0; boxes while orbiting, then a refill "one by one ... taking ages"). He
+delegated the choices ("performance is everything"; "do what games do"); they were made by Claude on ticket VIS1 with
+the orchestrator, each measured on the machine's GPU (Apple M1 Pro, Mesa, ANGLE on Vulkan, headless Chromium 153;
+`ccore/tools/drive.mjs`, the GPU's time by `EXT_disjoint_timer_query_webgl2`), to be reviewed on the implementation.
+
+44. **Moving follows input** (P0-a). His stored settings held `moving_fps` 0 ("Draw everything"): `frameBudget()` was
+   Infinity, so no frame was ever a moving one and each orbit or wheel step drew the whole picture; the panel said
+   "moving: none" truthfully. A frame within max(250 ms, twice the last frame's time) of a camera change is now in
+   motion, and the fill waits as long after the last input (a held pointer, a wheel step, a key). ADR 0074's 200 ms
+   is a floor for every setting: with "Draw everything" the whole picture is drawn while moving as long as it is
+   estimated under 100 ms (its triangles over the rate a fence measures on whole frames); above, a budget sized to
+   60 ms applies and the complete picture comes once the input stops. The stored value is unchanged; the Settings
+   note under that choice says so; the panel shows those frames on their own row. **Alternative:** the camera key
+   alone (the cause: a slow frame or a setting turned it off), or ignoring the setting (silent).
+45. **Edges found on screen** (in 3D; plans keep their lines). The frame's faces are drawn into an offscreen target
+   (`gl/target.ts`: colour, the element (index and model), the face's normal, depth), then one full-screen pass
+   presents the colour and draws an edge where the element changes between neighbouring pixels (the nearer one's
+   side), where an element bends by more than the core's crease angle (20°) and at silhouettes. The line pass was
+   55-65 % of a whole frame's GPU time: 17.2 → 7.7 ms on 17 synthetic buildings (7.67 M triangles, his window
+   1492 × 790 at device pixel ratio 2), 2.25 → 1.0 ms a million triangles; the pictures look the same
+   (`drive.mjs` screenshots). A coplanar joint between two elements (facade panels) stays an edge, which a
+   depth-only test (Rust's `edges.wgsl`, tried first: depth copied by `blitFramebuffer`) loses. **Alternative:** line
+   edges only where the batch is large on screen (decision 20 already did; still 55 %).
+46. **The pick reads the element attachment**: one pixel of the last complete picture at this camera, then the ray
+   against that element alone (its point); the background answers at once; a proxy's pixel or another camera falls
+   back to the scan. The status bar's readout while orbiting reads it too (without the scan: it took 0.7 s of a
+   session). **Alternative:** the core's box tree (asynchronous; SIZE3 decodes a cold link on demand).
+47. **What the last picture hides is left out** (`gl/hiz.ts`, `gl/visible.ts`; the setting `draw_visible`, OFF by default:
+   see below; not one of Rust's fields, written once set). After a picture is presented its depth is reduced on the GPU to the farthest
+   depth of each 4 × 4 pixels (a proxy's pixel and the background count as the farthest: a proxy is not a safe
+   occluder), read back without waiting (a pixel-pack buffer and a fence), the coarser levels made on the CPU. A still
+   frame or a slice of the fill at the same key (camera, size, what is shown, lists, section box, links) leaves out
+   each element whose box's nearest depth is farther than the farthest over the blocks it covers, or which lies wholly
+   outside the picture; the kept items go as ranges in one `multiDrawElementsWEBGL` per model (copies: a draw a run,
+   a gap under 2,000 triangles drawn). Every element that drew a pixel passes its own test, so the picture is the
+   same: 0 pixels differ and 0 seen elements are missing on every camera measured (`lab_visible.mjs`: 60 cameras
+   with fast turns). The pyramid is made once per key, and again when the picture completes after a partial one (a
+   moving frame's: its largest elements are the occluders). Not in a plan; a section box's cut depth is the one
+   tested. Moving frames are not tested (another camera: reprojection is not built). **Alternatives:** occlusion
+   queries per batch (decision 12: the open model only, a draw and a query per batch, a frame late); a CPU raster of
+   occluders (Rust's #5: 1-3 ms a frame of CPU, 42 → 38 % drawn close up); the baked occluder triangles of TILE1
+   (below: the next step).
+   **Off by default**: exact on every synthetic camera, it is not yet on a real project of 17 links (a local folder of
+   IFC files, the ground truth with proxies off: a close camera left thousands of seen elements undrawn, long members
+   missing from the picture, the same on a second pass); the cause is not found (see "What is left"). Until it is, the
+   setting is the user's choice and the panel shows what it leaves out.
+48. **A moving frame shows proxies, not boxes**: a link's batch it could not finish is drawn as the proxy of the
+   deepest usable cell holding its leaf (half the budget at most); outlines stay where no cell has one. The fill after
+   a stop draws offscreen: the canvas keeps the moving picture and shows the target when the fill is complete or every
+   250 ms meanwhile (no batch-by-batch refill on screen); with edges found on screen the fill needs no last pass of
+   lines. **Alternative:** reprojecting the last complete picture under the moving one (not built: a frame of the
+   current budget already shows the building; measured worth less than the triangles saved).
+49. **The budget's cut for tens of thousands of batches** (`gl/cull.ts budgetCutFast`): budgetCut bisected 60 times
+   over every batch (a project of 17 links has tens of thousands: 39 ms a frame for 46,800 in `cull_test`; on such a
+   project the fill's slices became script-bound and the picture was never complete at moving_fps 30). Items are counted once per state in buckets of a sixteenth of an octave of their size,
+   a frame adds them shifted by each batch's distance, reads the threshold and checks it exactly (one search a batch):
+   the same triangles as the bisection on the 20,026-element model, 7.8 ms against 39 ms for 46,800 batches
+   (`cull_test`). The batch loop allocates nothing a batch; each model's ranges come from its own batches.
+50. **No front-to-back order** (a bench hook keeps it): Apple's GPUs remove hidden surfaces per tile, so the order gains
+   nothing there (the literature review of 27 Nov), and with culling it changed which of two coplanar faces won the
+   depth tie: the edges found on screen moved (up to 1,528 pixels on a close camera of the sweep, 0 elements missing).
+   Without it the culled frame draws the kept items in the order the whole frame does.
+51. **Every optimisation a setting with an exact value** (Pierre: "we should provide good default but allow user a lot
+   of latitude"): `draw_visible` (on), `edge_mode` (`screen`, the default; `lines`, exact; `none`), `cull_back` (off:
+   exact only for closed solids, and the core does not say which shapes are), `still_px` (0 = off .. 8 pixels: what a
+   still frame leaves out; 0 by default: the proxies at 1 px already stand for the far cells), `refill_offscreen` (on),
+   with the existing `moving_fps` (0 = draw everything, kept under 100 ms); `draw_visible` is off by default (decision
+   47), `moving_proxies` and `link_gpu_mb`. None
+   is one of Rust's fields: each is written to settings.json only once set (as `renderer`). The Settings dialog has
+   their rows; the performance report and every `drive.mjs` summary name the values in force (its A/B axes).
+52. **`ccore/tools/drive.mjs`**: the lab driven by real gestures on the machine's GPU and recorded (frames, inputs,
+   CPU profile, memory, network, screenshots, summary; `--compare`; an MCP face). It waits for memory outside the
+   shared measuring lock, takes the lock with `flock -n` (its holder ends with the tool), gives up after 20 minutes
+   ("machine busy: not measured"), caps Chromium in a cgroup for a project, and writes nothing beside the user's files
+   (a project's link caches in its own folder, `BIMBLE_LINK_CACHE_BESIDE=0`: a first version wrote them beside the
+   owner's IFC files once, 27 Nov 13:51, after a rebase changed the cache format). Chromium gets a short TMPDIR of
+   its own (`test/lib/chromium.mjs chromiumEnv`: its singleton socket's path overflowed under a deep scratch folder).
+
+### Evidence (ticket VIS1)
+
+The cost of a draw call here (`drive.mjs drawcalls`: every link's whole face list, 4.85 M triangles, in N calls; the
+GPU, ANGLE Vulkan): 6,001 calls 10.4 ms (2.4 ms of script), 595 calls 4.1 ms, 68 calls 4.5 ms, 17 calls 5.2 ms, 17
+multi-draws of 6,000 ranges 5.7 ms. Draw calls cost about 5 ms at his 6,000: his frame is bound by triangles, not
+draws; "merge all the 3D in one" saves at most that.
+
+Whole frames on the 17 synthetic buildings (GPU ms; `drive.mjs throughput`): line edges 17.2, faces only 7.4-7.7,
+edges on screen 7.7, without the state texel 7.3 (17 of 18 models skip it already), back faces culled 5.5-5.9
+(−25 %: not on, the core says which shapes are closed only with TILE1), device pixel ratio 1 instead of 2: 5.8 (faces
+only): not built.
+
+What a still frame submits against what can be seen (the ground truth: every shown element's faces as ids, read back):
+17 synthetic buildings (83,419 elements, 7.67 M triangles), his window at dpr 2, ANGLE Vulkan, Chromium 153; still ms is a whole
+frame then a 1×1 readPixels (median of 5), GPU by timer query; "preview.6 like" = line edges, nothing left out; the
+pixel count compares each picture with "all" of its camera (edges on screen, nothing left out):
+
+| camera, option | still ms (GPU) | triangles submitted | elements seen (their triangles) | submitted / seen | pixels differing from all | seen, not drawn |
+|---|---|---|---|---|---|---|
+| far preview.6 like | 17.9 (15.0) | 7,665,028 | 1,638 (58,208) | 132 | (lines) | 0 |
+| far all | 9.2 (6.9) | 7,665,028 | 1,638 (58,208) | 132 | 0 | 0 |
+| far visible | 21.4 (5.0) | 3,119,740 | 1,638 (58,208) | 54 | 0 | 0 |
+| far visible px1 | 12.6 (4.3) | 3,191,264 | 1,638 (58,208) | 55 | 0 | 0 |
+| far visible cullback | 19.2 (3.7) | 3,191,264 | 1,638 (58,208) | 55 | 2,041 (not exact) | 0 |
+| close preview.6 like | 13.9 (8.0) | 1,349,300 | 123 (1,476) | 914 | (lines) | 0 |
+| close all | 12.0 (5.8) | 1,349,300 | 123 (1,476) | 914 | 0 | 0 |
+| close visible | 11.9 (6.0) | 208,448 | 123 (1,476) | 141 | 0 | 0 |
+| close visible px1 | 7.1 (4.3) | 208,448 | 123 (1,476) | 141 | 0 | 0 |
+| close visible cullback | 6.4 (3.4) | 208,448 | 123 (1,476) | 141 | -4,427 (not exact) | 0 |
+| inside preview.6 like | 10.0 (7.9) | 380,872 | 9 (392) | 972 | (lines) | 0 |
+| inside all | 10.1 (7.4) | 380,872 | 9 (392) | 972 | 0 | 0 |
+| inside visible | 11.4 (6.4) | 200,384 | 9 (392) | 511 | 0 | 0 |
+| inside visible px1 | 13.3 (8.4) | 200,384 | 9 (392) | 511 | 0 | 0 |
+| inside visible cullback | 10.1 (6.3) | 200,384 | 9 (392) | 511 | -2,252 (not exact) | 0 |
+| far visible, 4 × 4 blocks | 21.3 (4.9) | 2,331,824 | 1,638 (58,208) | 40 | 0 | 0 |
+| close visible, 4 × 4 blocks | 9.0 (4.5) | 174,108 | 123 (1,476) | 118 | 0 | 0 |
+
+The rows above were drawn with 8 × 8 blocks but the last two (4 × 4, the default). A first version read the background as the
+nearest depth (an encoding of 1.0 that overflowed 24 bits): 216-225 seen elements were not drawn on the far camera; found by
+the ground truth, fixed before anything was turned on. The inside camera keeps 200 k triangles: elements of a batch in view
+but beside the picture or behind the eye were not left out then (they are now: `boxHidden`).
+
+The 60-camera sweep (`lab_visible.mjs`, `LAB_GPU=vulkan`, Chromium 158, 6 synthetic buildings at 1280 × 800, proxies off:
+the culling's own truth): 0 seen elements missing, 0 pixels differ (at all) on every camera, this camera's pyramid used
+on 60 of 60, the moving frame's pyramid used by the first still frame after fast turns on 12 of 12; triangles submitted
+far 54.1 → 31.4 M (the seen elements' 0.68 M), close 17.0 → 2.7 M (13,380), inside 5.4 → 0.24 M (24,604). With the far
+cells' proxies at 1 px (still) the far view differs from its full detail on 289 of its 12,310 drawn pixels (2.3 %; the
+test's bound: 5 %; 3D2's proxies, not this amendment's culling). The first sweep showed 2,777 "missing" elements on far cameras: elements stood for by those
+proxies (not culled: 0 pixels changed), and up to 1,528 pixels changed on close cameras: decision 50's sort.
+
+### What the WebGPU renderer needs to use the same visible set
+
+`gl/visible.ts` (the masks and runs) and `gl/hiz.ts`'s `boxHidden` and pyramid levels take no WebGL: they read a
+`Pyramid` (key, the finest level's depths, the view-projection) and the batches. The WebGPU renderer (`gpu/`, ticket
+GPU2) needs: (1) its own offscreen target with the element and normal attachments and the same present pass (WGSL)
+for edges found on screen (until then lab_webgpu compares it with WebGL2's line pass); (2) the reduce of its depth to
+4 × 4 blocks (a compute pass) read back by `mapAsync` (no fence to poll), giving the same `Pyramid`; (3) the masks
+fed to its GPU culling: a bit per element in the storage buffer its compute pass already reads (a hidden element's
+copies and ranges dropped there), or the runs turned into its indirect draws; (4) the pick: one texel of the element
+attachment (`copyTextureToBuffer`, `mapAsync`).
+
 ## What is left
+
+From ticket TILE1 (amendment 6): the page drawing by tiles (VIS1) and a native viewer (NAT2); then `HLOD` dropped (or
+served from the pyramid's levels). The exterior shell at bake time (SHELL1). Edge collapse with locked borders for the
+coarse levels (better shape per triangle than clustering; decision 32). A vertex-cache and fetch order at bake
+(meshoptimizer's, C++: not in the core now). Leaf answers without BMG1's edges (`&edges=0`: re-encoded by the host) and
+compressed over HTTP for the web version (deflate saves 91 % of leaves' bytes on the synthetic links; decision 35).
+Out-of-core indexing for a 5 GB IFC: the indexing job reads its cache in place, but `HLOD` still decodes the whole link
+(the indexing peak; decision 39). Occluder sets measured on real models in a renderer.
+
+From ticket VIS1 (amendment 7):
+
+- **`draw_visible` on a real project of links** (first lead): on a local folder of 17 IFC files the culled still frame
+  left out seen elements (decision 47), and the plain frustum test already loses 17 there. The native renderer's truth
+  test on the same folder (tiles and two-pass occlusion) misses none and its `check_tiles` finds every element inside
+  its leaf's box: the cache's boxes are right, the PAGE's own element boxes are the suspect (SIZE3's `preBox`, boxes
+  of turned or instanced copies, long members). Reproduce: `node ccore/tools/drive.mjs --project <the .bimble>
+  --cache-dir <scratch> --size 1492x790 --dpr 2 --settings '{"link_gpu_mb":4096}' --do 'wait ready; wait idle; camera
+  close; js g.noProxies = true; js g.visible = false; truth all ref; js g.visible = true; truth visible; eval
+  g.bench.missing()'`. Under SwiftShader one element (9 pixels) of one inside camera of the synthetic sweep is missed
+  too (not on the GPU): `lab_visible` runs its sweep only with `LAB_GPU=vulkan` and says so.
+- **The fill counts what culling left out**: a slice's budget is spent on items the mask drops (many empty slices on a
+  large project): the budget's cut should count the kept items only.
+
+- **The page drawing by tiles (VIS1's follow-up; amendment 6's contract)**: the walk of each link's tiles by projected error
+  replaces the per-batch tests (46,800 batches on Pierre's project); its occluder triangles (real surfaces, up to 64
+  a tile) drawn first into the depth pyramid give the first frame of a new camera its culling (today a camera's
+  first still frame is drawn whole and the next ones culled); a parent tile is the moving picture (no outlines).
+  This amendment's target, pyramid, masks, multi-draw and present pass are the frame those tiles go into.
+- **Moving frames are not culled** (another camera than the pyramid's): reprojecting the last pyramid, or the tiles'
+  occluders drawn first each frame, would; and device pixel ratio 1 while moving (5.8 against 7.7 ms a whole frame
+  at 2) is not built.
+- **Back faces**: −25 % of a frame's GPU time measured, not on: a shape's "closed and outward" flag comes with TILE1.
+- **Copies are culled a run at a time** (a draw a run; a gap under 2,000 triangles drawn): an instance list per
+  frame (the placement read by index) would make each group one draw again.
+
+
 
 Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core), GPU occlusion
 (off by default). Left, with the reason:
@@ -371,8 +833,10 @@ Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core)
   ported (the queries stand for #5; #6 needs a depth read-back pass; #10 needs compute shaders).
 - **Proxies of linked models**: done by amendment 3 (baked in each link's cache).
 - **For 100-200 million triangles** (amendment 3's numbers): a mesh per link, fetched and dropped from the page, is
-  done (amendment 4). Left: every link's mesh is still fetched at open (one after the other) and uploaded before the
-  budget releases some; tiles streamed by view (the link's HLOD leaves as the unit: the cache already orders them) would
+  done (amendment 4); the open bounded and the detail on demand (amendment 5). Left: every link's mesh is still fetched
+  once at open for its rows and boxes (a rows-only answer from the host would spare 227 MB of transfer on the local
+  folder); a large link's detail is uploaded whole (slices of its blocks into `bufferSubData` would bound the page's
+  peak to a block); tiles streamed by view (the link's HLOD leaves as the unit: the cache already orders them) would
   fetch only what the view needs. Proxies of a shared shape instanced, levels coarser than a cell's 4,096 triangles (a
   link at 50 px should cost a few hundred), 16-bit positions per cell: not built. Quantised vertices (16-bit positions in each leaf's box,
   8-bit normals) would halve the GPU bytes of positions; the state texel per element is already 4 bytes.

@@ -1,0 +1,127 @@
+[
+ {
+  "keys": "Ctrl N",
+  "key": "n",
+  "ctrl": true,
+  "action": "new",
+  "context": "anywhere",
+  "rust": "lib.rs:2939"
+ },
+ {
+  "keys": "Ctrl Z",
+  "key": "z",
+  "ctrl": true,
+  "action": "undo",
+  "context": "anywhere",
+  "rust": "lib.rs:2948"
+ },
+ {
+  "keys": "Ctrl Y",
+  "key": "y",
+  "ctrl": true,
+  "action": "redo",
+  "context": "anywhere",
+  "rust": "lib.rs:2949"
+ },
+ {
+  "keys": "Ctrl Shift Z",
+  "key": "z",
+  "ctrl": true,
+  "shift": true,
+  "action": "redo",
+  "context": "anywhere",
+  "rust": "lib.rs:2949"
+ },
+ {
+  "keys": "Ctrl S",
+  "key": "s",
+  "ctrl": true,
+  "action": "save",
+  "context": "anywhere",
+  "rust": "lib.rs:2950",
+  "swallow": true
+ },
+ {
+  "keys": "Delete",
+  "key": "delete",
+  "action": null,
+  "effect": "delete",
+  "context": "view",
+  "rust": "lib.rs:2951"
+ },
+ {
+  "keys": "F",
+  "key": "f",
+  "action": "fit",
+  "context": "view",
+  "rust": "lib.rs:2980"
+ },
+ {
+  "keys": "O",
+  "key": "o",
+  "action": "orthographic",
+  "context": "3d",
+  "rust": "lib.rs:2981"
+ },
+ {
+  "keys": "E",
+  "key": "e",
+  "action": "edges",
+  "context": "view",
+  "rust": "lib.rs:2982"
+ },
+ {
+  "keys": "H",
+  "key": "h",
+  "action": "hatching",
+  "context": "view",
+  "rust": "lib.rs:2983"
+ },
+ {
+  "keys": "T",
+  "key": "t",
+  "action": "top",
+  "context": "3d",
+  "rust": "lib.rs:2984"
+ },
+ {
+  "keys": "Escape",
+  "key": "escape",
+  "action": null,
+  "effect": "escape",
+  "context": "anywhere",
+  "rust": "lib.rs:2985",
+  "typing": true
+ },
+ {
+  "keys": "B",
+  "key": "b",
+  "action": "section_box",
+  "context": "3d",
+  "rust": "lib.rs:2986"
+ },
+ {
+  "keys": "M",
+  "key": "m",
+  "action": "measure",
+  "context": "view",
+  "rust": "lib.rs:2987"
+ },
+ {
+  "keys": "P",
+  "key": "p",
+  "action": "paper_view",
+  "context": "2d",
+  "rust": "lib.rs:2988"
+ },
+ {
+  "keys": "Ctrl K",
+  "key": "k",
+  "ctrl": true,
+  "action": null,
+  "effect": "palette",
+  "context": "anywhere",
+  "rust": "lib.rs:1059",
+  "typing": true
+ }
+]

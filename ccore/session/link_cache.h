@@ -26,9 +26,13 @@
 #include "platform.h"
 #include "viewfile.h"
 #include "hlod.h"
+#include "tiles.h"
 
 #define CC_LINK_CACHE_MIN ((uint64_t)1 << 20) /* bytes; below, no cache (ADR 0079) */
-#define CC_LINK_CACHE_FORMAT "bimble-link-cache 5" /* 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD; 5 (SIZE2): HLOD gzipped within a budget, PRPZ */
+#define CC_LINK_CACHE_FORMAT "bimble-link-cache 8" /* TESS1 8: SRCE names the reader's "detail". TILE1 7: a section TILE (the tile pyramid, tiles.h) baked by the indexing job. 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD; 5 (SIZE2): HLOD gzipped within a budget, PRPZ; 6 (SIZE3): SRCE says "complete" (the proxies baked after the link was ready) */
+/* TILE1: a cache of the previous format matches (its geometry sections are this format's): served, then re-indexed (its
+ * SRCE turned complete and current, its TILE baked), not read again from the IFC. */
+#define CC_LINK_CACHE_FORMAT_PREV "bimble-link-cache 7"
 /* SIZE2: the proxies' byte budget per link (cc_link_hlod_cap): 15 % of its geometry, within these. */
 #define CC_LINK_HLOD_MIN ((uint64_t)256 << 10)
 #define CC_LINK_HLOD_MAX ((uint64_t)32 << 20)
@@ -43,6 +47,7 @@ typedef struct cc_link_job {
     char *path;          /* malloc'd: the file linked (an .ifc, a .bimbleview) */
     uint64_t cache_min;  /* CC_LINK_CACHE_MIN, or less (a test) */
     int no_beside;       /* 1: never beside the IFC, only the cache folder (a folder not to write in) */
+    cc_ifc_read_opts detail; /* TESS1: the reader's detail (standard by default); a cache of another is converted again */
     cc_ifc_progress pg;  /* 0..1000; cancel */
     int finished;        /* 0 running, 1 the results below are written, 2 orphaned (atomic) */
     /* results */
@@ -66,8 +71,22 @@ typedef struct cc_link_job {
     /* SIZE2: the geometry section's bytes (the proxies' budget), the cells left without a proxy, the HLOD's
      * stored (gzipped) bytes, the property sets' bytes as read, each section's bytes (HEAD, META, GEOR, ELEM,
      * SRCE, HLOD, PROP, PRPZ) */
-    uint64_t geom_bytes, hlod_stored, psets_raw, sections[8];
+    uint64_t geom_bytes, hlod_stored, psets_raw, sections[9]; /* TILE1: and TILE */
+    /* TILE1: the tile pyramid baked by the indexing job (section TILE) */
+    uint64_t tiles_count, tiles_levels, tiles_proxy_tris, tiles_bytes;
+    double tiles_ms;
+    char tiles_why[160];
     uint32_t hlod_dropped;
+    /* SIZE3: the cache mapped (pf->map_file) and `vf` read in place over it (viewfile.h
+     * cc_viewfile_read_mapped): the link takes the mapping with the view file and unmaps it after
+     * freeing it. NULL: `vf` owns its bytes (no mapping: the wasm module, a gzipped cache, a failure). */
+    void *map;
+    /* SIZE3 (E): the cache's proxies are baked after the link is ready. `incomplete` (result): the cache served or
+     * written has none yet (SRCE "complete": false): the session queues an indexing job. `index_only` (input): this
+     * job is that one: `cache` names the cache to complete; its result is the completed cache read in place (vf, map). */
+    int incomplete, index_only;
+    double index_delay_ms; /* tests: the indexing job waits this long first (BIMBLE_LINK_INDEX_DELAY_MS) */
+    cc_tiles_opts topts;   /* TILE1: the pyramid's bake settings (zero: the defaults), recorded in SRCE "tiles" */
 } cc_link_job;
 
 /* A new job for `path` (copied). NULL out of memory. */
@@ -90,8 +109,24 @@ uint32_t cc_link_hlod_budget(cc_hlod *h, uint64_t cap);
  * out[0..n). 0 ok. */
 int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
                          const double *base_mm, char *out, size_t n);
+/* TESS1: the same with the reader's detail named ("detail": "exact" | "standard" | "light" | "custom", and for
+ * custom "chord_mm" and "max_deg"). */
+int cc_link_cache_source_at(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
+                            const double *base_mm, const cc_ifc_read_opts *detail, char *out, size_t n);
 /* LINKF: the IFC's base point a cache's SRCE names ("base_point_mm"): 0, or -1 when none. */
 int cc_link_cache_base_point(const char *src, size_t n, double out[3]);
 /* Whether `src` (a cache's SRCE) matches the IFC: 1 yes; with ends_known 0, size and time only. */
 int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex, int ends_known);
+/* TESS1: and read at `detail` (an SRCE without "detail" is standard's; custom: the same two numbers). */
+int cc_link_cache_matches_at(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex,
+                             int ends_known, const cc_ifc_read_opts *detail);
+/* SIZE3 (E): whether a cache's SRCE says it is complete ("complete": true: its proxies baked; false: geometry, names and
+ * property sets only, the proxies still to bake). Anything else (untrusted): 0. */
+int cc_link_cache_complete(const char *src, size_t n);
+/* TILE1: whether SRCE text `src` records the pyramid baked with settings `text` ("tiles": cc_tiles_opts_text). */
+int cc_link_cache_tiles_match(const char *src, size_t n, const char *text);
+/* TILE1: SRCE text `src` with "tiles": `text` set (added or replaced; its keys stay sorted) into out[0..cap). 0 ok. */
+int cc_link_cache_set_tiles(const char *src, size_t n, const char *text, char *out, size_t cap);
+/* SIZE3 (E): SRCE text `src` marked complete into `out` (`"complete":false` turned true). 0 ok, -1 not such a text. */
+int cc_link_cache_mark_complete(const char *src, size_t n, char *out, size_t cap);
 #endif

@@ -1,0 +1,40 @@
+#version 450
+// GPU culling (the Rust app's gpu_cull, ADR 0036 #10, for every element): one thread per draw item
+// (an element of the merged buffers, or a copy of a shared shape). An item outside the view, under
+// the screen-size cut, or under a cell drawn as its proxy (HLOD) is left out; a kept merged item
+// sets its draw command's instance count to 1, a kept copy appends itself to its shape's visible
+// list and counts. The faces' and the edges' commands get the same counts.
+layout(local_size_x = 64) in;
+struct Item { vec4 c; vec4 e; uvec4 k; }; // centre (w: radius), half extent (w: unused), k: cmd, copy (~0: merged), leaf cell, triangles
+layout(std430, set = 0, binding = 0) readonly buffer Items { Item item[]; };
+layout(std430, set = 0, binding = 1) readonly buffer Hidden { uint hidden[]; }; // per leaf cell: 1 = drawn as a proxy
+layout(std430, set = 1, binding = 0) buffer FaceCmds { uint fcmd[]; }; // 5 uints a command
+layout(std430, set = 1, binding = 1) buffer EdgeCmds { uint ecmd[]; }; // 4 uints a command
+layout(std430, set = 1, binding = 2) buffer Visible { uint visible[]; };
+layout(std430, set = 1, binding = 3) buffer Counters { uint counter[]; }; // 0: items kept, 1: triangles kept (low 32 bits)
+layout(set = 2, binding = 0) uniform Cull {
+    vec4 plane[5];
+    vec4 eye;      // xyz, w: pixels per unit of radius / distance (H/2 * f)
+    uvec4 n;       // x: items, y: 1 = edges too, z: 1 = use hidden, w: 1 = orthographic (NUI1: the size is not divided by the distance)
+    vec4 cut;      // x: the screen-size cut in pixels
+};
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= n.x) return;
+    Item it = item[i];
+    for (int p = 0; p < 5; p++)
+        if (dot(plane[p].xyz, it.c.xyz) + dot(abs(plane[p].xyz), it.e.xyz) + plane[p].w < 0.0) return;
+    float d = n.w == 1u ? 1.0 : max(distance(eye.xyz, it.c.xyz) - it.c.w, 1.0);
+    if (it.c.w * eye.w / d < cut.x) return;
+    if (n.z == 1u && hidden[it.k.z] != 0u) return;
+    uint cmd = it.k.x;
+    if (it.k.y == 0xffffffffu) {
+        fcmd[cmd * 5u + 1u] = 1u;
+    } else {
+        uint slot = atomicAdd(fcmd[cmd * 5u + 1u], 1u);
+        visible[fcmd[cmd * 5u + 4u] + slot] = it.k.y;
+    }
+    if (n.y == 1u) atomicAdd(ecmd[cmd * 4u + 1u], 1u);
+    atomicAdd(counter[0], 1u);
+    atomicAdd(counter[1], it.k.w);
+}

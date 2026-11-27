@@ -1,7 +1,7 @@
 // The weight of each feature and file (ticket SIZE1): node ccore/tools/weight.mjs [--out FILE]
 // writes ccore/results/weight.md (or FILE) and prints the change against the file it replaces.
 // Run after the builds it reads (ci/run.sh unit and full do: build-release, then this):
-//   - lines of C: each src/, session/, host/ .c file and its .h of the same name (wc -l);
+//   - lines of C: each src/, session/, host/, native/, native/ui/ .c file and its .h of the same name (wc -l);
 //   - editor wasm: `build.sh wasm-size` (one object per file, linked with a map: code + data per
 //     object, as wasm-ld lays them out). Error: the map is before wasm-opt, which clang runs on
 //     the link when it finds one (build.sh wasm) and build.sh wasm-view runs itself: the shipped
@@ -48,7 +48,7 @@ const FEATURES = [
   ["queries (model queries)", "query"],
   ["quantities and schedules", "quantity schedules verbs_schedules"], // QTY1: saved lists (ADR 0080)
   ["command palette", "palette"],
-  ["scene and mesh (triangulation, BMSH)", "scene earcut meshcodec mesh mesh_model prism_cut scene_bmsh hlod bvh"],
+  ["scene and mesh (triangulation, BMSH)", "scene earcut meshcodec mesh mesh_model prism_cut scene_bmsh hlod tiles bvh"],
   ["booleans glue (kernel calls)", "boolean"],
   ["views and visibility (2D views, ranges)", "view view_effective view_range views visibility"],
   ["drawing D1-D5 (cut, plan, annotations, style, sheets, paper, SVG)", "draw_cut draw_plan draw_annot draw_style draw_view draw_sheet paper sheet_svg toggles paper_scene"],
@@ -64,6 +64,8 @@ const FEATURES = [
   ["wasm carrier", "wasm_api wasm_stub"],
   ["host server (HTTP, static files, main, platform, fonts)", "server static main platform_native platform_win fonts"],
   ["MCP", "mcp"],
+  ["native app: renderer and loader (NUI1: SDL GPU parts, link geometry off the UI thread)", "render scene_load loader"],
+  ["native app: shell (NUI1: Dear ImGui through cimgui, the lab's data)", "app core view3d shell panels home tools page_quantities drive theme icons machine"],
   ["files from the page (FS1: the dialog's queries, POST /stage; the settings file, recent files; SET1: the settings, About)", "fs settings_file settings"],
   ["merged string literals (wasm <internal>)", "<internal>"],
   ["kernel manifold (C++, native only)", "lib:manifold lib:manifoldc lib:Clipper2"],
@@ -82,7 +84,7 @@ const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: "utf8"
 
 // ---- lines of C per source ----
 const lines = new Map();
-for (const d of ["src", "session", "host"])
+for (const d of ["src", "session", "host", "native", "native/ui"]) // NUI1: the native app's C too
   for (const f of readdirSync(join(CCORE, d)).filter((x) => x.endsWith(".c")).sort()) {
     const name = f.slice(0, -2);
     let n = readFileSync(join(CCORE, d, f), "utf8").split("\n").length - 1;

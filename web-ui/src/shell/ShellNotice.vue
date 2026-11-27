@@ -2,11 +2,12 @@
 // The shell's own states (ticket UX1, shell/machine.ts) over the screen they came from: a file
 // being opened (Cancel: a picker may never answer), the unsaved-changes question (Discard or
 // Cancel), an error with the session's words (Back). Each button is one `send`.
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { t } from "../i18n";
 import { here, openStep, send, shown } from "./send";
 import { fileRequest } from "../files"; // FS1: the page's own file dialog has its own close
 import { recentFiles, retryConnection, state } from "../bimble"; // FIXUI: the connection notices
+import { ask, copyText, formatBytes, progress } from "../openurl"; // URL1: a model from a link
 
 const s = computed(() => here.value);
 // PERF2: the open's step (read, parse, scene, mesh), shown once a file is being opened
@@ -18,6 +19,13 @@ const reopen = computed(() => {
   return recentFiles().find((r) => r.name === v.file && r.exists) ?? null;
 });
 function retry(): void { if (send({ do: "retry" })) retryConnection(); }
+// ---- URL1 (ADR 0086): the link's host, its question, its download ----
+const hostOf = (u: string) => { try { return new URL(u).host; } catch { return u.slice(0, 80); } };
+const linkAsk = computed(() => (s.value.at === "opening" && s.value.url !== undefined && ask.value && ask.value.url === s.value.url ? ask.value : null));
+const linkBytes = computed(() => (s.value.at === "opening" && s.value.url !== undefined && progress.value && progress.value.url === s.value.url ? progress.value : null));
+const copied = ref(false);
+async function copyUrl(u: string): Promise<void> { copied.value = await copyText(u); }
+// ---- end URL1 ----
 </script>
 
 <template>
@@ -41,8 +49,22 @@ function retry(): void { if (send({ do: "retry" })) retryConnection(); }
         <button v-if="reopen && shown('shell-lost-reopen')" class="btn p" type="button" data-bb="shell-lost-reopen" @click="send({ do: 'open', path: reopen.path })">{{ t('shellstate.gone.reopen', { file: reopen.name }) }}</button>
       </div>
     </div>
-    <div v-else-if="s.at === 'opening'" class="bb-dialog shell-card" role="status" data-bb="shell-opening">
-      <p class="msg">{{ t(`shellstate.opening.${s.what}`) }}</p>
+    <!-- URL1: another site's link asks first (openurl.ts ask); Cancel is the shell's -->
+    <div v-else-if="s.at === 'opening' && linkAsk" class="bb-dialog shell-card" role="alertdialog" :aria-label="t('openurl.ask.title', { host: linkAsk.host })" data-bb="shell-openurl-ask">
+      <h2 class="title">{{ t('openurl.ask.title', { host: linkAsk.host }) }}</h2>
+      <p class="msg mono" data-bb="shell-openurl-address">{{ linkAsk.url }}</p>
+      <p class="msg step">{{ t('openurl.ask.text') }}</p>
+      <div class="acts">
+        <button v-if="shown('shell-opening-cancel')" class="btn s" type="button" data-bb="shell-opening-cancel" @click="send({ do: 'cancel' })">{{ t('shellstate.cancel') }}</button>
+        <button class="btn p" type="button" data-bb="shell-openurl-allow" @click="linkAsk.answer(true)">{{ t('openurl.ask.open') }}</button>
+      </div>
+    </div>
+    <div v-else-if="s.at === 'opening'" class="bb-dialog shell-card" role="status" data-bb="shell-opening" :data-url="s.url">
+      <p class="msg">{{ s.url !== undefined ? t('openurl.opening', { host: hostOf(s.url) }) : t(`shellstate.opening.${s.what}`) }}</p>
+      <template v-if="linkBytes && !step"><!-- URL1: the download, before the open's steps -->
+        <progress class="bar" :value="linkBytes.total ? linkBytes.loaded : undefined" :max="linkBytes.total ?? undefined" data-bb="shell-openurl-progress" />
+        <p class="msg step" data-bb="shell-openurl-bytes">{{ linkBytes.total && linkBytes.loaded <= linkBytes.total ? t('openurl.progress.of', { loaded: formatBytes(linkBytes.loaded), total: formatBytes(linkBytes.total) }) : t('openurl.progress.sofar', { loaded: formatBytes(linkBytes.loaded) }) }}</p>
+      </template>
       <template v-if="step"><!-- PERF2 -->
         <progress class="bar" :value="step.n" :max="step.total" data-bb="shell-opening-progress" :aria-label="t('shellstate.step.of', { n: step.n, of: step.total })" />
         <p class="msg step" data-bb="shell-opening-step">{{ t(`shellstate.step.${step.step}` as 'shellstate.step.read') }}</p>
@@ -59,11 +81,16 @@ function retry(): void { if (send({ do: "retry" })) retryConnection(); }
         <button v-if="shown('shell-confirm-discard')" class="btn p" type="button" data-bb="shell-confirm-discard" @click="send({ do: 'discard' })">{{ t('shellstate.confirm.discard') }}</button>
       </div>
     </div>
-    <div v-else class="bb-dialog shell-card" role="alertdialog" :aria-label="t('shellstate.error.title')" data-bb="shell-error">
-      <h2 class="title">{{ t('shellstate.error.title') }}</h2>
-      <p class="msg mono">{{ s.message }}</p>
+    <div v-else class="bb-dialog shell-card" role="alertdialog" :aria-label="t(s.url !== undefined ? 'openurl.error.title' : 'shellstate.error.title')" data-bb="shell-error">
+      <h2 class="title">{{ t(s.url !== undefined ? 'openurl.error.title' : 'shellstate.error.title') }}</h2>
+      <p class="msg" :class="{ mono: s.url === undefined }" data-bb="shell-error-message">{{ s.message }}</p>
+      <p v-if="s.url !== undefined" class="msg mono step" data-bb="shell-error-url">{{ s.url }}</p>
       <div class="acts">
         <button v-if="shown('shell-error-back')" class="btn p" type="button" data-bb="shell-error-back" @click="send({ do: 'back' })">{{ t('shellstate.error.back') }}</button>
+        <!-- URL1: a link's error -->
+        <button v-if="s.url !== undefined" class="btn s" type="button" data-bb="shell-error-copy" @click="copyUrl(s.url)">{{ copied ? t('openurl.error.copied') : t('openurl.error.copy') }}</button>
+        <button v-if="shown('shell-error-home')" class="btn s" type="button" data-bb="shell-error-home" @click="send({ do: 'home' })">{{ t('openurl.error.home') }}</button>
+        <button v-if="s.url !== undefined && shown('shell-error-retry')" class="btn p" type="button" data-bb="shell-error-retry" @click="copied = false, send({ do: 'open', url: s.url })">{{ t('openurl.error.retry') }}</button>
       </div>
     </div>
   </div>
@@ -77,5 +104,5 @@ function retry(): void { if (send({ do: "retry" })) retryConnection(); }
 .mono { font-family: 'DM Mono', ui-monospace, Menlo, monospace; font-size: 13px; }
 .bar { width: 100%; height: 6px; accent-color: var(--bb-ink); }
 .step { font-size: 13px; color: var(--bb-stone); }
-.acts { display: flex; gap: 10px; justify-content: flex-end; }
+.acts { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
 </style>

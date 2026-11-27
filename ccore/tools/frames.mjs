@@ -402,7 +402,7 @@ async function measure() {
   out.stillMedian = med(still.ms), out.stillTris = still.tris, out.stillDraws = still.draws;
   // 3D2 (step 2): the same still frame without its edge pass (what edges cost)
   const ne = await ev(`(() => { const b = window.__bbGl.bench, g = window.__bbGl, ms = []; g.noEdges = true; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
-    g.noEdges = false; b.frame(0, false); return { ms, segs: g.q2 ? g.q2.edgeSegs : null }; })()`);
+    g.noEdges = false; b.frame(0, false); return { ms, segs: g.q2 ? (g.q2.edgeMode === "screen" ? "on screen" : g.q2.edgeSegs) : null }; })()`);
   out.stillNoEdgesMedian = med(ne.ms), out.stillEdgeSegs = ne.segs;
   out.stillProxy = await ev("window.__bbGl.proxies ? { cells: window.__bbGl.proxies.drawnCells, tris: window.__bbGl.proxies.drawnTris } : null");
   // 3D2: the same still frame without proxies (the full detail), and the two pictures compared at the home camera
@@ -528,7 +528,7 @@ function comparePixels() {
 }
 
 // ---- the report ----
-const fmt = (v, d = 0) => (v === null || v === undefined || Number.isNaN(v) ? "–" : Number(v).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d }));
+const fmt = (v, d = 0) => (typeof v === "string" ? v : v === null || v === undefined || Number.isNaN(v) ? "–" : Number(v).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d })); // (VIS1: "on screen": edges found on screen, no segments)
 const mb = (v) => (v === null || v === undefined ? "–" : (v / 1048576).toFixed(1));
 function table(rows) {
   const L = [];
@@ -674,8 +674,11 @@ async function linksMain() {
   await hcall("action", "new");
   const t0 = Date.now();
   await hcall("action", "link_folder", { path: dir });
-  await waitFor("the links converted", 600000, async () => { const r = JSON.parse((await hcall("query", "links_panel")).text).models; return r.length === LINKS && r.every((m) => m.state === "ready"); }, 200);
-  const convertMs = Date.now() - t0;
+  let drawnAt = null; // SIZE3 (E): every link ready (drawn) before its proxies are baked (indexed)
+  await waitFor("the links converted", 600000, async () => { const r = JSON.parse((await hcall("query", "links_panel")).text).models;
+    if (drawnAt === null && r.length === LINKS && r.every((m) => m.state === "ready")) drawnAt = Date.now();
+    return r.length === LINKS && r.every((m) => m.state === "ready" && !m.indexing); }, 200);
+  const convertMs = Date.now() - t0, drawnMs = (drawnAt ?? Date.now()) - t0;
   for (let k = 0; k < LINKS; k++) {
     await hcall("action", "manage_links", { op: "unpin", name: `link_${k}.ifc` });
     await hcall("action", "manage_links", { op: "place", name: `link_${k}.ifc`, move_mm: [30000 * (k % 5), 30000 * Math.floor(k / 5), 0] });
@@ -684,12 +687,14 @@ async function linksMain() {
   const detail = logs.reduce((n, t) => n + Number(/\ntriangles: (\d+)/.exec(t)?.[1] ?? 0), 0);
   const cacheBytes = files.reduce((n, f) => n + statSync(`${f}.bimbleview`).size, 0);
   const hlod = logs.map((t) => /proxies \(HLOD, baked for the 3D view\): (\d+) cells, (\d+) triangles, (\d+) bytes, built in (\d+) ms/.exec(t));
-  const out = { label: LABEL, links: LINKS, load: loadNow(), detailTris: detail, cacheBytes, convertMs,
+  const out = { label: LABEL, links: LINKS, load: loadNow(), detailTris: detail, cacheBytes, convertMs, drawnMs,
     hlodBytes: hlod.reduce((n, m) => n + Number(m?.[3] ?? 0), 0), hlodMs: hlod.reduce((n, m) => n + Number(m?.[4] ?? 0), 0) };
   await startBrowser();
   BUILD = "native", MODEL = "links";
   await openTab();
   await S("Page.navigate", { url: pageUrl() });
+  let linksMaxHeap = 0; // SIZE3: the JS heap + array buffers at most during the open (polled every 250 ms)
+  const linksHeapPoll = setInterval(() => { S("Runtime.getHeapUsage").then((h) => { linksMaxHeap = Math.max(linksMaxHeap, h.usedSize + (h.backingStorageSize ?? 0)); }).catch(() => {}); }, 250);
   await waitFor("the page ready", 240000, () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.links && window.__bbGl.links.length === ${LINKS})`), 50);
   if (GPU) { // GPU1: the WebGPU renderer must be the one drawing
     await waitFor("the renderer", 30000, () => ev("(window.__bbPerf?.snapshot().renderer.reason ?? '') !== 'starting…'"), 50);
@@ -700,7 +705,9 @@ async function linksMain() {
   await whichGpu();
   await quiet(30000);
   const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, preview: g.proxyPreview ? g.proxyPreview.at : null, meshAt: g.meshAt ?? null, full: g.fullFrameMs ?? null,
-    fetch: g.meshFetchMs, bytes: g.meshBytes }; })()`);
+    fetch: g.meshFetchMs, bytes: g.meshBytes, detailedAt: g.linksDetailedAt ?? null, peakDecoded: g.openPeakDecoded ?? null, decodes: g.decodes ?? null }; })()`);
+  clearInterval(linksHeapPoll);
+  out.maxHeap = linksMaxHeap, out.detailedAt = g0.detailedAt, out.openPeakDecoded = g0.peakDecoded, out.decodes = g0.decodes; // SIZE3
   out.firstPicture = g0.preview !== null && g0.preview !== undefined ? Math.min(g0.preview, g0.first) : g0.first;
   out.fromProxies = g0.preview !== null && g0.preview !== undefined;
   out.firstFrameMs = g0.first, out.meshAt = g0.meshAt, out.complete = g0.full, out.meshFetchMs = g0.fetch, out.meshBytes = g0.bytes;
@@ -714,7 +721,7 @@ async function linksMain() {
     return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
   out.still = med(still.ms), out.stillTris = still.tris, out.stillDraws = still.draws;
   const ne = await ev(`(() => { const b = window.__bbGl.bench, g = window.__bbGl, ms = []; g.noEdges = true; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
-    g.noEdges = false; const r = { ms, segs: g.q2 ? g.q2.edgeSegs : null }; b.frame(0, false); r.segs = g.q2 ? g.q2.edgeSegs : null; return r; })()`);
+    g.noEdges = false; const r = { ms, segs: g.q2 ? g.q2.edgeSegs : null }; b.frame(0, false); r.segs = g.q2 ? (g.q2.edgeMode === "screen" ? "on screen" : g.q2.edgeSegs) : null; return r; })()`);
   out.stillNoEdges = med(ne.ms), out.edgeSegs = ne.segs;
   const close = await ev(`(() => { const b = window.__bbGl.bench, ms = []; b.snap(0, 0); b.zoom(0.25); for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
     return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
@@ -727,11 +734,16 @@ async function linksMain() {
   // the JS heap and array buffers after a collection
   out.cacheSections = sumSections(files.map((f) => `${f}.bimbleview`));
   out.meshServed = await ev("window.__bbGl.meshBytesServed ?? window.__bbGl.meshBytes ?? null");
-  out.hostRssMb = rssMb(host.pid);
+  out.hostRssMb = rssMb(host.pid), out.hostAnonMb = anonMb(host.pid); // SIZE3: anonymous apart (the caches' mapped pages are file pages)
+  out.hostDecodes = (host.out.match(/its meshes decoded/g) ?? []).length, out.hostDrops = (host.out.match(/its meshes dropped/g) ?? []).length; // SIZE3: a link's meshes decoded in the host
   await S("HeapProfiler.collectGarbage").catch(() => {});
   await sleep(500);
   { const h = await S("Runtime.getHeapUsage"); out.jsHeap = h.usedSize, out.arrayBuffers = h.backingStorageSize ?? null; }
   out.rss = chromeRss();
+  console.log(`SIZE3: the ${LINKS} links drawn (ready) in ${out.drawnMs} ms, indexed (proxies baked) in ${out.convertMs} ms`);
+  console.log(`SIZE3: open: JS heap + array buffers at most ${mb(out.maxHeap)} MB, decoded at most ${mb(out.openPeakDecoded)} MB, decodes ${JSON.stringify(out.decodes)}, ` +
+    `links in view detailed at ${out.detailedAt?.toFixed(0)} ms (first picture ${out.firstPicture?.toFixed(0)} ms); host anonymous ${out.hostAnonMb.toFixed(0)} MB, link meshes decoded ${out.hostDecodes} times, dropped ${out.hostDrops}`);
+  if (process.env.FRAMES_HOST_LOG) for (const l of host.out.split("\n").filter((x) => /decoded|dropped|POST|query/.test(x)).slice(-60)) console.log(`  host: ${l}`);
   console.log(`memory: caches ${JSON.stringify(out.cacheSections)}; mesh served ${out.meshServed}; host RSS ${out.hostRssMb.toFixed(0)} MB; ` +
     `tab RSS ${out.rss.renderer.toFixed(0)} MB, GPU process ${out.rss.gpu.toFixed(0)} MB; JS heap ${mb(out.jsHeap)} MB (+ ${mb(out.arrayBuffers)} MB array buffers); GPU ${mb(out.gpuBytes)} MB`);
   if (PIXELS) { mkdirSync(PIXELS, { recursive: true }); await pixels(); }
@@ -785,6 +797,7 @@ function procTree(root) {
   while (todo.length) { const p = todo.pop(); out.push(p); todo.push(...(kids.get(p) ?? [])); }
   return out;
 }
+const anonMb = (pid) => { try { return Number(/RssAnon:\s+(\d+)/.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1] ?? 0) / 1024; } catch { return 0; } }; // SIZE3
 const rssMb = (pid) => { try { return Number(/VmRSS:\s+(\d+)/.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1] ?? 0) / 1024; } catch { return 0; } };
 const cmd = (pid) => { try { return readFileSync(`/proc/${pid}/cmdline`, "utf8"); } catch { return ""; } };
 /** The browser's processes by kind (MB of RSS): renderer (the tab), gpu, others. */
@@ -842,17 +855,19 @@ async function folderMain() {
       const lf = await hcall("action", "link_folder", { path: dir });
       if (lf.status !== 200) throw new Error(`link_folder: ${lf.status} ${lf.text.slice(0, 200)}`);
       let panel = null;
+      let drawnAt = null; // SIZE3 (E): every link drawn (ready) before its proxies are baked (indexed)
       await W(waitFor("the links converted", 3600000, async () => {
         panel = JSON.parse((await hcall("query", "links_panel")).text).models;
-        return panel.length === n && panel.every((m) => m.state !== "converting" && m.state !== "queued");
+        if (drawnAt === null && panel.length === n && panel.every((m) => m.state !== "converting" && m.state !== "queued")) drawnAt = Date.now();
+        return panel.length === n && panel.every((m) => m.state !== "converting" && m.state !== "queued" && !m.indexing);
       }, 500));
-      out.convertMs = Date.now() - t0;
+      out.convertMs = Date.now() - t0, out.drawnMs = (drawnAt ?? Date.now()) - t0;
       out.states = panel.map((m) => m.state).join(",");
       out.fromCache = panel.filter((m) => m.from_cache).length;
       out.elements = panel.reduce((k, m) => k + m.elements, 0), out.storedTris = panel.reduce((k, m) => k + m.triangles, 0);
       out.origins = panel.map((m) => m.origin);
       out.hostRssMb = rssMb(host.pid);
-      log(`${n} files: converted in ${out.convertMs} ms (${out.fromCache} from cache), ${out.elements} elements, ${out.storedTris} stored triangles, host RSS ${out.hostRssMb.toFixed(0)} MB`);
+      log(`${n} files: drawn (ready) in ${out.drawnMs} ms, indexed in ${out.convertMs} ms (${out.fromCache} from cache), ${out.elements} elements, ${out.storedTris} stored triangles, host RSS ${out.hostRssMb.toFixed(0)} MB`);
       try {
         if (memGb() < 3) throw new Error(`memory: ${memGb().toFixed(1)} GB available before Chromium`);
         curTarget = null;
@@ -861,7 +876,7 @@ async function folderMain() {
         await openTab();
         const tNav = Date.now();
         await S("Page.navigate", { url: pageUrl() });
-        const heapPoll = setInterval(() => { S("Runtime.getHeapUsage").then((h) => { heapNow = h.usedSize + (h.backingStorageSize ?? 0); maxHeap = Math.max(maxHeap, heapNow); }).catch(() => {}); }, 1000);
+        const heapPoll = setInterval(() => { S("Runtime.getHeapUsage").then((h) => { heapNow = h.usedSize + (h.backingStorageSize ?? 0); maxHeap = Math.max(maxHeap, heapNow); }).catch(() => {}); }, 250); // SIZE3: 250 ms (1 s missed the open's peaks)
         try {
           await W(waitFor("the page ready", 900000, () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.links && window.__bbGl.links.length === ${n})`), 200));
           out.readyWallMs = Date.now() - tNav;
@@ -869,7 +884,9 @@ async function folderMain() {
           out.renderer = GPU_SEEN.webgl;
           await quiet(120000);
           const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, preview: g.proxyPreview ? g.proxyPreview.at : null, full: g.fullFrameMs ?? null,
-            fetch: g.meshFetchMs, bytes: g.meshBytes, draw: (g.linkDraw ?? []).map((l) => l.xf ? l.xf.t : null), far: g.farLinks ?? null, detail: (g.linkDetail ?? []).filter((x) => x.detail).length }; })()`);
+            fetch: g.meshFetchMs, bytes: g.meshBytes, draw: (g.linkDraw ?? []).map((l) => l.xf ? l.xf.t : null), far: g.farLinks ?? null, detail: (g.linkDetail ?? []).filter((x) => x.detail).length,
+            detailedAt: g.linksDetailedAt ?? null, peakDecoded: g.openPeakDecoded ?? null, decodes: g.decodes ?? null, linkGpu: g.linkGpuUsed ?? null, budget: g.linkGpuBudget ?? null }; })()`);
+          out.detailedAt = g0.detailedAt, out.openPeakDecoded = g0.peakDecoded, out.decodes = g0.decodes, out.linkGpuUsed = g0.linkGpu, out.linkGpuBudget = g0.budget; // SIZE3
           out.firstPicture = g0.preview ?? g0.first, out.fromProxies = g0.preview != null, out.firstFrameMs = g0.first, out.complete = g0.full;
           out.meshBytes = g0.bytes, out.detailLoaded = g0.detail, out.linkT = g0.draw, out.farKm = g0.far ? g0.far.map((x) => x.km) : null;
           await ev("(window.__bbGl.bench.snap(0, 0), 0)");
@@ -891,6 +908,7 @@ async function folderMain() {
           out.jsHeap = h.usedSize, out.arrayBuffers = h.backingStorageSize ?? null;
           out.maxHeap = maxHeap;
           out.rss = chromeRss();
+          out.hostRestMb = rssMb(host.pid), out.hostAnonMb = anonMb(host.pid); // SIZE3: the host at rest after the page's requests
           out.survived = (await ev("1 + 1")) === 2;
         } finally { clearInterval(heapPoll); }
       } catch (e) {

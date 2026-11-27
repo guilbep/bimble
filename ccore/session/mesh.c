@@ -25,6 +25,9 @@
  * The host is little-endian (x86-64, aarch64); the bytes are written with memcpy.
  * With linked models (links.h), the LNKS trailer follows: one BMSH per link. Without, nothing
  * follows (the bytes above, unchanged). */
+#ifdef __clang__
+#pragma clang fp contract(off) /* SIZE3: the boxes in the page's f32 arithmetic */
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +39,9 @@
 #include "mesh.h"
 #include "scene.h"
 #include "scene_bmsh.h"
+#include "meshcodec.h" /* SIZE3 */
+#include "tiles.h"     /* TILE1 */
+#include "json_w.h"
 #include "session.h"
 
 static void put_u32(Buf *b, uint32_t v) { buf_append(b, &v, 4); }
@@ -57,7 +63,7 @@ static int bmsh_of(const cc_scene *sp, uint32_t rev, Buf *out, cc_error *err) {
     if (ne && !w) { fail(err, "out of memory"); goto done; }
     uint64_t nv = 0, ni = 0, ns = 0;
     for (size_t k = 0; k < ne; k++) {
-        if (cc_scene_world_mesh(&s, k, &tmp, &w[k]) != 0) { fail(err, "out of memory"); goto done; }
+        if (cc_scene_world_mesh(&s, k, &tmp, &w[k]) != 0) { fail(err, "out of memory or a mesh not decoded"); goto done; }
         /* nn == ne for meshes built by the C core; a segment without normals gets zeros. */
         nv += w[k].nv, ni += w[k].ni, ns += w[k].ne;
     }
@@ -154,14 +160,14 @@ static int links_lazy(cc_session *s, Buf *out) {
         double c = 1, sn = 0, t[3] = {0, 0, 0}, o[3] = {0, 0, 0};
         if (k->kind) {
             cc_link_placement(s, k, &c, &sn, t);
-            const double *lo = cc_link_raw_scene(k)->origin;
+            const double *lo = cc_link_rows(k)->origin; /* SIZE3: no mesh decoded for the trailer */
             o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
         }
         buf_append(out, &c, 8), buf_append(out, &sn, 8);
         for (int q = 0; q < 3; q++) buf_append(out, &o[q], 8);
         int32_t col = k->colour;
         buf_append(out, &col, 4);
-        put_u32(out, k->kind ? (uint32_t)cc_link_raw_scene(k)->nelements : 0u);
+        put_u32(out, k->kind ? (uint32_t)cc_link_rows(k)->nelements : 0u);
         put_u32(out, (uint32_t)s->links_mesh_gen);
     }
     return out->oom ? -1 : 0;
@@ -196,7 +202,7 @@ static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error 
         if (v2) { /* LINKF: the turn about Z (cos, sin), the placed origin (host world mm), the colour */
             double c, sn, t[3], o[3];
             cc_link_placement(s, k, &c, &sn, t);
-            const double *lo = cc_link_raw_scene(k)->origin;
+            const double *lo = cc_link_rows(k)->origin;
             o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
             buf_append(out, &c, 8), buf_append(out, &sn, 8);
             for (int q = 0; q < 3; q++) buf_append(out, &o[q], 8);
@@ -206,7 +212,7 @@ static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error 
         buf_clear(&one);
         one.oom = 0;
         if (form == 3) rc = cc_scene_bmsh3(cc_link_raw_scene(k), link_bmsh_id, k, rev, &one, err);
-        else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
+        else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(cc_link_raw_scene(k), rev, &one, err); /* SIZE3: decoded first */
         if (!rc && (one.oom || one.len > UINT32_MAX)) rc = fail(err, "out of memory");
         if (!rc) put_u32(out, (uint32_t)one.len), buf_append(out, one.p, one.len);
     }
@@ -277,6 +283,7 @@ int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_
 /* ---- 3D2 (ADR 0078): the HLOD proxies, in steps (mesh.h) ---- */
 
 void cc_mesh_proxies_free(cc_session *s) {
+    cc_mesh_tiles_free(s); /* TILE1: built on the same scene */
     if (s->hlod) cc_hlod_free(s->hlod);
     free(s->hlod);
     buf_free(&s->hlod_out);
@@ -334,24 +341,149 @@ int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, u
 }
 
 /* ---- SIZE2: a link's mesh on its own, BMSH version 4 (mesh.h) ---- */
+/* SIZE3 (B): the page's element box (glviewport.ts elementBox: f32, each sum rounded in this order) of positions
+ * `pos` placed by `pl` (NULL: as they are), min and max grown into b[6]. */
+static void box_grow(const float (*pos)[3], uint32_t nv, const cc_placement32 *pl, float b[6]) {
+    for (uint32_t v = 0; v < nv; v++) {
+        float x = pos[v][0], y = pos[v][1], z = pos[v][2];
+        if (pl) {
+            float t0 = pl->x[0] * x, t1 = pl->y[0] * y, t2 = pl->z[0] * z, qx = t0 + t1;
+            qx = qx + t2, qx = qx + pl->t[0];
+            float u0 = pl->x[1] * x, u1 = pl->y[1] * y, u2 = pl->z[1] * z, qy = u0 + u1;
+            qy = qy + u2, qy = qy + pl->t[1];
+            float w0 = pl->x[2] * x, w1 = pl->y[2] * y, w2 = pl->z[2] * z, qz = w0 + w1;
+            qz = qz + w2, qz = qz + pl->t[2];
+            x = qx, y = qy, z = qz;
+        }
+        if (x < b[0]) b[0] = x;
+        if (x > b[3]) b[3] = x;
+        if (y < b[1]) b[1] = y;
+        if (y > b[4]) b[4] = y;
+        if (z < b[2]) b[2] = z;
+        if (z > b[5]) b[5] = z;
+    }
+}
+
+/* SIZE3: block i's BMG1 bytes from a lazy view file (viewfile.h cc_viewfile_block). */
+static int link_block(const void *ctx, int shape, size_t i, Buf *out) {
+    const cc_viewfile *v = ctx;
+    const uint8_t *p;
+    size_t n;
+    if (cc_viewfile_block(v, shape ? i : v->nshapes + i, &p, &n)) return -1;
+    buf_append(out, p, n);
+    return out->oom ? -1 : 0;
+}
+
+/* SIZE2FIX, SIZE2FIX2, SIZE3: the link a page's request for link k means, or NULL with *st set: 204 (superseded: a
+ * request that names the link or carries the heads' key and finds it gone, renamed, of another key or with no
+ * geometry now) or 404 (a bare index of no such link, or not loaded). One rule for its mesh and its rows answer. */
+static cc_link *link_asked(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, int *st, Buf *out) {
+    cc_link *l = k < s->nlinks ? &s->links[k] : NULL;
+    if (l && name && (strlen(l->name) != nname || memcmp(l->name, name, nname))) l = NULL;
+    if (l && has_key && key != (uint32_t)s->links_mesh_gen) l = NULL;
+    if ((!l || !l->kind) && (name || has_key)) return *st = 204, NULL;
+    if (!l || !l->kind) return *st = 404, buf_puts(out, "no such link"), NULL;
+    *st = 200;
+    return l;
+}
+
 int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n) {
     Buf *out = &s->link_mesh_out;
     buf_free(out); /* the last answer's bytes go (a link's mesh is large: none is kept between calls) */
     buf_init(out);
-    const cc_link *l = k < s->nlinks ? &s->links[k] : NULL;
-    int st = 200;
+    int st;
     cc_error err;
-    /* SIZE2FIX: the link asked is the one the page saw: its name and the mesh key of the heads it read (a
-     * link removed, replaced or read again since: superseded, 204, not an error: the page asks again) */
-    if (l && name && (strlen(l->name) != nname || memcmp(l->name, name, nname))) l = NULL;
-    if (l && has_key && key != (uint32_t)s->links_mesh_gen) l = NULL;
-    /* SIZE2FIX2: a request that names the link or carries the key is never a 404: gone, renamed, unloaded, missing,
-     * queued or converting (no geometry now), out of range or of another key: superseded (204); 404 stays for a
-     * bare request (index alone) of no such link */
-    if ((!l || !l->kind) && (name || has_key)) st = 204;
-    else if (!l || !l->kind) st = 404, buf_puts(out, "no such link");
-    else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
+    const cc_link *l = link_asked(s, k, name, nname, has_key, key, &st, out); /* SIZE2FIX, SIZE2FIX2 */
+    if (!l) {
+        /* 204 superseded or 404: st set */
+    } else if (l->vf && l->vf->lazy && !l->resident) { /* SIZE3: its cache's own codec bytes, no mesh decoded */
+        /* the rows with the view file's counts (the link's scene shows empty meshes until decoded); the blocks
+         * appended from the file, never read from these arrays (NULL) */
+        const cc_scene *rs = cc_link_rows(l);
+        cc_scene cs = *rs;
+        cs.elements = malloc((rs->nelements + 1) * sizeof *cs.elements);
+        if (!cs.elements) buf_puts(out, "out of memory"), st = 500;
+        else {
+            for (size_t i = 0; i < rs->nelements; i++) {
+                cs.elements[i] = rs->elements[i];
+                cs.elements[i].mesh = i < l->vf->nelements ? l->vf->elements[i].mesh : (cc_mesh){0};
+            }
+            cs.shapes = l->vf->shapes, cs.nshapes = l->vf->nshapes;
+            if (cc_scene_bmsh4_blocks(&cs, link_bmsh_id, l, (uint32_t)s->links_mesh_gen, link_block, l->vf, out, &err))
+                buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+            free(cs.elements);
+        }
+    } else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
         buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+    *p = out->p ? out->p : "", *n = out->len;
+    return st;
+}
+
+/* ---- SIZE3 (B): a link's rows and its elements' boxes (mesh.h cc_link_rows_answer) ---- */
+int cc_link_rows_answer(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n) {
+    Buf *out = &s->link_mesh_out;
+    buf_free(out);
+    buf_init(out);
+    int st;
+    cc_error err;
+    cc_link *l = link_asked(s, k, name, nname, has_key, key, &st, out); /* (as cc_link_mesh) */
+    if (l) {
+        int lazy = l->vf && l->vf->lazy && !l->resident;
+        const cc_scene *rs = lazy ? cc_link_rows(l) : cc_link_raw_scene(l);
+        cc_scene cs = *rs;
+        size_t ne = rs->nelements;
+        float (*bx)[6] = malloc((ne + 1) * sizeof *bx);
+        cs.elements = lazy ? malloc((ne + 1) * sizeof *cs.elements) : NULL;
+        if (!bx || (lazy && !cs.elements)) st = 500, buf_puts(out, "out of memory");
+        else {
+            for (size_t i = 0; i < ne; i++) {
+                for (int q = 0; q < 3; q++) bx[i][q] = 1.0f / 0.0f, bx[i][3 + q] = -1.0f / 0.0f;
+                if (lazy) cs.elements[i] = rs->elements[i], cs.elements[i].mesh = i < l->vf->nelements ? l->vf->elements[i].mesh : (cc_mesh){0};
+            }
+            if (lazy) cs.shapes = l->vf->shapes, cs.nshapes = l->vf->nshapes;
+            const cc_scene *sc = lazy ? &cs : rs;
+            if (lazy) { /* each mesh decoded once into a scratch, never kept */
+                Arena a;
+                arena_init(&a, 0);
+                size_t ns = l->vf->nshapes;
+                size_t *first = calloc(ns + 1, sizeof *first), *next = malloc((ne + 1) * sizeof *next);
+                if (!first || !next) st = 500, buf_puts(out, "out of memory");
+                for (size_t i = ne; st == 200 && i-- > 0;) /* each shape's elements, in order */
+                    if (sc->elements[i].shape >= 0 && (size_t)sc->elements[i].shape < ns)
+                        next[i] = first[sc->elements[i].shape], first[sc->elements[i].shape] = i + 1;
+                for (size_t b = 0; st == 200 && b < ns + ne; b++) {
+                    if (b >= ns && sc->elements[b - ns].shape >= 0) continue;
+                    const uint8_t *q;
+                    size_t qn;
+                    cc_mesh m;
+                    const char *why;
+                    arena_trim(&a, (size_t)1 << 22);
+                    if (cc_viewfile_block(l->vf, b, &q, &qn) || cc_meshcodec_decode(q, qn, &a, &m, &why) != CC_MC_OK) {
+                        st = 500, buf_puts(out, "a mesh of the cache does not decode");
+                        break;
+                    }
+                    if (b >= ns) box_grow((const float(*)[3])m.pos, m.nv, NULL, bx[b - ns]);
+                    else
+                        for (size_t e = first[b]; e; e = next[e - 1]) box_grow((const float(*)[3])m.pos, m.nv, &sc->elements[e - 1].to_scene, bx[e - 1]);
+                }
+                free(first), free(next);
+                arena_free(&a);
+            } else
+                for (size_t i = 0; i < ne; i++) {
+                    const cc_scene_element *e = &sc->elements[i];
+                    const cc_mesh *m = e->shape >= 0 ? ((size_t)e->shape < sc->nshapes ? &sc->shapes[e->shape] : NULL) : &e->mesh;
+                    if (m && m->pos) box_grow((const float(*)[3])m->pos, m->nv, e->shape >= 0 ? &e->to_scene : NULL, bx[i]);
+                }
+            if (st == 200 && cc_scene_bmsh4_blocks(sc, link_bmsh_id, l, (uint32_t)s->links_mesh_gen, CC_BMSH_ROWS_ONLY, NULL, out, &err))
+                buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+            if (st == 200) {
+                buf_append(out, "BOXS", 4), buf_append(out, bx, ne * sizeof *bx);
+                if (out->oom) buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), st = 500;
+            }
+        }
+        free(bx);
+        if (lazy) free(cs.elements);
+    }
     *p = out->p ? out->p : "", *n = out->len;
     return st;
 }
@@ -385,10 +517,398 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
             if (cc_gunzip((const unsigned char *)out->p, out->len, cap, &raw, &why)) buf_free(&raw), buf_clear(out), buf_puts(out, "proxies: damaged"), st = 500;
             else buf_free(out), *out = raw;
         }
-        if (st == 200 && cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_raw_scene(l)->nelements, &err))
+        if (st == 200 && cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_rows(l)->nelements, &err))
             buf_clear(out), buf_puts(out, err.msg), st = 500;
     }
     *p = out->p ? out->p : "", *n = out->len;
     return st;
 }
 
+
+/* ---- TILE1 (ADR 0078 amendment 6): the tile pyramid served (mesh.h cc_link_tiles, cc_mesh_tiles) ---- */
+
+#define TILES_MAX_ASKED 4096u
+
+/* The answer to `req` ("toc", or tile ids "a,b,c") from the section sec[0..n) (checked here: untrusted) of a scene
+ * whose leaves come from `src`. The HTTP status; `out` the bytes or the error text. */
+static int tiles_answer(const cc_tiles_src *src, const uint8_t *sec, size_t n, uint32_t ne, const char *req, size_t nreq, Buf *out) {
+    cc_tiles_toc toc;
+    cc_error err;
+    if (cc_tiles_check(sec, n, 1, ne, &toc, &err)) return buf_puts(out, err.msg), 500;
+    if (nreq == 3 && !memcmp(req, "occ", 3)) { /* the occluders (after the table of contents) */
+        buf_append(out, toc.occ, 36 * (size_t)toc.nocc);
+        return out->oom ? (buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), 500) : 200;
+    }
+    if (nreq == 3 && !memcmp(req, "toc", 3)) {
+        buf_append(out, sec, toc.toc);
+        return out->oom ? (buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), 500) : 200;
+    }
+    uint32_t ids[TILES_MAX_ASKED], nid = 0;
+    for (size_t i = 0; i < nreq;) {
+        uint64_t v = 0;
+        size_t d = 0;
+        while (i < nreq && req[i] >= '0' && req[i] <= '9' && d < 10) v = v * 10 + (uint64_t)(req[i++] - '0'), d++;
+        if (!d || v >= toc.ntiles || nid >= TILES_MAX_ASKED || (i < nreq && req[i] != ',')) return buf_puts(out, "bad tile ids"), 400;
+        ids[nid++] = (uint32_t)v;
+        if (i < nreq) i++;
+    }
+    if (!nid) return buf_puts(out, "no tile asked"), 400;
+    const uint8_t *blobs = sec + toc.blob_at;
+    buf_append(out, "TILS", 4);
+    unsigned char c4[4];
+#define PUT32(v) (c4[0] = (unsigned char)(v), c4[1] = (unsigned char)((v) >> 8), c4[2] = (unsigned char)((v) >> 16), c4[3] = (unsigned char)((v) >> 24), buf_append(out, c4, 4))
+    PUT32(nid);
+    for (uint32_t i = 0; i < nid; i++) {
+        cc_tile t;
+        cc_tiles_get(&toc, ids[i], &t);
+        uint32_t kind = (t.flags & CC_TILE_LEAF) ? 1 : (t.flags & CC_TILE_PROXY) ? 2 : 0;
+        PUT32(ids[i]);
+        PUT32(kind);
+        size_t at = out->len;
+        PUT32(0u);
+        if (kind == 2) buf_append(out, blobs + t.off, t.len);
+        else if (kind == 1 && cc_tiles_leaf_answer(src, &toc, ids[i], out, &err)) {
+            buf_clear(out), out->oom = 0, buf_puts(out, err.msg);
+            return 500;
+        }
+        uint32_t len = (uint32_t)(out->len - at - 4);
+        while (out->len % 4) buf_putc(out, 0);
+        if (!out->oom) memcpy(out->p + at, (unsigned char[4]){(unsigned char)len, (unsigned char)(len >> 8), (unsigned char)(len >> 16), (unsigned char)(len >> 24)}, 4);
+    }
+#undef PUT32
+    if (out->oom) return buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), 500;
+    return 200;
+}
+
+/* a small link (or a view file linked as it is) without a section TILE: its pyramid built at once, kept one at a time */
+#define TILES_ONCE_MAX_TRIS 2000000ull
+
+int cc_link_tiles(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char *req, size_t nreq,
+                  const char **p, size_t *n) {
+    Buf *out = &s->link_mesh_out;
+    buf_free(out);
+    buf_init(out);
+    int st;
+    s->link_tiles_none = 0;
+    cc_link *l = link_asked(s, k, name, nname, has_key, key, &st, out);
+    if (l) {
+        cc_tiles_src src = {NULL, NULL};
+        if (l->vf) src.vf = l->vf;
+        else if (l->ifc) src.scene = &l->ifc->scene;
+        else src.scene = cc_link_raw_scene(l);
+        uint32_t ne = (uint32_t)cc_link_rows(l)->nelements;
+        const uint8_t *sec = NULL;
+        size_t sn = 0;
+        Buf rd;
+        buf_init(&rd);
+        if (l->vf && l->vf->has_tiles) {
+            const cc_viewfile *v = l->vf;
+            if (v->lazy && v->base && v->tiles_off <= v->base_len && v->tiles_len <= v->base_len - v->tiles_off)
+                sec = v->base + v->tiles_off, sn = (size_t)v->tiles_len;
+            else if (l->cache && s->pf->read_range && v->tiles_len < ((uint64_t)1 << 31) && !buf_reserve(&rd, (size_t)v->tiles_len + 1)) {
+                size_t got = 0;
+                if (s->pf->read_range(s->pf->ctx, l->cache, v->tiles_off, (size_t)v->tiles_len, rd.p, &got) == CC_PF_OK && got == v->tiles_len)
+                    rd.len = got, sec = (const uint8_t *)rd.p, sn = got;
+            }
+        }
+        if (!sec && s->link_tiles_uid == l->uid + 1 && s->link_tiles_gen == s->links_mesh_gen && s->link_tiles.len)
+            sec = (const uint8_t *)s->link_tiles.p, sn = s->link_tiles.len;
+        if (!sec) {
+            uint64_t tris = cc_link_triangles(l);
+            if (l->indexing) st = 202, buf_puts(out, "indexing");
+            else if (tris > TILES_ONCE_MAX_TRIS) st = 204, s->link_tiles_none = 1; /* none: indexed again at its next open */
+            else {
+                cc_tiles t;
+                cc_tiles_opts o = s->tiles_opts;
+                cc_error err;
+                if (!o.leaf_tris) cc_tiles_default(&o);
+                if (cc_tiles_build(&t, &src, &o, &err)) st = 500, buf_puts(out, err.msg);
+                else {
+                    buf_free(&s->link_tiles);
+                    s->link_tiles = t.out, buf_init(&t.out);
+                    s->link_tiles_uid = l->uid + 1, s->link_tiles_gen = s->links_mesh_gen;
+                    sec = (const uint8_t *)s->link_tiles.p, sn = s->link_tiles.len;
+                }
+                cc_tiles_free(&t);
+            }
+        }
+        if (sec) st = tiles_answer(&src, sec, sn, ne, req, nreq, out);
+        buf_free(&rd);
+    }
+    *p = out->p ? out->p : "", *n = out->len;
+    return st;
+}
+
+void cc_mesh_tiles_free(cc_session *s) {
+    if (s->tiles) cc_tiles_free(s->tiles), free(s->tiles);
+    s->tiles = NULL, s->tiles_scene = NULL, s->tiles_rev = 0, s->tiles_status = 0, s->tiles_ms = 0;
+    buf_free(&s->tiles_err);
+    buf_free(&s->tiles_out);
+    buf_free(&s->link_tiles);
+    s->link_tiles_uid = 0;
+}
+
+int cc_mesh_tiles(cc_session *s, uint64_t budget, const char *req, size_t nreq, const char **p, size_t *n, uint32_t *rev) {
+    cc_error err;
+    const cc_model *m = cc_mesh_model(s, rev, &err);
+    const cc_scene *sc = m || s->view ? cc_session_scene(s) : NULL;
+    Buf *out = &s->tiles_out;
+    buf_clear(out);
+    out->oom = 0;
+    if (!sc) {
+        cc_mesh_tiles_free(s);
+        buf_puts(out, "no scene");
+        *p = buf_cstr(out), *n = out->len;
+        return 404;
+    }
+    cc_tiles_src src = {sc, NULL};
+    if (s->view == CC_VIEW_FILE && s->vf && s->view_tiles.len) { /* a view file opened with its pyramid: served as it is */
+        int st = tiles_answer(&src, (const uint8_t *)s->view_tiles.p, s->view_tiles.len, (uint32_t)sc->nelements, req, nreq, out);
+        if (st != 500) {
+            *p = out->p ? out->p : "", *n = out->len;
+            return st;
+        }
+        buf_clear(out), out->oom = 0; /* damaged: built below */
+    }
+    if (s->tiles_scene != sc || s->tiles_rev != *rev || !s->tiles_status) {
+        Buf keep = s->link_tiles;
+        uint64_t ku = s->link_tiles_uid, kg = s->link_tiles_gen;
+        buf_init(&s->link_tiles);
+        cc_mesh_tiles_free(s);
+        s->link_tiles = keep, s->link_tiles_uid = ku, s->link_tiles_gen = kg;
+        out = &s->tiles_out;
+        s->tiles_scene = sc, s->tiles_rev = *rev;
+        s->tiles = calloc(1, sizeof *s->tiles);
+        cc_tiles_opts o = s->tiles_opts;
+        if (!o.leaf_tris) cc_tiles_default(&o);
+        double t0 = s->pf->now_ms(s->pf->ctx);
+        if (!s->tiles) s->tiles_status = 500, buf_puts(&s->tiles_err, "out of memory");
+        else if (cc_tiles_start(s->tiles, &src, &o, &err)) s->tiles_status = 500, buf_puts(&s->tiles_err, err.msg);
+        else s->tiles_status = 202;
+        s->tiles_ms += s->pf->now_ms(s->pf->ctx) - t0;
+    }
+    if (s->tiles_status == 202) {
+        double t0 = s->pf->now_ms(s->pf->ctx);
+        int r = cc_tiles_step(s->tiles, budget ? budget : 1, &err);
+        if (r < 0) s->tiles_status = 500, buf_puts(&s->tiles_err, err.msg);
+        else if (r == 1) s->tiles_status = 200;
+        s->tiles_ms += s->pf->now_ms(s->pf->ctx) - t0;
+    }
+    int st = s->tiles_status;
+    if (st == 202) buf_u64(out, s->tiles->done), buf_putc(out, ' '), buf_u64(out, s->tiles->total);
+    else if (st == 500) buf_append(out, s->tiles_err.p, s->tiles_err.len);
+    else st = tiles_answer(&src, (const uint8_t *)s->tiles->out.p, s->tiles->out.len, (uint32_t)sc->nelements, req, nreq, out);
+    *p = out->p ? out->p : "", *n = out->len;
+    return st;
+}
+
+/* ---- TILE1: what the reference walker draws for one camera, over the open scene and every link (mesh.h) ---- */
+
+static double fdot(const double *a, const double *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+static void fcross(const double *a, const double *b, double *o) {
+    o[0] = a[1] * b[2] - a[2] * b[1], o[1] = a[2] * b[0] - a[0] * b[2], o[2] = a[0] * b[1] - a[1] * b[0];
+}
+static void fnorm(double *a) {
+    double l = cc_sqrt(fdot(a, a));
+    if (l > 0) a[0] /= l, a[1] /= l, a[2] /= l;
+}
+
+/* the view in a frame where host world w = R(c, sn) p + o (R about Z) */
+static void view_in(const cc_tiles_frame_q *q, double c, double sn, const double o[3], cc_tiles_view *v) {
+    memset(v, 0, sizeof *v);
+    double f[3] = {q->at[0] - q->eye[0], q->at[1] - q->eye[1], q->at[2] - q->eye[2]}, up[3] = {0, 0, 1}, r[3], u[3];
+    fnorm(f);
+    if (f[2] > 0.999 || f[2] < -0.999) up[0] = 0, up[1] = 1, up[2] = 0;
+    fcross(f, up, r), fnorm(r), fcross(r, f, u);
+    double ty = q->tan_half, tx = ty * q->w / (q->h > 0 ? q->h : 1);
+    v->k = q->h / (2 * ty);
+    double n[5][3], d[5];
+    for (int k = 0; k < 3; k++) n[0][k] = f[k] * tx + r[k], n[1][k] = f[k] * tx - r[k], n[2][k] = f[k] * ty + u[k], n[3][k] = f[k] * ty - u[k], n[4][k] = f[k];
+    for (int p = 0; p < 4; p++) d[p] = -fdot(n[p], q->eye);
+    d[4] = -fdot(f, q->eye) - 10;
+    /* into the frame: n . (R p + o) + d = (R^T n) . p + n . o + d */
+    for (int p = 0; p < 5; p++) {
+        double m[3] = {c * n[p][0] + sn * n[p][1], -sn * n[p][0] + c * n[p][1], n[p][2]};
+        v->planes[p][0] = m[0], v->planes[p][1] = m[1], v->planes[p][2] = m[2], v->planes[p][3] = fdot(n[p], o) + d[p];
+    }
+    v->nplanes = 5;
+    double e[3] = {q->eye[0] - o[0], q->eye[1] - o[1], q->eye[2] - o[2]};
+    v->eye[0] = c * e[0] + sn * e[1], v->eye[1] = -sn * e[0] + c * e[1], v->eye[2] = e[2];
+}
+
+typedef struct { /* one pyramid's part of a frame */
+    const char *name;
+    cc_tiles_src src;
+    const uint8_t *sec;
+    size_t sn;
+    uint32_t ne;
+    double c, si, o[3];
+    cc_tiles_toc toc;
+    uint32_t *ids, n;
+    uint8_t *hid;
+    uint64_t tris;
+    double sel_ms;
+} FrameP;
+
+static int frame_select(cc_session *s, FrameP *f, const cc_tiles_frame_q *q) {
+    cc_error err;
+    if (cc_tiles_check(f->sec, f->sn, 1, f->ne, &f->toc, &err)) return -1;
+    cc_tiles_view v;
+    view_in(q, f->c, f->si, f->o, &v);
+    f->ids = malloc(((size_t)f->toc.ntiles + 1) * sizeof *f->ids);
+    f->hid = calloc((size_t)f->toc.ntiles + 1, 1);
+    if (!f->ids || !f->hid) return -1;
+    double t0 = s->pf->now_ms(s->pf->ctx);
+    f->n = cc_tiles_select(&f->toc, &v, q->error_px, q->budget, q->lod ? 0 : CC_TILES_SEL_LEAVES, NULL, f->ids, f->toc.ntiles, &f->tris);
+    f->sel_ms = s->pf->now_ms(s->pf->ctx) - t0;
+    return 0;
+}
+
+static void frame_write(FrameP *f, const cc_tiles_frame_q *q, JsonW *w, double tot[8]) {
+    cc_error err;
+    uint64_t tris = 0, pb = 0, lb = 0, nl = 0, np = 0, ht = 0, hn = 0;
+    Buf a;
+    buf_init(&a);
+    for (uint32_t i = 0; i < f->n; i++) {
+        cc_tile t;
+        cc_tiles_get(&f->toc, f->ids[i], &t);
+        if (f->hid[i]) { hn++, ht += t.tris; continue; }
+        tris += t.tris;
+        if (t.flags & CC_TILE_PROXY) pb += t.len, np++;
+        else {
+            if (q->leaf_bytes) {
+                buf_clear(&a);
+                if (!cc_tiles_leaf_answer(&f->src, &f->toc, f->ids[i], &a, &err)) lb += a.len;
+            }
+            nl++;
+        }
+    }
+    buf_free(&a);
+    cc_tile r;
+    if (f->toc.ntiles) cc_tiles_get(&f->toc, 0, &r);
+    jw_obj_begin(w);
+    jw_key(w, "detail"), jw_u64(w, f->toc.ntiles ? r.detail : 0);
+    jw_key(w, "hidden_tiles"), jw_u64(w, hn);
+    jw_key(w, "hidden_triangles"), jw_u64(w, ht);
+    jw_key(w, "leaf_bytes"), jw_u64(w, lb);
+    jw_key(w, "leaves"), jw_u64(w, nl);
+    jw_key(w, "name"), jw_str(w, f->name);
+    jw_key(w, "proxies"), jw_u64(w, np);
+    jw_key(w, "proxy_bytes"), jw_u64(w, pb);
+    jw_key(w, "select_ms"), jw_f64(w, f->sel_ms);
+    jw_key(w, "tiles"), jw_u64(w, np + nl);
+    jw_key(w, "toc_bytes"), jw_u64(w, f->toc.toc);
+    jw_key(w, "triangles"), jw_u64(w, tris);
+    jw_obj_end(w);
+    tot[0] += (double)tris, tot[1] += (double)(np + nl), tot[2] += (double)pb, tot[3] += (double)lb, tot[4] += (double)f->toc.toc;
+    tot[5] += f->toc.ntiles ? (double)r.detail : 0, tot[6] += (double)ht, tot[7] += (double)hn;
+}
+
+/* the world box of a pyramid's root, placed (R about Z, then o) */
+static void grow_world(const uint8_t *sec, size_t sn, double c, double si, const double o[3], double b[6]) {
+    cc_tiles_toc toc;
+    if (cc_tiles_check(sec, sn, 0, CC_TILES_NONE, &toc, NULL) || !toc.ntiles) return;
+    cc_tile r;
+    cc_tiles_get(&toc, 0, &r);
+    for (int k = 0; k < 8; k++) {
+        double p[3] = {k & 1 ? r.box[3] : r.box[0], k & 2 ? r.box[4] : r.box[1], k & 4 ? r.box[5] : r.box[2]};
+        double w3[3] = {c * p[0] - si * p[1] + o[0], si * p[0] + c * p[1] + o[1], p[2] + o[2]};
+        for (int j = 0; j < 3; j++) {
+            if (w3[j] < b[j]) b[j] = w3[j];
+            if (w3[j] > b[3 + j]) b[3 + j] = w3[j];
+        }
+    }
+}
+
+/* bounds mode: where each pyramid stands (world = R(c, sn) p + o) */
+static void frame_place(JsonW *w, const char *name, double c, double sn, const double o[3]) {
+    jw_obj_begin(w);
+    jw_key(w, "cos"), jw_f64(w, c + 0.0);
+    jw_key(w, "name"), jw_str(w, name);
+    jw_key(w, "origin"), jw_arr_begin(w);
+    for (int k = 0; k < 3; k++) jw_f64(w, o[k] + 0.0);
+    jw_arr_end(w);
+    jw_key(w, "sin"), jw_f64(w, sn + 0.0);
+    jw_obj_end(w);
+}
+
+int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
+    JsonW w;
+    jw_init(&w, out, 0);
+    double tot[8] = {0}, b[6] = {1e300, 1e300, 1e300, -1e300, -1e300, -1e300};
+    FrameP *fp = calloc(s->nlinks + 2, sizeof *fp);
+    if (!fp) return -1;
+    size_t nf = 0;
+    if (s->tiles_status == 200 && s->tiles && s->tiles_scene) { /* the open scene's pyramid, once built (cc_mesh_tiles) */
+        FrameP *f = &fp[nf++];
+        f->name = "(open)", f->src.scene = s->tiles_scene, f->sec = (const uint8_t *)s->tiles->out.p, f->sn = s->tiles->out.len;
+        f->ne = (uint32_t)s->tiles_scene->nelements, f->c = 1, f->si = 0;
+        memcpy(f->o, s->tiles_scene->origin, sizeof f->o);
+    }
+    for (size_t i = 0; i < s->nlinks; i++) {
+        cc_link *l = &s->links[i];
+        if (!l->kind || !l->visible) continue;
+        const char *p;
+        size_t n;
+        if (cc_link_tiles(s, i, NULL, 0, 0, 0, "toc", 3, &p, &n) != 200) continue; /* builds a small link's at once */
+        FrameP *f = &fp[nf];
+        if (l->vf) f->src.vf = l->vf;
+        else if (l->ifc) f->src.scene = &l->ifc->scene;
+        else f->src.scene = cc_link_raw_scene(l);
+        if (l->vf && l->vf->has_tiles && l->vf->lazy) f->sec = l->vf->base + l->vf->tiles_off, f->sn = (size_t)l->vf->tiles_len;
+        else if (s->link_tiles_uid == l->uid + 1) f->sec = (const uint8_t *)s->link_tiles.p, f->sn = s->link_tiles.len;
+        if (!f->sec) continue;
+        double t[3];
+        cc_link_placement(s, l, &f->c, &f->si, t);
+        const double *lo = cc_link_rows(l)->origin;
+        f->o[0] = f->c * lo[0] - f->si * lo[1] + t[0], f->o[1] = f->si * lo[0] + f->c * lo[1] + t[1], f->o[2] = lo[2] + t[2];
+        f->name = l->name, f->ne = (uint32_t)cc_link_rows(l)->nelements;
+        nf++;
+    }
+    jw_obj_begin(&w);
+    jw_key(&w, "links"), jw_arr_begin(&w);
+    if (q->bounds_only)
+        for (size_t i = 0; i < nf; i++) grow_world(fp[i].sec, fp[i].sn, fp[i].c, fp[i].si, fp[i].o, b), frame_place(&w, fp[i].name, fp[i].c, fp[i].si, fp[i].o);
+    else {
+        for (size_t i = 0; i < nf; i++)
+            if (frame_select(s, &fp[i], q)) fp[i].n = 0;
+        if (q->occlusion) { /* one depth buffer for every pyramid: every drawn tile's occluders, then each tile's box */
+            cc_tiles_occ z;
+            double t0 = s->pf->now_ms(s->pf->ctx);
+            if (!cc_tiles_occ_init(&z, q->eye, q->at, q->tan_half, q->w, q->h, q->w >= 1280 ? 640 : 320)) {
+                for (size_t i = 0; i < nf; i++)
+                    for (uint32_t k = 0; k < fp[i].n; k++) cc_tiles_occ_draw(&z, &fp[i].toc, fp[i].ids[k], fp[i].c, fp[i].si, fp[i].o);
+                for (size_t i = 0; i < nf; i++)
+                    for (uint32_t k = 0; k < fp[i].n; k++) {
+                        cc_tile t;
+                        cc_tiles_get(&fp[i].toc, fp[i].ids[k], &t);
+                        fp[i].hid[k] = (uint8_t)cc_tiles_occ_hidden(&z, t.box, fp[i].c, fp[i].si, fp[i].o);
+                    }
+            }
+            cc_tiles_occ_free(&z);
+            tot[7] += 0, (void)t0;
+        }
+        for (size_t i = 0; i < nf; i++)
+            if (fp[i].ids) frame_write(&fp[i], q, &w, tot);
+    }
+    for (size_t i = 0; i < nf; i++) free(fp[i].ids), free(fp[i].hid);
+    free(fp);
+    jw_arr_end(&w);
+    if (q->bounds_only) {
+        jw_key(&w, "bounds"), jw_arr_begin(&w);
+        for (int k = 0; k < 6; k++) jw_f64(&w, b[0] <= b[3] ? b[k] : 0.0);
+        jw_arr_end(&w);
+    } else {
+        jw_key(&w, "bytes"), jw_u64(&w, (uint64_t)(tot[2] + tot[3]));
+        jw_key(&w, "detail"), jw_u64(&w, (uint64_t)tot[5]);
+        jw_key(&w, "hidden_tiles"), jw_u64(&w, (uint64_t)tot[7]);
+        jw_key(&w, "hidden_triangles"), jw_u64(&w, (uint64_t)tot[6]);
+        jw_key(&w, "leaf_bytes"), jw_u64(&w, (uint64_t)tot[3]);
+        jw_key(&w, "proxy_bytes"), jw_u64(&w, (uint64_t)tot[2]);
+        jw_key(&w, "tiles"), jw_u64(&w, (uint64_t)tot[1]);
+        jw_key(&w, "toc_bytes"), jw_u64(&w, (uint64_t)tot[4]);
+        jw_key(&w, "triangles"), jw_u64(&w, (uint64_t)tot[0]);
+    }
+    jw_obj_end(&w);
+    return jw_finish(&w) == JW_OK && !out->oom ? 0 : -1;
+}

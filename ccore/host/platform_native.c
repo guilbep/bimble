@@ -14,6 +14,9 @@
 #include <fcntl.h>
 #include <string.h>
 #include <sys/mman.h> /* SIZE2: map_file */
+#if defined(__GLIBC__)
+#include <malloc.h> /* SIZE3: malloc_trim */
+#endif
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -190,10 +193,21 @@ static int np_make_dir(void *ctx, const char *path) {
 
 /* ---- LINKF (platform.h) ---- */
 /* MemAvailable of /proc/meminfo (Linux); elsewhere unknown (0). BIMBLE_MEM_AVAILABLE (bytes)
- * overrides it: the tests refuse a file without needing a small machine. */
+ * overrides it: the tests refuse a file without needing a small machine. SIZE3: "@<file>": the bytes
+ * read from that file at each call (a test frees the memory while the host runs). */
 static uint64_t np_mem_available(void *ctx) {
     (void)ctx;
     const char *e = getenv("BIMBLE_MEM_AVAILABLE");
+    if (e && *e == '@') {
+        FILE *f = fopen(e + 1, "r");
+        char t[32] = "";
+        if (f) {
+            size_t n = fread(t, 1, sizeof t - 1, f);
+            t[n] = 0;
+            fclose(f);
+        }
+        return strtoull(t, NULL, 10);
+    }
     if (e && *e) return strtoull(e, NULL, 10);
     FILE *f = fopen("/proc/meminfo", "r");
     if (!f) return 0;
@@ -300,6 +314,14 @@ static void np_unmap_file(void *ctx, void *handle) {
 }
 /* ---- end SIZE2 ---- */
 
+/* SIZE3: freed memory back to the system (platform.h trim) */
+static void np_trim(void *ctx) {
+    (void)ctx;
+#if defined(__GLIBC__)
+    malloc_trim(0);
+#endif
+}
+
 /* The dialog's path rule, set by fs.c when the host lists folders (cc_host_fs_init); none: all. */
 int (*cc_host_path_rule)(const char *path);
 static int np_path_allowed(void *ctx, const char *path) { return (void)ctx, cc_host_path_rule ? cc_host_path_rule(path) : 1; }
@@ -310,6 +332,7 @@ static const cc_platform NATIVE = {
     np_stat_path, np_real_path, np_make_dir, /* FS1 */
     np_mem_available, np_read_range, np_cache_dir, np_spawn, np_path_allowed, /* LINKF */
     np_map_file, np_unmap_file, /* SIZE2 */
+    np_trim, /* SIZE3 */
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }

@@ -61,12 +61,19 @@ typedef struct {
     double density; /* kg/m3 */
 } cc_view_density;
 
+typedef struct { /* SIZE3: where a mesh's codec bytes are in a mapped view file (cc_viewfile_read_mapped), its box */
+    uint64_t at;
+    uint32_t len;
+    float lo[3], hi[3];
+} cc_viewfile_ref;
+
 typedef struct {
     cc_str global_id, name, class_name, storey, material, family;
     cc_category category; /* from the family label; Other when unknown */
     int32_t shape;        /* index in shapes, or -1: own mesh in `mesh` */
     cc_mesh mesh;         /* own mesh, scene coordinates (shape < 0) */
     cc_placement32 to_scene; /* shape >= 0 */
+    cc_viewfile_ref ref;     /* SIZE3: a mapped read's own mesh (shape < 0) */
 } cc_view_element;
 
 typedef struct {
@@ -98,10 +105,23 @@ typedef struct {
      * Not checked here: the session checks the bytes it reads back (cc_hlod_bprx_check). */
     int has_hlod;
     uint64_t hlod_off, hlod_len;
+    /* TILE1 (ADR 0078 amendment 6): a section TILE (the link's tile pyramid, tiles.h), kept on disk as HLOD: its
+     * bytes' place in the raw file, when has_tiles. Checked when served (cc_tiles_check). */
+    int has_tiles;
+    uint64_t tiles_off, tiles_len;
     cc_mesh *shapes; /* shared shapes, own coordinates (malloc) */
     size_t nshapes;
     cc_view_element *elements; /* malloc */
     size_t nelements;
+    /* SIZE3: read in place (cc_viewfile_read_mapped): `base` is the caller's bytes (a mapped cache), which
+     * must outlive this view file; strings point into them; the meshes hold their counts only (arrays
+     * NULL) until cc_viewfile_materialize decodes them; shape_refs[k] is shape k's bytes. */
+    int lazy;
+    float box[6]; /* SIZE3: a lazy read's scene box (lo, hi; scene coordinates: placed shapes' boxes' corners placed) */
+    const uint8_t *base;
+    size_t base_len; /* SIZE3: the bytes at `base` (the whole mapped file: a later section's byte range is base + off) */
+    cc_viewfile_ref *shape_refs; /* malloc, lazy only */
+    Arena *lazy_scratch;         /* during the read only */
 } cc_viewfile;
 
 typedef struct { /* the text of one scene element (SceneElement's fields beside class, family) */
@@ -156,10 +176,28 @@ int cc_viewfile_append_psets_packed(Buf *out, const char *t, size_t n);
  * SIZE2: the bytes may be one gzip member of BPRX (cache format 5); its reader inflates them, bounded. */
 int cc_viewfile_append_hlod(Buf *out, const char *t, size_t n);
 
+/* TILE1: appends a section TILE holding the pyramid `t` (tiles.h), after HLOD and before PRPZ / PROP. */
+int cc_viewfile_append_tiles(Buf *out, const char *t, size_t n);
+
 /* Reads a view file. Always initializes `out` (free it with cc_viewfile_free either way).
  * 0 ok, -1 with err->msg. */
 int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err);
 void cc_viewfile_free(cc_viewfile *v);
+
+/* SIZE3 (ADR 0079 amendment): a raw view file read in place, nothing copied: `p` (a mapped cache) must
+ * stay valid and unchanged until cc_viewfile_free. Every mesh is decoded once to check it (into a
+ * scratch arena, freed) and only its counts and place are kept: the arrays are NULL ("lazy"). A gzipped
+ * file is read as cc_viewfile_read does. 0 ok, -1 with err->msg. */
+int cc_viewfile_read_mapped(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err);
+/* A lazy view file's meshes decoded into `a` (the caller frees it after cc_viewfile_dematerialize);
+ * `*bytes` their size. 0 ok (nothing to do when not lazy), -1 (out of memory, or the bytes no longer
+ * decode to the counts read: the view file is left without arrays). */
+int cc_viewfile_materialize(cc_viewfile *v, Arena *a, uint64_t *bytes);
+/* The arrays forgotten (NULL again), the counts kept. */
+void cc_viewfile_dematerialize(cc_viewfile *v);
+/* A lazy view file's mesh bytes (BMG1): block b < nshapes is shape b, else element b - nshapes's own
+ * mesh. 0 ok, -1 not lazy or not an own mesh. */
+int cc_viewfile_block(const cc_viewfile *v, size_t b, const uint8_t **p, size_t *n);
 
 /* The element's mesh as stored: its own, or its shared shape in the shape's coordinates. */
 const cc_mesh *cc_viewfile_local_mesh(const cc_viewfile *v, size_t k);

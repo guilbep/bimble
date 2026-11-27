@@ -32,6 +32,8 @@
 #          linux (libstdc++ static) or macos (ticket MAC1: libc++ is the system's, stripped then
 #          signed ad hoc; CMAKE_OSX_ARCHITECTURES=x86_64 builds the Intel one on an arm64 Mac, with
 #          deps.sh run under the same variable; MACOSX_DEPLOYMENT_TARGET sets the oldest macOS)
+#   native-app  the native Linux app `bimble` (ticket NUI1, ADR 0084): native/build.sh app, clang -O2,
+#          ImGui, the kernel and libstdc++ static, SDL3 (>= 3.4) and FreeType the system's: out/app/bimble
 #   wasm-size [view]  bytes per object file in ccore.wasm (or ccore-view.wasm), from a link map
 #          (out/wsize/): code and data, largest first (results/wasm-size.md)
 # Boolean kernel (ADR 0068, 0069): manifold's C binding from $MANIFOLD_DIR or out/deps/manifold
@@ -343,6 +345,18 @@ release() {
             "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -Wl,--gc-sections \
             ${harden_link[@]+"${harden_link[@]}"} -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
     fi
+    # NUI1 (ADR 0084): the native app `bimble` beside bimble-ccore, on Linux. NATIVE_APP=1: required (the
+    # release job); auto (default): built when SDL3 >= 3.4, FreeType and glslc are there, else said and left
+    # out; 0: left out.
+    local native=${NATIVE_APP:-auto}
+    if [[ $CC_OS == Linux && $native != 0 ]]; then
+        if [[ $native == 1 ]] || { command -v glslc > /dev/null && pkg-config --exists 'sdl3 >= 3.4.0' freetype2 2> /dev/null; }; then
+            step "native app bimble" native/build.sh app
+            cp out/app/bimble "$stage/bimble"
+        else
+            printf '  %-28s %s\n' "native app bimble" "left out: SDL3 >= 3.4, FreeType or glslc not found (NATIVE_APP=1 requires it)"
+        fi
+    fi
     local web
     web=$(cd "$stage" && pwd)/web
     # The lab: web-ui's own build script (prebuild included), into the archive's web/.
@@ -360,6 +374,11 @@ release() {
     for lf in LICENSE-Apache2 LICENSE-Boost; do cp "vendor/ryu/$lf" "$stage/licences/Ryu-$lf"; done
     cp vendor/earcutr/LICENSE "$stage/licences/earcutr-LICENSE"
     for lf in OFL-Sora.txt OFL-SourceSans3.txt OFL-DMMono.txt; do cp "../web-ui/src/brand/$lf" "$stage/licences/$lf"; done
+    if [[ -f $stage/bimble ]]; then # NUI1: the native app's third parties, their own licence files
+        cp out/native/deps/imgui/LICENSE.txt "$stage/licences/DearImGui-LICENSE.txt"
+        cp out/native/deps/cimgui/LICENSE "$stage/licences/cimgui-LICENSE.txt"
+        cp out/native/deps/nanosvg/LICENSE.txt "$stage/licences/nanosvg-LICENSE.txt"
+    fi
     local needs="Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed."
     local last=""
     if [[ $CC_OS == Darwin ]]; then
@@ -394,6 +413,9 @@ Stop:   Ctrl-C.
 Files:  bimble-ccore, web/ (the lab: keep it next to the program), THIRD-PARTY.txt, licences/.
 Needs:  $needs
 EOF
+    if [[ -f $stage/bimble ]]; then # NUI1: one line (the README stays within ten)
+        echo "Native: ./bimble model.bimble   (the native Linux app, preview: needs SDL 3.4+ and a Vulkan driver)" >> "$stage/README.txt"
+    fi
     [[ -z $last ]] || echo "$last" >> "$stage/README.txt"
     # GNU tar: sorted, owner 0. BSD tar (macOS) has neither option; COPYFILE_DISABLE keeps
     # macOS's ._ metadata files out.
@@ -453,6 +475,9 @@ case "${1:-}" in
   asan)
     echo "build.sh asan -> out/asan/bimble-ccore"
     host_asan ;;
-  *) echo "usage: $0 tcc|host|native|asan|wasm|wasm-view|wasm-size [view]|release" >&2; exit 2 ;;
+  native-app)
+    echo "build.sh native-app -> out/app/bimble"
+    native/build.sh app ;;
+  *) echo "usage: $0 tcc|host|native|asan|wasm|wasm-view|wasm-size [view]|release|native-app" >&2; exit 2 ;;
 esac
 printf '  %-28s %5d ms\n' "total" $(($(ms) - t_start))

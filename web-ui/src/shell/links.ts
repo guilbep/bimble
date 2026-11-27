@@ -22,7 +22,11 @@ export interface PanelModel {
   state?: "ready" | "missing" | "queued" | "converting" | "failed" | "refused" | "unloaded"; progress?: number;
   message?: string | null; bytes?: number; elements?: number; triangles?: number; cache?: string | null;
   cache_mtime_s?: number; log?: string | null; from_cache?: boolean; pinned?: boolean; colour?: number | null;
+  /** SIZE3 (E): ready, its proxies being baked after (ccore/session/links.h `indexing`). */
+  indexing?: boolean;
   origin?: "file" | "origin" | "base_point" | "survey_point"; move_mm?: [number, number, number]; rotation_deg?: number;
+  /** TESS1 (ADR 0085): its own reader detail, named at a Reload; absent: the settings' link_detail. */
+  detail?: { name: "exact" | "standard" | "light" | "custom"; chord_mm?: number; max_deg?: number };
 }
 export interface PanelReference {
   id: string; kind: string; name: string; offset_mm: [number, number]; rotation_deg: number;
@@ -88,6 +92,17 @@ export function linkNew(purpose: LinkPurpose): Promise<string | null> {
 
 /** Show or hide, remove: a linked model by name. */
 export const modelOp = (op: "show" | "hide" | "remove", name: string) => run(async () => manageLink(op, name));
+
+/** TESS1 (ADR 0085): Reload a linked IFC at a detail of its own ("" : the settings' again). Custom takes the
+ *  settings' chord distance and angle. Natively (a path to read again). */
+export function modelReloadDetail(m: PanelModel, detail: "" | "exact" | "standard" | "light" | "custom",
+                                  custom?: { chord_mm: number; max_deg: number }): Promise<string | null> {
+  return run(async () => {
+    const d = detail === "" ? { detail: null } : detail === "custom" ? { detail, ...(custom ?? { chord_mm: 2, max_deg: 18 }) } : { detail };
+    actionBody("manage_links", { op: "reload", name: m.name, ...d });
+    return null;
+  });
+}
 
 /** Reload a linked model: natively from its path; in wasm (no path) the picker asks for it again.
  *  `from`: Reload from… / Locate…, another file in its place. */
