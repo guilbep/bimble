@@ -359,6 +359,8 @@ export type PartKey =
   | "links.cancelTip"
   | "links.colour"
   | "links.colourN"
+  | "links.convertNow"
+  | "links.convertNowTip"
   | "links.detail"
   | "links.detailLoaded"
   | "links.detailTip"

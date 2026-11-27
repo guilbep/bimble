@@ -13,6 +13,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/mman.h> /* SIZE2: map_file */
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -263,6 +264,42 @@ static int np_spawn(void *ctx, void (*fn)(void *), void *arg) {
     if (rc) return free(a), -1;
     return 0;
 }
+/* ---- SIZE2: a file mapped instead of copied (platform.h map_file): the IFC's text is the page cache's ---- */
+typedef struct {
+    void *base;
+    size_t len;
+} np_map;
+static int np_map_file(void *ctx, const char *path, size_t max, const char **p, size_t *n, void **handle) {
+    (void)ctx;
+    *p = NULL, *n = 0, *handle = NULL;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return errno == ENOENT ? CC_PF_NOT_FOUND : CC_PF_IO;
+    struct stat sb;
+    long pg = sysconf(_SC_PAGESIZE);
+    if (fstat(fd, &sb) || !S_ISREG(sb.st_mode) || sb.st_size <= 0 || pg <= 0 || (uint64_t)sb.st_size % (uint64_t)pg == 0) {
+        close(fd); /* empty, not a file, or no zero byte after its end within its last page: read it instead */
+        return CC_PF_IO;
+    }
+    if ((uint64_t)sb.st_size > (uint64_t)max) return close(fd), CC_PF_TOO_LARGE;
+    void *m = mmap(NULL, (size_t)sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED) return CC_PF_IO;
+    np_map *h = malloc(sizeof *h);
+    if (!h) return munmap(m, (size_t)sb.st_size), CC_PF_NO_MEMORY;
+    posix_madvise(m, (size_t)sb.st_size, POSIX_MADV_SEQUENTIAL);
+    h->base = m, h->len = (size_t)sb.st_size;
+    *p = m, *n = (size_t)sb.st_size, *handle = h; /* the bytes after the end of the last page are zeros (mmap) */
+    return CC_PF_OK;
+}
+static void np_unmap_file(void *ctx, void *handle) {
+    (void)ctx;
+    np_map *h = handle;
+    if (!h) return;
+    munmap(h->base, h->len);
+    free(h);
+}
+/* ---- end SIZE2 ---- */
+
 /* The dialog's path rule, set by fs.c when the host lists folders (cc_host_fs_init); none: all. */
 int (*cc_host_path_rule)(const char *path);
 static int np_path_allowed(void *ctx, const char *path) { return (void)ctx, cc_host_path_rule ? cc_host_path_rule(path) : 1; }
@@ -272,6 +309,7 @@ static const cc_platform NATIVE = {
     NULL, 1, np_read_file, np_exists, np_write_file, np_now_ms, np_unix_s, np_random, np_log, np_list_dir,
     np_stat_path, np_real_path, np_make_dir, /* FS1 */
     np_mem_available, np_read_range, np_cache_dir, np_spawn, np_path_allowed, /* LINKF */
+    np_map_file, np_unmap_file, /* SIZE2 */
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }

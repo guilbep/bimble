@@ -83,11 +83,15 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err);
  * other bound (session.c: "too large for this machine"). */
 #define CC_IFC_MAX_FILE_BYTES (sizeof(size_t) > 4 ? (size_t)CC_STEP_MAX_BYTES : (size_t)1 << 30)
 /* Peak memory of a link's read (the text, the STEP entities, the meshes, the cache written) as
- * PER_BYTE x the file + BASE, from a local folder of 17 IFC files (ADR 0079): the files over
- * 100 MB peaked at 2.2 to 3.6 times their size; small files with heavy meshes up to 10 times
- * (60 MB: 0.58 GB): BASE, at most 6 x the file (session.c cc_session_fits). */
-#define CC_IFC_READ_PEAK_PER_BYTE 4
-#define CC_IFC_READ_PEAK_BASE ((uint64_t)512 << 20)
+ * PER_BYTE x the file + BASE + FLOOR, BASE at most SMALL x the file, from a local folder of 17 IFC
+ * files (ADR 0079): the files over 100 MB peaked at 2.2 to 4.4 times their size; small files with
+ * heavy meshes up to 10 times (60 MB: 0.58 GB). SIZE2 refit (ADR 0079 amendment): 3 x + min(640 MiB,
+ * 7 x) + 32 MiB is above every row of that table, by 5.7 % (60 MB) to 13 % (0.87 GB: 3.3 GB against
+ * 2.91 GB measured; the old 4 x + min(512 MiB, 6 x) asked 4.0 GB); session.c cc_session_fits. */
+#define CC_IFC_READ_PEAK_PER_BYTE 3
+#define CC_IFC_READ_PEAK_BASE ((uint64_t)640 << 20)
+#define CC_IFC_READ_PEAK_SMALL 7
+#define CC_READ_PEAK_FLOOR ((uint64_t)32 << 20)
 
 /* LINKF: cc_ifc_read with progress and cancel (both optional): `done` goes 0..1000 as it reads
  * (the STEP parse to 300, the elements to 950, the rest to 1000); a nonzero `cancel` stops it

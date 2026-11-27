@@ -388,7 +388,12 @@ static void run(cc_link_job *j) {
     double t0 = pf->now_ms(pf->ctx);
     char *text = NULL;
     size_t n = 0;
-    int rs = pf->read_file(pf->ctx, j->path, CC_IFC_MAX_FILE_BYTES, &text, &n);
+    /* SIZE2: mapped when the carrier can (no copy of the text on the heap: the page cache's pages), else read */
+    void *mh = NULL;
+    const char *mapped = NULL;
+    int rs = pf->map_file && pf->unmap_file ? pf->map_file(pf->ctx, j->path, CC_IFC_MAX_FILE_BYTES, &mapped, &n, &mh) : CC_PF_IO;
+    if (rs == CC_PF_OK) text = (char *)mapped;
+    else if (rs != CC_PF_TOO_LARGE) n = 0, rs = pf->read_file(pf->ctx, j->path, CC_IFC_MAX_FILE_BYTES, &text, &n);
     if (rs != CC_PF_OK) {
         snprintf(j->err.msg, sizeof j->err.msg, "%s: %s", j->path,
                  rs == CC_PF_NOT_FOUND ? "cannot open" : rs == CC_PF_TOO_LARGE ? "too large" : rs == CC_PF_IO ? "read error" : "out of memory");
@@ -408,7 +413,8 @@ static void run(cc_link_job *j) {
         cc_error pe;
         if (cc_ifc_psets(text, n, s, &psb, &pe) || psb.oom) buf_free(&psb), buf_init(&psb);
     }
-    free(text); /* the scene owns its strings (ifc_read.h) */
+    if (mh) pf->unmap_file(pf->ctx, mh); /* SIZE2 */
+    else free(text); /* the scene owns its strings (ifc_read.h) */
     if (!s) snprintf(j->err.msg, sizeof j->err.msg, "out of memory");
     if (rc) {
         if (s) cc_ifc_scene_free(s), free(s);

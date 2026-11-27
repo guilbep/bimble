@@ -94,6 +94,8 @@ const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready
       <span class="d" :title="m.log ? t('links.logTip', { path: m.log }) : m.path">{{ detail(m) }}</span>
       <button v-if="m.log" type="button" data-bb="link-log" :title="t('links.logTip', { path: m.log })" @click="showLog(m)">{{ t('links.log') }}</button>
       <button v-if="m.kind === 'ifc' && !m.missing" type="button" data-bb="link-open-editable" :title="t('links.openEditableTip')" @click="confirmEdit = confirmEdit === m.name ? null : m.name">{{ t('links.openEditable') }}</button>
+      <!-- SIZE2: a link refused for memory: converted again on demand (the core retries once by itself when memory frees) -->
+      <button v-if="m.state === 'refused' && !m.missing" type="button" data-bb="link-convert-now" :title="t('links.convertNowTip')" @click="modelReload(m)">{{ t('links.convertNow') }}</button>
       <button v-if="m.state === 'ready'" type="button" data-bb="link-unload" :title="t('links.unloadTip')" @click="modelSet('unload', m.name)">{{ t('links.unload') }}</button>
       <button v-if="m.state === 'unloaded'" type="button" data-bb="link-load" :title="t('links.loadTip')" @click="modelSet('load', m.name)">{{ t('links.load') }}</button>
       <button type="button" data-bb="link-pin" :aria-pressed="m.pinned" :title="t(m.pinned ? 'links.unpinTip' : 'links.pinTip')" @click="modelSet(m.pinned ? 'unpin' : 'pin', m.name)">{{ t(m.pinned ? 'links.pinned' : 'links.unpinned') }}</button>
