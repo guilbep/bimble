@@ -472,18 +472,17 @@ static int cut(R *w, Tris *tris, const Tris *cutters, size_t n, const char *what
     cc_tri_set *refs = malloc(n * sizeof *refs);
     if (!refs) return -1;
     for (size_t i = 0; i < n; i++) refs[i] = tri_set(&cutters[i]);
-    Tris res;
-    int rc = tris_apply(CC_BOOL_DIFFERENCE, tris, refs, n, &res, NULL);
-    if (rc == 0) {
-        tris_free(tris);
-        *tris = res;
-    } else if (rc > 0) {
+    Tris res, host = *tris; /* the host as drawn: kept until the end (TESS1: a cut that removes nothing) */
+    int rc = tris_apply(CC_BOOL_DIFFERENCE, tris, refs, n, &res, NULL), cut_any = rc == 0;
+    if (rc == 0) *tris = res;
+    else if (rc > 0) {
         size_t failed = 0;
         for (size_t i = 0; i < n && rc >= 0; i++) {
             rc = tris_apply(CC_BOOL_DIFFERENCE, tris, &refs[i], 1, &res, NULL);
             if (rc == 0) {
-                tris_free(tris);
+                if (tris->t != host.t) tris_free(tris);
                 *tris = res;
+                cut_any = 1;
             } else if (rc > 0) failed++;
         }
         if (failed && rc >= 0) {
@@ -498,7 +497,17 @@ static int cut(R *w, Tris *tris, const Tris *cutters, size_t n, const char *what
         }
     }
     free(refs);
-    return rc < 0 ? -1 : 0;
+    /* TESS1 (ADR 0085), every detail but exact: openings that remove nothing (no volume, no area:
+     * an opening beside its host) leave the host as the file gives it, not as the kernel splits
+     * it; a kernel result's coplanar triangles are merged. */
+    if (cut_any && !w->arc_tol.legacy && same_solid(&host, tris)) {
+        tris_free(tris);
+        *tris = host;
+    } else {
+        if (tris->t != host.t) tris_free(&host);
+        if (rc >= 0 && cut_any) merge_tris(w, tris);
+    }
+    return rc < 0 || tris->oom ? -1 : 0;
 }
 
 /* Parsed::piece. 0 ok, -1 out of memory. */

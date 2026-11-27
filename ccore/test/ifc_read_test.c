@@ -437,6 +437,9 @@ static const struct {
     {"deep_nesting", 1, 1e9, 1e-9, {0, 0, 0}, {1000, 1000, 1000}, 1e-3, NULL, NULL},
     /* 65: one past the bound, the proxy drawn empty and warned; the plain member 100^3: 1e6 */
     {"deep_nesting_over", 1, 1e6, 1e-9, {-50, -50, 0}, {50, 50, 100}, 1e-3, NULL, "representation nesting too deep"},
+    /* TESS1: a 5000 x 200 x 2800 wall whose opening stands 1 m beside it (nothing cut) and the same
+     * wall 5 m away with its 1200 x 1400 window through: 2 x 2.8e9 - 1200 x 200 x 1400 = 5.264e9 */
+    {"opening_beside", 2, 5.264e9, 1e-9, {0, 0, 0}, {5000, 5200, 2800}, 1e-3, NULL, NULL},
 };
 
 static void own_goldens(void) {
@@ -583,7 +586,25 @@ static size_t detail_one(const char *name, const char *dir, const char *file, in
     return !same;
 }
 
+/* An opening beside its host takes nothing: at standard the host is the file's box (12
+ * triangles), not the kernel's split of it; the window is still cut (32). */
+static void opening_beside(void) {
+    size_t tn;
+    char *t = slurp("golden/ifc_c/fixtures", "opening_beside.ifc", &tn);
+    cc_ifc_scene s;
+    cc_error err;
+    int rc = read_at(t, tn, CC_IFC_DETAIL_STANDARD, &s, &err);
+    size_t n0 = rc || s.scene.nelements < 2 ? 0 : cc_scene_local_mesh(&s.scene, 0)->ni / 3;
+    size_t n1 = rc || s.scene.nelements < 2 ? 0 : cc_scene_local_mesh(&s.scene, 1)->ni / 3;
+    printf("opening_beside standard: %zu and %zu triangles\n", n0, n1);
+    check_true("standard: an opening beside its host leaves the host as given (12)", n0 == 12);
+    check_true("standard: the window is cut (32)", n1 == 32);
+    cc_ifc_scene_free(&s);
+    free(t);
+}
+
 static void details(void) {
+    opening_beside();
     int write = getenv("CCORE_WRITE_GOLDEN") != NULL;
     size_t changed = 0, n = 0;
     for (size_t g = 0; g < sizeof G / sizeof *G; g++, n++) changed += detail_one(G[g].name, G[g].dir, G[g].file, write);

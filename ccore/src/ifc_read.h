@@ -101,11 +101,14 @@ typedef struct {
     int cancel;
 } cc_ifc_progress;
 int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg);
-/* TESS1 (ADR 0085): how finely curves become triangles. EXACT: Rust's reader (arcs within 0.5 mm,
- * 15 degrees per chord): the goldens of Rust. STANDARD (the default of cc_ifc_read,
- * cc_ifc_read_progress and opts NULL): arcs within 2 mm, 18 degrees per chord (20 per circle: no
- * crease line along a cylinder). LIGHT: arcs within 10 mm, 30 degrees per chord. Given meshes
- * (faceted breps, face sets) are kept as the file gives them at every level. */
+/* TESS1 (ADR 0085): how finely curves become triangles, and how boolean results are kept. EXACT:
+ * Rust's reader (arcs within 0.5 mm, 15 degrees per chord; boolean results as the kernel gives
+ * them): the goldens of Rust. STANDARD (the default of cc_ifc_read, cc_ifc_read_progress and opts
+ * NULL): arcs within 2 mm, 18 degrees per chord (20 per circle: no crease line along a cylinder);
+ * a boolean or an opening that takes nothing away leaves its operand as given; a kernel result's
+ * repeated-point triangles dropped, its coplanar triangles merged and triangulated again. LIGHT:
+ * arcs within 10 mm, 30 degrees per chord, booleans as standard. Given meshes (faceted breps,
+ * face sets) are kept as the file gives them at every level. */
 typedef enum { CC_IFC_DETAIL_EXACT = 0, CC_IFC_DETAIL_STANDARD = 1, CC_IFC_DETAIL_LIGHT = 2 } cc_ifc_detail;
 typedef struct {
     cc_ifc_detail detail;

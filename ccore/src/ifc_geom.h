@@ -230,6 +230,7 @@ typedef struct {
     uint64_t stack[MAX_NESTING + 8]; /* representation maps being expanded */
     size_t nstack;
     size_t unsup_n; /* booleans drawn uncut (no kernel) */
+    int bool_depth; /* IfcBooleanResult levels being drawn (TESS1: the outermost result is merged) */
     Buf tmp;
 } R;
 
@@ -2401,6 +2402,51 @@ static void boolean_result(R *r, const cc_step_entity *e, const Aff *tf, Emit *o
     boolean_finish(r, op, &a, &b, half, out);
 }
 
+/* TESS1 (ADR 0085): a kernel result's coplanar triangles merged (cc_boolean_merge_coplanar) at
+ * every detail but exact (Rust's). The plane tolerance is the precision IFC exporters write
+ * (1e-5 m): no point moves, only the triangles between them change. */
+#define MERGE_TOL_MM 0.01
+static void merge_tris(const R *r, Tris *t) {
+    if (r->arc_tol.legacy || t->n < 2 || t->oom) return;
+    double (*o)[9];
+    size_t no;
+    int rc = cc_boolean_merge_coplanar((const double(*)[9])t->t, t->n, MERGE_TOL_MM, &o, &no);
+    if (rc == 0) {
+        free(t->t);
+        t->t = o, t->n = no, t->cap = no;
+    } else if (rc < 0) t->oom = 1;
+}
+
+/* same_solid: b is a (a kernel result of a): the volume within 1 mm^3 + 1e-9 of it and the area
+ * within 1 mm^2 + 1e-9 (TESS1). A difference or an intersection only takes material away, a union
+ * only adds: an equal volume is the same solid, drawn then as a was given rather than as the
+ * kernel split it. Volumes from a's first point (site coordinates keep their digits). */
+static void solid_measure(const Tris *t, const double *o, double *vol, double *area) {
+    double v = 0.0, a = 0.0;
+    for (size_t i = 0; i < t->n; i++) {
+        const double *p = t->t[i];
+        double q[3][3], e1[3], e2[3], c[3];
+        for (int k = 0; k < 3; k++)
+            for (int j = 0; j < 3; j++) q[k][j] = p[3 * k + j] - o[j];
+        for (int j = 0; j < 3; j++) e1[j] = q[1][j] - q[0][j], e2[j] = q[2][j] - q[0][j];
+        cross(e1, e2, c);
+        a += cc_sqrt(dot(c, c)) / 2.0;
+        double bc[3];
+        cross(q[1], q[2], bc);
+        v += dot(q[0], bc) / 6.0;
+    }
+    *vol = v, *area = a;
+}
+static int same_solid(const Tris *a, const Tris *b) {
+    if (!a->n || !b->n) return 0;
+    double va, aa, vb, ab;
+    solid_measure(a, a->t[0], &va, &aa);
+    solid_measure(b, a->t[0], &vb, &ab);
+    double dv = va - vb, da = aa - ab;
+    dv = dv < 0 ? -dv : dv, da = da < 0 ? -da : da;
+    return dv <= 1.0 + 1e-9 * (va < 0 ? -va : va) && da <= 1.0 + 1e-9 * aa;
+}
+
 /* boolean_finish: a op b emitted (a when the cut fails), both freed. Out of the recursion. */
 static NOINLINE void boolean_finish(R *r, cc_bool_op op, Tris *ap, Tris *bp, int half, Emit *out) {
 #define a (*ap)
@@ -2415,8 +2461,13 @@ static NOINLINE void boolean_finish(R *r, cc_bool_op op, Tris *ap, Tris *bp, int
         /* A clipping half-space that leaves nothing (Revit: a wall's top plane put below its
          * bottom) is an export error: drawn unclipped, as IfcOpenShell does, rather than lost. */
         warn(r, "a clipping plane removed the whole solid; drawn unclipped", 0, 0);
-    else if (rc == 0) draw = &res;
-    else warn(r, "boolean cut failed, drawn uncut (", err, ")");
+    else if (rc == 0 && !r->arc_tol.legacy && same_solid(&a, &res))
+        draw = &a; /* nothing taken or added: a as given (TESS1) */
+    else if (rc == 0) {
+        draw = &res;
+        if (r->bool_depth == 1) merge_tris(r, &res); /* the outermost result only (TESS1) */
+        if (res.oom) out->mb->oom = 1;
+    } else warn(r, "boolean cut failed, drawn uncut (", err, ")");
     for (size_t i = 0; i < draw->n; i++) emit_triangle_mm(out, (const double(*)[3])draw->t[i]);
     if (rc == 0) tris_free(&res);
     tris_free(&a);
@@ -2521,7 +2572,11 @@ static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
         uint64_t root;
         if (cc_sv_as_ref(arg(e, 0), &root)) item(r, root, tf, out, depth + 1);
     } else if (is(e, "IFCMAPPEDITEM")) mapped_draw(r, e, tf, out, depth);
-    else if (is(e, "IFCBOOLEANCLIPPINGRESULT") || is(e, "IFCBOOLEANRESULT")) boolean_result(r, e, tf, out, depth);
+    else if (is(e, "IFCBOOLEANCLIPPINGRESULT") || is(e, "IFCBOOLEANRESULT")) {
+        r->bool_depth++;
+        boolean_result(r, e, tf, out, depth);
+        r->bool_depth--;
+    }
     else if (is(e, "IFCGEOMETRICSET") || is(e, "IFCGEOMETRICCURVESET")) {
         /* (ticket IFC3) its elements, each as an item: the surfaces and solids drawn (or warned
          * by their own type), the curves and points counted as no body (leaf_item). */
