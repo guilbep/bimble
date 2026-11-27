@@ -1,0 +1,29 @@
+#version 450
+// NUI3: two levels of the depth pyramid in one dispatch (half the passes of hizn.comp, the same values): each group makes
+// 8 x 8 texels of level d from 2 x 2 of the level below (s), keeps them in shared memory, then 4 x 4 texels of the next
+// level (e; e.y = 0: none) from them. Texels outside a level count as nothing (the farthest of what is there).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 1, binding = 0, r32f) uniform image2D hiz;
+layout(set = 2, binding = 0) uniform U { ivec4 s; ivec4 d; ivec4 e; }; // x offset, w, h of each level
+shared float t[8][8];
+void main() {
+    ivec2 g = ivec2(gl_GlobalInvocationID.xy), l = ivec2(gl_LocalInvocationID.xy);
+    float m = 3.0e38;
+    if (g.x < d.y && g.y < d.z) {
+        for (int y = 0; y < 2; y++)
+            for (int x = 0; x < 2; x++) {
+                ivec2 c = g * 2 + ivec2(x, y);
+                if (c.x < s.y && c.y < s.z) m = min(m, imageLoad(hiz, ivec2(s.x + c.x, c.y)).r);
+            }
+        imageStore(hiz, ivec2(d.x + g.x, g.y), vec4(m));
+    }
+    t[l.y][l.x] = m;
+    barrier();
+    if (e.y > 0 && l.x < 4 && l.y < 4) {
+        ivec2 g2 = ivec2(gl_WorkGroupID.xy) * 4 + l;
+        if (g2.x < e.y && g2.y < e.z) {
+            float m2 = min(min(t[2 * l.y][2 * l.x], t[2 * l.y][2 * l.x + 1]), min(t[2 * l.y + 1][2 * l.x], t[2 * l.y + 1][2 * l.x + 1]));
+            imageStore(hiz, ivec2(e.x + g2.x, g2.y), vec4(m2));
+        }
+    }
+}

@@ -385,6 +385,7 @@ void optimisations_apply(App *a) {
     nv_tiles_group_size((uint32_t)opt_num(a, "occlusion_group", 2));
     nv_tiles_cluster_tris((uint32_t)opt_num(a, "cluster_tris", 512));
     nv_tiles_tile_gate(opt_num(a, "occlusion_tiles", 1) != 0);
+    nv_tiles_hiz_pair(opt_num(a, "hiz_pair", 1) != 0);
     nv_tiles_seen_step((uint32_t)opt_num(a, "seen_step", 1));
     nv_tiles_page_grow((uint32_t)opt_num(a, "page_grow", 3));
     nv_tiles_test_mode((int)opt_num(a, "occlusion_test", 2), (int)opt_num(a, "occlusion_split", 1), (int)opt_num(a, "occlusion_span", 4), (int)opt_num(a, "occlusion_split_px", 64));

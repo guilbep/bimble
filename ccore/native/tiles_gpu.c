@@ -60,6 +60,9 @@ static const uint32_t SPV_HIZ0[] =
 static const uint32_t SPV_HIZN[] =
 #include "hizn.comp.h"
     ;
+static const uint32_t SPV_HIZN2[] =
+#include "hizn2.comp.h"
+    ;
 static const uint32_t SPV_TTEST[] =
 #include "ttest.comp.h"
     ;
@@ -871,6 +874,7 @@ void nv_tiles_init(R *r) {
     for (int k = 0; k < 8; k++) if (all[k]) SDL_ReleaseGPUShader(d, all[k]);
     T->hiz0 = cpipe(r, SPV_HIZ0, sizeof SPV_HIZ0, 1, 0, 0, 1, 0, 8, 8);
     T->hizn = cpipe(r, SPV_HIZN, sizeof SPV_HIZN, 0, 0, 0, 1, 0, 8, 8);
+    T->hizn2 = cpipe(r, SPV_HIZN2, sizeof SPV_HIZN2, 0, 0, 0, 1, 0, 8, 8);
     T->test = cpipe(r, SPV_TTEST, sizeof SPV_TTEST, 1, 0, 1, 0, 1, 64, 1); /* NUI3: the pyramid by a sampler */
     T->gate = cpipe(r, SPV_GATE, sizeof SPV_GATE, 0, 0, 3, 0, 1, 64, 1);
     T->seen = cpipe(r, SPV_SEEN, sizeof SPV_SEEN, 1, 0, 0, 0, 1, 8, 8);
@@ -890,8 +894,8 @@ void nv_tiles_release(R *r) {
     free(T->sets), free(T->map);
     SDL_GPUGraphicsPipeline *gp[] = {T->face_w_back, T->face_i_back, T->proxy, T->c_face_w, T->c_face_w_back, T->c_face_i, T->c_face_i_back, T->c_proxy};
     for (int k = 0; k < 8; k++) if (gp[k]) SDL_ReleaseGPUGraphicsPipeline(d, gp[k]);
-    SDL_GPUComputePipeline *cp[] = {T->hiz0, T->hizn, T->test, T->gate, T->seen};
-    for (int k = 0; k < 5; k++) if (cp[k]) SDL_ReleaseGPUComputePipeline(d, cp[k]);
+    SDL_GPUComputePipeline *cp[] = {T->hiz0, T->hizn, T->test, T->gate, T->seen, T->hizn2};
+    for (int k = 0; k < 6; k++) if (cp[k]) SDL_ReleaseGPUComputePipeline(d, cp[k]);
     if (T->seen_buf) SDL_ReleaseGPUBuffer(d, T->seen_buf);
     for (int k = 0; k < 2; k++) if (T->seen_downs[k]) SDL_ReleaseGPUTransferBuffer(d, T->seen_downs[k]);
     free(seen_cpu), seen_cpu = NULL, nseen_cpu = 0;
@@ -909,6 +913,8 @@ void nv_tiles_release(R *r) {
     memset(T, 0, sizeof *T);
 }
 
+static int hiz_pair = 1; /* NUI3 hiz_pair: two levels of the pyramid a dispatch (hizn2.comp); 0 one (hizn.comp) */
+void nv_tiles_hiz_pair(int on) { hiz_pair = on != 0; }
 static uint32_t hiz_block = 4; /* hiz_block: pixels a level-0 texel side (1, 2, 4) */
 void nv_tiles_hiz_block(nv_render *r, uint32_t b) {
     b = b <= 1 ? 1 : b <= 2 ? 2 : 4;
@@ -1624,7 +1630,17 @@ void nv_tiles_occlusion(R *r, SDL_GPUCommandBuffer *cmd) {
         SDL_DispatchGPUCompute(p, (T->lv[0][1] + 7) / 8, (T->lv[0][2] + 7) / 8, 1);
         SDL_EndGPUComputePass(p);
     }
-    for (uint32_t l = 1; l < T->hiz_levels && !cs_skipped(2); l++) {
+    for (uint32_t l = 1; l < T->hiz_levels && !cs_skipped(2) && hiz_pair && T->hizn2; l += 2) { /* NUI3: two levels a pass */
+        int nx = l + 1 < T->hiz_levels;
+        struct { int32_t a[4], b[4], c[4]; } u = {{(int)T->lv[l - 1][0], (int)T->lv[l - 1][1], (int)T->lv[l - 1][2], 0}, {(int)T->lv[l][0], (int)T->lv[l][1], (int)T->lv[l][2], 0},
+                                                 {nx ? (int)T->lv[l + 1][0] : 0, nx ? (int)T->lv[l + 1][1] : 0, nx ? (int)T->lv[l + 1][2] : 0, 0}};
+        p = SDL_BeginGPUComputePass(cmd, &tw, 1, NULL, 0);
+        SDL_BindGPUComputePipeline(p, T->hizn2);
+        SDL_PushGPUComputeUniformData(cmd, 0, &u, sizeof u);
+        SDL_DispatchGPUCompute(p, (T->lv[l][1] + 7) / 8, (T->lv[l][2] + 7) / 8, 1);
+        SDL_EndGPUComputePass(p);
+    }
+    for (uint32_t l = 1; l < T->hiz_levels && !cs_skipped(2) && !(hiz_pair && T->hizn2); l++) {
         struct { int32_t a[4], b[4]; } u = {{(int)T->lv[l - 1][0], (int)T->lv[l - 1][1], (int)T->lv[l - 1][2], 0}, {(int)T->lv[l][0], (int)T->lv[l][1], (int)T->lv[l][2], 0}};
         p = SDL_BeginGPUComputePass(cmd, &tw, 1, NULL, 0);
         SDL_BindGPUComputePipeline(p, T->hizn);
