@@ -549,7 +549,6 @@ int cc_settings_query(cc_session *s, Buf *out) {
         if (k == 2) jw_key(&w, "link_gpu_mb"), jw_bool(&w, 1); /* SIZE3: the WebGL2 viewport's budget across links */
         if (k == 2) jw_key(&w, "link_max_deg"), jw_bool(&w, 1); /* TESS1 */
         if (k == 5) jw_key(&w, "open_app"), jw_bool(&w, files); /* GPU2: the native host's `open` reads it */
-        if (k == 6) jw_key(&w, "renderer"), jw_bool(&w, 1);
         if (k == 6) jw_key(&w, "refill_offscreen"), jw_bool(&w, 1);
         if (k == 6) jw_key(&w, "renderer"), jw_bool(&w, 1), jw_key(&w, "still_px"), jw_bool(&w, 1);
         jw_key(&w, FIELDS[k]), jw_bool(&w, k == 1 ? webgpu : APPLIES[k] < 0 ? files : APPLIES[k]);
@@ -632,8 +631,6 @@ static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
         if (k == 2 && (v->link_max_deg != 18.0 || c->has_link_deg)) m[nm++] = (cc_settings_member){"link_max_deg", mjb.p, mjb.len};
         /* GPU2: open_app, once set or already in the text (sorted: before recent) */
         if (k == 5 && (v->open_app || c->has_open_app)) m[nm++] = (cc_settings_member){"open_app", v->open_app ? "true" : "false", v->open_app ? 4u : 5u};
-        /* GPU1: the lab's renderer, once set or already in the text (sorted: after recent) */
-        if (k == 6 && (strcmp(v->renderer, "auto") || c->has_renderer)) m[nm++] = (cc_settings_member){"renderer", rj, strlen(rj)};
         /* VIS1: the 3D view's optimisations, each once set from its default or already in the text (sorted) */
         if (k == 1 && (v->cull_back || c->has_vis1[1])) m[nm++] = (cc_settings_member){"cull_back", v->cull_back ? "true" : "false", v->cull_back ? 4u : 5u};
         /* VIS1: draw_visible, once set off or already in the text (sorted: after coordinates) */
