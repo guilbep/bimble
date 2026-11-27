@@ -326,6 +326,40 @@ static void truth_grab(App *a, SDL_GPUCommandBuffer *cmd, int which) {
     }
     SDL_EndGPUCopyPass(cp);
 }
+/* NUI3, the first correct picture after a jump (driver: ids_ref, tiles_reset, wait_correct): the elements a complete frame
+ * shows kept (mode 1); then (mode 2) each frame's ids read back until every one of them is shown again */
+static void correct_check(App *a, double t1) {
+    uint32_t n = a->vpw * a->vph, ne = a->next_elem + 1;
+    if (!truth_tb[0] || !n) return;
+    const uint32_t *x = SDL_MapGPUTransferBuffer(a->dev, truth_tb[0], false);
+    if (!x) return;
+    if (a->correct_cap < ne) {
+        uint8_t *r2 = realloc(a->correct_ref, ne);
+        if (!r2) { SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]); return; }
+        memset(r2 + a->correct_cap, 0, ne - a->correct_cap), a->correct_ref = r2, a->correct_cap = ne;
+    }
+    if (a->correct_mode == 1) {
+        memset(a->correct_ref, 0, a->correct_cap), a->correct_nref = 0;
+        for (uint32_t i = 0; i < n; i++)
+            if (x[i] > NV_ELEM0 && x[i] < ne && !a->correct_ref[x[i]]) a->correct_ref[x[i]] = 1, a->correct_nref++;
+        a->correct_mode = 0;
+        fprintf(stderr, "drive: correct: %u elements shown kept\n", a->correct_nref);
+    } else {
+        uint8_t *seen = calloc(ne, 1);
+        uint32_t got = 0;
+        for (uint32_t i = 0; seen && i < n; i++)
+            if (x[i] > NV_ELEM0 && x[i] < ne && a->correct_ref[x[i]] == 1 && !seen[x[i]]) seen[x[i]] = 1, got++;
+        free(seen);
+        static const double STEP[4] = {0.9, 0.99, 0.999, 1.0};
+        while (a->correct_step < 4 && got >= STEP[a->correct_step] * a->correct_nref) {
+            fprintf(stderr, "drive: correct: %.1f %% of the complete picture's elements shown %.0f ms after the reset (%u of %u)\n", STEP[a->correct_step] * 100,
+                    t1 - a->correct_t0, got, a->correct_nref);
+            a->correct_step++;
+        }
+        if (got >= a->correct_nref) a->correct_ms = t1 - a->correct_t0, a->correct_mode = 0;
+    }
+    SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]);
+}
 /* An element in the reference only is MISSING when one of its pixels shows something farther with occlusion (its surface
  * was not drawn there). Otherwise another element at the same depth won the pixel (coplanar faces: the order of the
  * draws, pass 1 or 2, decides): a tie, counted apart (truth_ties), not a loss. */
@@ -496,6 +530,7 @@ static void frame(App *a) {
         nv_render_tiles_opts(a->r, &to);
         nv_render_record(a->r, cmd, &a->cam, pick, a->pick_x, a->pick_y);
         if (a->truth && a->use_tiles) truth_grab(a, cmd, 1);
+        else if (a->correct_mode) truth_grab(a, cmd, 0); /* NUI3: the elements this frame shows (the first correct picture) */
         drew3d = 1, a->dirty = 0;
     }
     double t_rec = app_now();
@@ -569,6 +604,7 @@ static void frame_done(App *a, Pend *p, double t1) {
         uint32_t picked = 0;
         nv_render_collect(a->r, pick ? &picked : NULL);
         a->truth_missing = a->truth && a->use_tiles ? truth_compare(a) : -1;
+        if (a->correct_mode && !a->truth) correct_check(a, t1);
         if (p->moving && a->adaptive && a->moving_fps > 0 && a->use_tiles) { /* the moving budget's triangles (the walker's) */
             double target = 1000.0 / a->moving_fps;
             uint64_t drawn = nv_render_get_stats(a->r).tris;
@@ -708,7 +744,7 @@ int main(int argc, char **argv) {
     a->moving_cut = 2, a->still_cut = 0, a->adaptive = 1, a->moving_fps = 30, a->gpu_budget = (uint64_t)768 << 20;
     a->draw_key = -1, a->links_synced = -1, a->truth_missing = -1;
     const char *model = NULL, *shot = NULL, *link_folder = NULL, *conf = NULL;
-    int loaders = 2, dark = 0, lang = -1;
+    int loaders = 4, loaders_given = 0, dark = 0, lang = -1; /* NUI3: 4 (2 before): a large project complete in about half the time (the A/B: the ticket's report) */
     for (int i = 1; i < argc; i++) {
         const char *x = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(x, "--version")) { printf("bimble %s (native)\n", CC_RELEASE_VERSION); return 0; }
@@ -726,7 +762,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(x, "--edges") && v) a->ro.edges = !strcmp(v, "lines") ? NV_EDGES_LINES : !strcmp(v, "none") ? NV_EDGES_NONE : NV_EDGES_SCREEN, i++;
         else if (!strcmp(x, "--no-hlod")) a->hlod = 0, a->ro.hlod = 0;
         else if (!strcmp(x, "--no-budget")) a->adaptive = 0;
-        else if (!strcmp(x, "--loaders") && v) loaders = atoi(v), i++;
+        else if (!strcmp(x, "--loaders") && v) loaders = atoi(v), loaders_given = 1, i++;
         else if (!strcmp(x, "--link-folder") && v) link_folder = v, i++;
         else if (!strcmp(x, "--config-dir") && v) conf = v, i++;
         else if (!strcmp(x, "--shot") && v) shot = v, i++;
@@ -834,6 +870,12 @@ int main(int argc, char **argv) {
     char err[256];
     a->r = nv_render_new(a->dev, &a->ro, err, sizeof err);
     if (!a->r) { no_gpu(err, model); return 3; }
+    { /* NUI3: native.json loaders (a run's --set too) unless --loaders or BIMBLE_NATIVE_LOADERS said */
+        const char *nl = getenv("BIMBLE_NATIVE_LOADERS");
+        if (!loaders_given && !(nl && *nl)) loaders = (int)nset_num("loaders", loaders);
+        if (loaders < 1) loaders = 1;
+        if (loaders > 16) loaders = 16;
+    }
     a->loader = nv_loader_new(a->dev, loaders);
     igCreateContext(NULL);
     igGetIO_Nil()->IniFilename = NULL;

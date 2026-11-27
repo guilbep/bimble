@@ -93,7 +93,7 @@ make native-test                  # = ccore/ci/run.sh native (the CI job ccore-n
 - The shell's data (ribbon, keys, strings, themes, the machine's shape) comes from the TypeScript:
   after a change there, `node web-ui/scripts/export-shell-data.mjs` and commit
   `ccore/native/ui/data/` (`ccore/ci/run.sh unit` checks it).
-- Its own environment: `BIMBLE_NATIVE_LOADERS` (link loader threads, default 2), `BIMBLE_LINK_GPU_MB`
+- Its own environment: `BIMBLE_NATIVE_LOADERS` (link loader threads, default 4; also `--set loaders=n`), `BIMBLE_LINK_GPU_MB`
   (the links' GPU budget for one run; else the setting), and the host's `BIMBLE_CONFIG_DIR`,
   `BIMBLE_CACHE_DIR`, `BIMBLE_LINK_CACHE_BESIDE=0`, `BIMBLE_LINK_CACHE_MIN`.
 - **The tile path** (NUI2, ADR 0084 amendment): `--set renderer_path=tiles` draws every link with a section `TILE`

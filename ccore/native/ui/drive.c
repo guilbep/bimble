@@ -25,6 +25,8 @@
  *   drop <path> | expect_title <text>               NUI3: a file or folder dropped on the window; the window's title
  *   expect_cam zoomed|panned                        NUI3: since the last swheel or pinch
  *   box_numbers x0 y0 z0 x1 y1 z1 | expect_box_top m   NUI3: the section box by numbers (metres, the project's frame)
+ *   ids_ref | tiles_reset                           NUI3: the elements a frame shows kept; every tile released, then each
+ *                                                   frame until they all show again ("drive: correct: ... ms")
  *   quit
  * Out: <dir>/frames.csv (t_ms, kind, frame_ms, ui_ms, triangles, draws), inputs.csv (t_ms, what,
  * app_ms: event -> the frame's UI and core work done, frame_ms: event -> that frame's GPU fence),
@@ -305,6 +307,12 @@ static int run_step(App *a, Step *s, double now) {
         double want = atof(arg), got = (a->box_max[2] + a->origin0[2]) / 1000.0;
         snprintf(what, sizeof what, "the section box's top at %.3f m (got %.4f m, box %s)", want, got, a->box_on ? "on" : "off");
         expect(a, a->box_on && fabs(got - want) < 0.0015, what);
+        return 1;
+    }
+    if (!strcmp(op, "ids_ref")) { a->correct_mode = 1, a->dirty = 1; return 1; } /* NUI3: the next frame's elements kept */
+    if (!strcmp(op, "tiles_reset")) { /* NUI3: every tile released, then (wait_correct) the time to every kept element shown */
+        nv_render_tiles_drop_all(a->r);
+        a->correct_mode = 2, a->correct_step = 0, a->correct_t0 = app_now(), a->correct_ms = -1, a->dirty = 1, a->t_complete = 0;
         return 1;
     }
     if (!strcmp(op, "expect_title")) {

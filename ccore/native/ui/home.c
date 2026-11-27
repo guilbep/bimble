@@ -375,6 +375,12 @@ void optimisations_apply(App *a) {
     a->topts.error_px = opt_num(a, "error_px", D_ERROR_PX);
     a->topts.lod = opt_num(a, "lod", 1) != 0 && a->topts.error_px > 0;
     a->topts.cull_back = opt_num(a, "cull_back", D_CULL_BACK) != 0;
+    { /* NUI3: SHELL1's shell_mode (the core's key): priority (default) and filter order the walk exterior first (the native
+       * renderer has no filter: occlusion decides what is seen), off the plain order */
+        const JrVal *sm = v ? jr_get(v, "shell_mode") : NULL;
+        a->topts.priority = !(sm && sm->type == JR_STR && !strcmp(sm->s, "off"));
+        if (nset_get("shell_mode")) a->topts.priority = !opt_str_is("shell_mode", "off", 0);
+    }
     a->topts.groups = opt_num(a, "occlusion_groups", 1) != 0;
     nv_tiles_group_size((uint32_t)opt_num(a, "occlusion_group", 2));
     nv_tiles_cluster_tris((uint32_t)opt_num(a, "cluster_tris", 512));

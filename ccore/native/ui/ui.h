@@ -81,6 +81,7 @@ typedef struct {
     nv_tileset *ts;      /* NUI2: drawn by tiles (its cache's section TILE); NULL: as parts */
     char (*ids)[22];     /* its elements' GlobalIds (tiles: no part holds them) */
     int tiles_inflight;
+    const uint8_t *xmarks;  /* NUI3: the cross-link shell's marks attached to its tiles (the session's pointer, compared) */
 } SLink;
 
 typedef struct App App;
@@ -150,6 +151,13 @@ struct App {
     uint32_t link_gen, next_elem;
     double origin0[3];
     double core_origin[3];     /* the open scene's origin (world mm): the core's rays and boxes are relative to it */
+    int correct_mode;          /* NUI3, the first correct picture: 1 the next 3D frame's elements kept, 2 waiting for them all */
+    uint8_t *correct_ref;
+    uint32_t correct_cap, correct_nref;
+    int correct_step;
+    double correct_t0, correct_ms;
+    double xshell_t;           /* NUI3: the cross-link shell polled (every 500 ms) */
+    int xshell_state;
     int have_origin, origin_links, draw_key, fitted, ids_dirty, vis_dirty;
     uint32_t *id_slot;
     size_t id_cap;

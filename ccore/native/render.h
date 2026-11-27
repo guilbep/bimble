@@ -129,6 +129,7 @@ typedef struct {
     uint64_t budget;     /* the resident tiles' GPU bytes (0: none) */
     uint64_t tri_budget; /* the walker's triangle budget (0: none; the moving budget sets it) */
     int reference;       /* the truth test's reference frame: no occlusion, no state changed */
+    int priority;        /* NUI3: shell_mode priority: the walk's tiles exterior first (CC_TILES_SEL_PRIORITY): fetched first */
 } nv_tiles_opts;
 typedef struct { nv_tileset *ts; uint32_t tile, rank; } nv_tile_want;
 
@@ -141,6 +142,11 @@ void nv_tileset_ref(nv_tileset *ts);   /* a loader job holds one */
 /* the whole section kept with the set (the open model's: its proxies are read from it; a link's are read from its mapped
  * cache): taken (malloc'd, n bytes) */
 void nv_tileset_keep_section(nv_tileset *ts, uint8_t *sec, size_t n);
+/* NUI3: the cross-link shell's marks (session/xshell.h: a byte per entry of the element list, 1 exterior), copied; NULL
+ * detaches. The priority walk orders the tiles holding a marked element first. 0 ok, -1 (n differs, no memory). */
+int nv_tileset_set_xmask(nv_tileset *ts, const uint8_t *marks, uint32_t n);
+/* NUI3: every tile released from the GPU (the measure of the time to the first correct picture after a jump) */
+void nv_render_tiles_drop_all(nv_render *r);
 void nv_tileset_section(const nv_tileset *ts, const uint8_t **sec, size_t *n);
 void nv_tileset_unref(SDL_GPUDevice *dev, nv_tileset *ts);
 const cc_tiles_toc *nv_tileset_toc(const nv_tileset *ts);

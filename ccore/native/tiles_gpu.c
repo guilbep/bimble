@@ -235,6 +235,7 @@ struct nv_tileset {
     uint32_t nocc, elem0, nE, nT;
     double c, s, off[3];
     uint32_t colour;
+    uint8_t *xmask, *xtile; /* NUI3: the cross-link shell's marks, a tile's "holds one" */
     nv_gtile **g;
     uint8_t *st;            /* 0 none, 1 queued, 3 failed */
     uint64_t *used, *vis, *tested, *standin_at;
@@ -253,6 +254,24 @@ struct nv_tileset {
     uint64_t last_budget, last_gen;
     int last_lod, last_ok;
 };
+int nv_tileset_set_xmask(nv_tileset *ts, const uint8_t *marks, uint32_t n) {
+    free(ts->xmask), free(ts->xtile), ts->xmask = ts->xtile = NULL;
+    ts->toc.xmask = ts->toc.xtile = NULL, ts->last_ok = 0;
+    if (!marks) return 0;
+    if (n != ts->toc.nlist) return -1;
+    ts->xmask = malloc(n + 1ull), ts->xtile = malloc(ts->nT + 1ull);
+    if (!ts->xmask || !ts->xtile) { free(ts->xmask), free(ts->xtile), ts->xmask = ts->xtile = NULL; return -1; }
+    memcpy(ts->xmask, marks, n);
+    for (uint32_t t = 0; t < ts->nT; t++) {
+        cc_tile x;
+        cc_tiles_get(&ts->toc, t, &x);
+        uint8_t any = 0;
+        for (uint32_t k = 0; k < x.nel && x.el0 + (uint64_t)k < n && !any; k++) any = marks[x.el0 + k] != 0;
+        ts->xtile[t] = any;
+    }
+    ts->toc.xmask = ts->xmask, ts->toc.xtile = ts->xtile;
+    return 0;
+}
 void nv_tileset_keep_section(nv_tileset *ts, uint8_t *sec, size_t n) { free(ts->sec_all), ts->sec_all = sec, ts->sec_n = n; }
 void nv_tileset_section(const nv_tileset *ts, const uint8_t **sec, size_t *n) { *sec = ts->sec_all, *n = ts->sec_n; }
 
@@ -323,7 +342,7 @@ void nv_tileset_unref(SDL_GPUDevice *dev, nv_tileset *t) {
     if (t->g)
         for (uint32_t i = 0; i < t->nT; i++) nv_gtile_free(dev, t->g[i]);
     free(t->g), free(t->st), free(t->used), free(t->vis), free(t->tested), free(t->standin_at), free(t->standin_gate), free(t->sbox);
-    free(t->descend), free(t->sel), free(t->tocb), free(t->occ), free(t->sec_all);
+    free(t->descend), free(t->sel), free(t->tocb), free(t->occ), free(t->sec_all), free(t->xmask), free(t->xtile);
     free(t);
 }
 const cc_tiles_toc *nv_tileset_toc(const nv_tileset *ts) { return &ts->toc; }
@@ -754,6 +773,12 @@ static struct Snap {
     TMap *map;
 } snp[2];
 
+void nv_render_tiles_drop_all(R *r) {
+    nv_tiles_r *T = &r->tl;
+    for (uint32_t si = 0; si < T->nsets; si++)
+        for (uint32_t t = 0; t < T->sets[si]->nT; t++) drop_tile(r, T->sets[si], t);
+    T->want_n = 0;
+}
 int nv_render_add_tileset(R *r, nv_tileset *ts) {
     nv_tiles_r *T = &r->tl;
     if (T->nsets == T->csets) {
@@ -1304,7 +1329,8 @@ static void descend_marks(R *r, nv_tileset *ts) {
 /* THE walker call (SHELL1 adds a parameter here) */
 static uint32_t nv_tiles_walk(nv_tileset *ts, const cc_tiles_view *v, const nv_tiles_opts *o) {
     uint64_t tris = 0;
-    return cc_tiles_select(&ts->toc, v, o->error_px, o->tri_budget ? o->tri_budget : UINT64_MAX, o->lod ? 0u : (unsigned)CC_TILES_SEL_LEAVES, ts->descend, ts->sel, ts->nT, &tris);
+    unsigned fl = (o->lod ? 0u : (unsigned)CC_TILES_SEL_LEAVES) | (o->priority ? (unsigned)CC_TILES_SEL_PRIORITY : 0u); /* NUI3: exterior first */
+    return cc_tiles_select(&ts->toc, v, o->error_px, o->tri_budget ? o->tri_budget : UINT64_MAX, fl, ts->descend, ts->sel, ts->nT, &tris);
 }
 
 static int buf_room(R *r, SDL_GPUBuffer **b, uint32_t *cap, uint32_t need, SDL_GPUBufferUsageFlags use) {
