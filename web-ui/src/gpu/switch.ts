@@ -82,11 +82,12 @@ export interface GpuModels {
 export interface GpuView {
   mesh: GpuMesh | null;
   /** Per element its box (min xyz, max xyz), shown (0 no, 1 yes, 2 revealed), sRGB colour (0xRRGGBB). */
-  boxes: Float32Array; shown: Uint8Array; colour: Uint32Array;
+  boxes: Float64Array; shown: Uint8Array; colour: Uint32Array;
   /** The selection's elements are not under a proxy (proxies.rs usable). */
   selected: (e: number) => boolean;
   prx: Proxies | null; proxiesOn: boolean;
-  mvp: Float32Array; eye: number[]; target: number[];
+  /** The scene's view-projection (f64, VIS2) and the render origin the GPU draws relative to (gl/origin.ts). */
+  mvp: ArrayLike<number>; ro?: number[]; eye: number[]; target: number[];
   /** The eye at infinity (a plan, a section, an orthographic 3D view); a plan or a section shown. */
   ortho: boolean; plan: boolean; mirror: boolean;
   clip: { min: number[]; max: number[]; yaw?: number } | null;

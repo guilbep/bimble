@@ -8,6 +8,9 @@
 // unique), sprinkler heads and furniture are copies of a few shapes (drawn instanced). Each building is opened in
 // a running host and exported as IFC4 (action export_ifc4): building_<k>.ifc in `dir`. Deterministic but for
 // the IFC header's timestamp. Per storey about 2,500 elements and 300,000 triangles with the defaults.
+// VIS2: long members turned in every way (the class the page's boxes once lost): diagonal braces across the south facade
+// and in the corridor (unique meshes, placements tilted in 3D), beams sharing one shape placed turned in plan and
+// tilted (drawn instanced), long pipes at 30 and 45 degrees.
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,7 +80,7 @@ function rng(seed) {
 }
 
 /** The model JSON of one building (golden/frame.json's storeys and materials, its elements replaced). */
-export function buildingModel({ k = 0, storeys = 4, scale = 1 } = {}) {
+export function buildingModel({ k = 0, storeys = 4, scale = 1, offset = [0, 0, 0] } = {}) {
   const doc = JSON.parse(readFileSync(join(BENCH, "../golden/frame.json"), "utf8"));
   const m = doc.model;
   const storey = Object.values(m.storeys).sort((a, b) => a.elevation - b.elevation)[0].id;
@@ -85,10 +88,11 @@ export function buildingModel({ k = 0, storeys = 4, scale = 1 } = {}) {
   m.elements = {};
   const R = rng(1234 + k);
   let n = 0, tris = 0;
-  const add = (cls, name, g, at) => {
+  const add = (cls, name, g, at, xAxis = [1, 0, 0], zAxis = [0, 0, 1]) => {
     const id = derivedId(`vis1/${k}/${n++}`);
     m.elements[id] = { id, class: cls, name, storey, material,
-      placement: { origin: at.map((v) => r3(v)), z_axis: [0, 0, 1], x_axis: [1, 0, 0] },
+      // (VIS2: `offset`, a georeferenced file's coordinates)
+      placement: { origin: at.map((v, a) => r3(v + offset[a])), z_axis: zAxis.map((v) => +v.toFixed(9)), x_axis: xAxis.map((v) => +v.toFixed(9)) },
       generator: { kind: "mesh", positions: g.pos.map((p) => p.map(r3)), indices: g.idx }, properties: {} };
     tris += g.idx.length / 3;
   };
@@ -114,6 +118,20 @@ export function buildingModel({ k = 0, storeys = 4, scale = 1 } = {}) {
     }
     add("IfcWall", `Corridor ${s}a`, box(0, 0, 0, W - 2 * WALL, 150, H - SLAB), [WALL, 10500, z + SLAB]);
     add("IfcWall", `Corridor ${s}b`, box(0, 0, 0, W - 2 * WALL, 150, H - SLAB), [WALL, 13350, z + SLAB]);
+    // VIS2: long members turned in every way. A placement's x axis turned by `a` in plan and tilted by `t` up (z axis
+    // perpendicular to it, in the vertical plane through it)
+    const axes = (a, t) => [[Math.cos(t) * Math.cos(a), Math.cos(t) * Math.sin(a), Math.sin(t)], [-Math.sin(t) * Math.cos(a), -Math.sin(t) * Math.sin(a), Math.cos(t)]];
+    for (let i = 0; i < 6; i++) { // braces across the south facade, outside it (unique meshes: each its own length)
+      const len = 4300 + 37 * i + 11 * s, [xa, za] = axes(0, (i % 2 ? 1 : -1) * Math.atan2(H - SLAB, 3000));
+      add("IfcBeam", `Brace S ${s}.${i}`, box(0, -100, -100, len, 100, 100), [1500 + 6000 * i + (i % 2 ? 0 : 3000), -400, z + SLAB + (i % 2 ? 0 : H - SLAB)], xa, za);
+    }
+    for (let i = 0; i < 4; i++) { // braces in the corridor, turned in plan and tilted
+      const [xa, za] = axes(Math.PI / 6 + (i * Math.PI) / 2, Math.PI / 5);
+      add("IfcBeam", `Brace C ${s}.${i}`, box(0, -60, -60, 3400 + 29 * i + 7 * s, 60, 60), [4000 + 8000 * i, 12000, z + SLAB + 200], xa, za);
+    }
+    const beam = cylinder(7000, 120, 24); // beams: one shape (96 triangles), placed turned in plan and tilted: instanced
+    for (let i = 0; i < 8; i++) { const [xa, za] = axes((i * Math.PI) / 4 + Math.PI / 12, (i % 3) * 0.1); add("IfcBeam", `Beam ${s}.${i}`, beam, [3000 + 4000 * i, 4000 + (i % 2) * 14000, z + H - 900], xa, za); }
+    for (let i = 0; i < 6; i++) { const [xa, za] = axes(i % 2 ? Math.PI / 6 : -Math.PI / 4, i % 3 ? Math.PI / 6 : Math.PI / 4); add("IfcBuildingElementProxy", `Riser ${s}.${i}`, cylinder(3000 + 13 * i, 70, 16), [2500 + 6000 * i, i % 2 ? 7000 : 17000, z + SLAB + 100], xa, za); }
     for (let rep = 0; rep < per; rep++) {
       // pipes under the ceiling: each its own length (a unique mesh)
       for (let i = 0; i < 600; i++) {
@@ -147,11 +165,11 @@ export function buildingModel({ k = 0, storeys = 4, scale = 1 } = {}) {
 }
 
 /** Writes `n` buildings building_0.ifc .. into `dir` through the host (`hcall(op, name, body)` -> {status, text}). */
-export async function makeBuildingFolder({ hcall, dir, work, n, storeys = 4, scale = 1 }) {
+export async function makeBuildingFolder({ hcall, dir, work, n, storeys = 4, scale = 1, offset = [0, 0, 0] }) {
   const files = [];
   let elements = 0, tris = 0;
   for (let k = 0; k < n; k++) {
-    const b = buildingModel({ k, storeys, scale });
+    const b = buildingModel({ k, storeys, scale, offset });
     elements += b.elements, tris += b.tris;
     const src = join(work, `vis1-building-${k}.json`), out = resolve(dir, `building_${k}.ifc`);
     writeFileSync(src, JSON.stringify(b.doc));

@@ -12,8 +12,8 @@ const scale = (a: V3, k: number): V3 => [a[0] * k, a[1] * k, a[2] * k];
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a: V3): V3 => scale(a, 1 / (Math.hypot(a[0], a[1], a[2]) || 1));
-function mul(a: Float32Array, b: Float32Array): Float32Array {
-  const o = new Float32Array(16);
+function mul(a: Float64Array, b: Float64Array): Float64Array {
+  const o = new Float64Array(16);
   for (let c = 0; c < 4; c++)
     for (let r = 0; r < 4; r++) {
       let s = 0;
@@ -22,9 +22,9 @@ function mul(a: Float32Array, b: Float32Array): Float32Array {
     }
   return o;
 }
-function lookAt(eye: V3, target: V3, up: V3): Float32Array {
+function lookAt(eye: V3, target: V3, up: V3): Float64Array {
   const f = norm(sub(target, eye)), s = norm(cross(f, up)), v = cross(s, f);
-  return new Float32Array([s[0], v[0], -f[0], 0, s[1], v[1], -f[1], 0, s[2], v[2], -f[2], 0, -dot(s, eye), -dot(v, eye), dot(f, eye), 1]);
+  return new Float64Array([s[0], v[0], -f[0], 0, s[1], v[1], -f[1], 0, s[2], v[2], -f[2], 0, -dot(s, eye), -dot(v, eye), dot(f, eye), 1]);
 }
 
 /** The view shown is a section (a `view_clip` of type "section"). */
@@ -40,7 +40,7 @@ export function sectionMatrices(vc: SectionClip, target: number[], r: number, ha
   const e = add(t, scale(d, -h));
   const view = lookAt(e, t, up);
   const near = 1, far = 2 * h, w = half * aspect;
-  const proj = new Float32Array([1 / w, 0, 0, 0, 0, 1 / half, 0, 0, 0, 0, -2 / (far - near), 0, 0, 0, -(far + near) / (far - near), 1]);
+  const proj = new Float64Array([1 / w, 0, 0, 0, 0, 1 / half, 0, 0, 0, 0, -2 / (far - near), 0, 0, 0, -(far + near) / (far - near), 1]);
   return { e, view, proj, mvp: mul(proj, view), aspect, up };
 }
 

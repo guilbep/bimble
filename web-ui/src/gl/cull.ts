@@ -44,13 +44,15 @@ export function budgetCut(cs: Cut[], budget: number): { t: number; tris: number 
     else lo = mid;
   }
   let tris = at(hi);
-  if (tris === 0) hi = top, tris = at(top); // one item over the budget: the largest one(s) on screen alone
+  // one item over the budget: the largest one(s) on screen alone (VIS2: a hair under its size over distance: (s / d) * d can
+  // round above s, and the item was then left out: a fill of slices drawing 0 triangles forever, seen on a real project)
+  if (tris === 0) hi = top * (1 - 1e-9), tris = at(hi);
   return { t: hi, tris };
 }
 
 /** The six planes (a, b, c, d: inside when a x + b y + c z + d >= 0) of a column-major view-projection
  *  matrix (Gribb and Hartmann): left, right, bottom, top, near, far. */
-export function frustumPlanes(m: Float32Array): Float64Array {
+export function frustumPlanes(m: ArrayLike<number>): Float64Array {
   const r = (i: number) => [m[i]!, m[4 + i]!, m[8 + i]!, m[12 + i]!];
   const x = r(0), y = r(1), z = r(2), w = r(3);
   const out = new Float64Array(24);
@@ -61,7 +63,7 @@ export function frustumPlanes(m: Float32Array): Float64Array {
 }
 
 /** False when the box (min xyz, max xyz at `o`) lies wholly outside one plane: not on screen. */
-export function boxInFrustum(p: Float64Array, b: Float32Array, o: number): boolean {
+export function boxInFrustum(p: Float64Array, b: ArrayLike<number>, o: number): boolean {
   for (let k = 0; k < 24; k += 4) {
     const a = p[k]!, bb = p[k + 1]!, c = p[k + 2]!, d = p[k + 3]!;
     // the box corner farthest along the plane's normal
@@ -84,7 +86,7 @@ function spread(v: number): number {
 /** A batch: items [first, first + n) of its list (elements or instances), largest first; `size` their
  *  sizes (mm, descending), `cum[i]` the triangles (or instances' indices) of the first i items, the
  *  same for edge segments in `ecum`; `box` the items' box. */
-export interface Batch { first: number; n: number; size: Float32Array; cum: Uint32Array; ecum: Uint32Array; box: Float32Array;
+export interface Batch { first: number; n: number; size: Float32Array; cum: Uint32Array; ecum: Uint32Array; box: Float64Array;
   /** 3D2: the HLOD leaf its items are in (-1: none); a batch never spans two leaves. */
   group: number;
   /** LNK3D: `vcum[i]` the triangles of the first i items that are shown (hidden ones count 0; unset:
@@ -97,7 +99,7 @@ export interface Batch { first: number; n: number; size: Float32Array; cum: Uint
  *  inside each. 3D2: with `group` (an item's HLOD leaf), the items go by group first (leaves in
  *  their depth-first order, so a cell's batches lie side by side) and a batch never spans two groups.
  *  Returns the items in their new order and the batches. */
-export function makeBatches(items: number[], boxes: Float32Array, cost: (e: number) => number, edges: (e: number) => number,
+export function makeBatches(items: number[], boxes: ArrayLike<number>, cost: (e: number) => number, edges: (e: number) => number,
   cap: number, group: (e: number) => number = () => -1): { order: number[]; batches: Batch[] } {
   if (!items.length) return { order: [], batches: [] };
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -120,7 +122,7 @@ export function makeBatches(items: number[], boxes: Float32Array, cost: (e: numb
     const g = group(sorted[i]!);
     while (j < sorted.length && (j === i || (c + cost(sorted[j]!) <= cap && group(sorted[j]!) === g))) c += cost(sorted[j]!), j++;
     const part = sorted.slice(i, j).sort((a, b) => sizeOf(b) - sizeOf(a) || a - b);
-    const n = part.length, size = new Float32Array(n), cum = new Uint32Array(n + 1), ecum = new Uint32Array(n + 1), box = new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+    const n = part.length, size = new Float32Array(n), cum = new Uint32Array(n + 1), ecum = new Uint32Array(n + 1), box = new Float64Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
     part.forEach((e, k) => {
       size[k] = sizeOf(e);
       cum[k + 1] = cum[k]! + cost(e);
@@ -165,9 +167,9 @@ export function xfRows(x: ModelXf, out = new Float32Array(12), o = 0): Float32Ar
 
 /** The box `src[so .. so + 6]` (min xyz, max xyz, the model's frame) placed by x, as the axis-aligned
  *  box around it at `dst[d0 ..]` (exact for no turn; a turned box's 4 corners in plan otherwise). */
-export function xfBox(x: ModelXf, src: Float32Array, so: number, dst: Float32Array, d0: number): void {
+export function xfBox(x: ModelXf, src: ArrayLike<number>, so: number, dst: Float32Array | Float64Array, d0: number): void {
   const x0 = src[so]!, y0 = src[so + 1]!, x1 = src[so + 3]!, y1 = src[so + 4]!;
-  if (!(x0 <= x1)) { dst.set(src.subarray(so, so + 6), d0); return; } // an empty box stays empty
+  if (!(x0 <= x1)) { for (let k = 0; k < 6; k++) dst[d0 + k] = src[so + k]!; return; } // an empty box stays empty
   let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
   for (const [px, py] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) {
     const qx = x.c * px - x.s * py, qy = x.s * px + x.c * py;
@@ -265,7 +267,7 @@ export function budgetCutFast(cs: Cut[], budget: number, key: string): { t: numb
   if (tris === 0) { // one item over the budget: the largest on screen alone (budgetCut's rule)
     let hi = 0;
     for (const c of cs) if (c.k0 < c.b.n) hi = Math.max(hi, c.b.size[c.k0]! / Math.max(c.dist, 1e-9));
-    t = hi, tris = at(hi);
+    t = hi * (1 - 1e-9), tris = at(t); // (VIS2: a hair under, as budgetCut)
   }
   return { t, tris };
 }

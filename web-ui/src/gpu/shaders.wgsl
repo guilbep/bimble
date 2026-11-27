@@ -18,6 +18,7 @@ struct Frame {
   clip_min: vec4f, // xyz (scene mm); w = 1: the box cuts
   clip_max: vec4f, // xyz; w: the cut shade
   clip_rot: vec4f, // cos, sin of the box's yaw; z: the edges' depth pull (NDC); w: ambient
+  ro: vec4f,       // VIS2: the render origin (scene mm, gl/origin.ts): positions relative to it (mvp includes it)
 }
 // A draw: its model, whether its copies come from the compacted list (GPU culling) and that list's start,
 // whether faces take the element's colour (1) or `colour` (edges, proxies, lines; w: alpha); its model's
@@ -90,8 +91,9 @@ fn back_of(p: vec3f, n1: vec3f, n2: vec3f) -> f32 {
 }
 // faces of the open model's HLOD proxies: a colour per vertex (its part's family)
 @vertex fn vs_proxy(@location(0) p: vec3f, @location(1) c: vec4f) -> Out {
+  let w = p - F.ro.xyz;
   var o: Out;
-  o.pos = to_clip(p, 0.0); o.world = p; o.col = c.rgb; o.back = 0.0;
+  o.pos = to_clip(w, 0.0); o.world = w; o.col = c.rgb; o.back = 0.0;
   return o;
 }
 // faces of a link's baked proxies: the draw's colour (the link's), placed by its model
@@ -121,15 +123,16 @@ fn back_of(p: vec3f, n1: vec3f, n2: vec3f) -> f32 {
 }
 // lines of a box (an unfinished batch's outline: the unit cube placed per instance; the section box)
 @vertex fn vs_box(@location(0) p: vec3f, @location(1) x: vec3f, @location(2) y: vec3f, @location(3) z: vec3f, @location(4) t: vec3f) -> Out {
-  let w = x * p.x + y * p.y + z * p.z + t;
+  let w = x * p.x + y * p.y + z * p.z + t - F.ro.xyz;
   var o: Out;
   o.pos = to_clip(w, 0.0); o.world = w; o.col = D.colour.rgb; o.back = 0.0;
   return o;
 }
 // the place tool's ghost and markers (scene mm): the draw's colour
 @vertex fn vs_plain(@location(0) p: vec3f) -> Out {
+  let w = p - F.ro.xyz;
   var o: Out;
-  o.pos = to_clip(p, 0.0); o.world = p; o.col = D.colour.rgb; o.back = 0.0;
+  o.pos = to_clip(w, 0.0); o.world = w; o.col = D.colour.rgb; o.back = 0.0;
   return o;
 }
 
