@@ -107,15 +107,36 @@ typedef struct {
     const cc_viewfile *vf;  /* lazy (cc_viewfile_read_mapped) or decoded */
 } cc_tiles_src;
 
+/* The source's elements, for other bakers (shell.h): its rows; its blocks (shapes, then each element's own mesh); element
+ * k's block (SIZE_MAX: damaged); block b decoded into `a` when lazy (0 ok); element k's placement (NULL: its own mesh, in
+ * scene mm); its box (empty when no finite point; 0 ok). */
+size_t cc_tiles_src_count(const cc_tiles_src *s);
+size_t cc_tiles_src_nblocks(const cc_tiles_src *s);
+size_t cc_tiles_src_el_block(const cc_tiles_src *s, size_t k);
+int cc_tiles_src_block(const cc_tiles_src *s, size_t b, Arena *a, cc_mesh *m);
+const cc_placement32 *cc_tiles_src_place(const cc_tiles_src *s, size_t k);
+int cc_tiles_src_box(const cc_tiles_src *s, size_t k, float b[6], Arena *scratch);
+
 typedef struct cc_tiles_work cc_tiles_work;
 
 /* The bake-time settings (the owner's rule: every optimisation a setting with a default and an off value). A cache records
  * them (its SRCE "tiles": cc_tiles_opts_text) and is indexed again when they change. occ 0: no occluders. */
 typedef struct {
     uint32_t leaf_tris, proxy_tris, root_tris, res, occ;
+    /* SHELL1 (shell.h): the exterior shell's views (0: none), their resolution and the depth tolerance d (mm) */
+    uint32_t shell_views, shell_res, shell_tol;
+    uint32_t shell_cross; /* SHELL1: the cross-link pass (session/xshell.h) on (1, the default) or off; a run-time setting, not
+                           * in the text below (a link's cache does not depend on it): "cross=0", "cross=1", "cross=<views>x<res>" */
+    uint32_t cross_views, cross_res; /* its views and resolution (0: the shell's) */
+    uint32_t cross_d, cross_touch;   /* its depth tolerance (mm; 0: the shell's) and the touch safeguard (shell.h; 0 off) */
 } cc_tiles_opts;
+#define CC_TILES_SHELL_VIEWS 64u
+#define CC_TILES_SHELL_RES 1024u
+#define CC_TILES_SHELL_TOL 100u
+#define CC_SHELL_MAX_VIEWS_T 4096u
+#define CC_SHELL_MAX_RES_T 4096u
 void cc_tiles_default(cc_tiles_opts *o);
-/* "leaf=40000 proxy=16384 root=512 res=64 occ=64" into out[0..n) */
+/* "leaf=40000 proxy=16384 root=512 res=64 occ=64 shell=64x1024 shell_d=100" into out[0..n) ("shell=0": none) */
 void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n);
 /* the defaults, then each "key=value" of `t` (space separated; unknown keys and bad values ignored, each value bounded) */
 void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t);
@@ -153,6 +174,12 @@ typedef struct {
     uint64_t blobs;
     uint32_t blob_at;   /* the blobs' offset in the section: pad8(toc + 36 nO) */
     const uint8_t *list, *eflags, *occ; /* occ NULL when only the table of contents was given */
+    const uint8_t *shell; /* SHELL1: the shell table (TSH1) when baked and given (the whole section, or cc_tiles_shell_check) */
+    uint32_t shell_n;
+    /* SHELL1: the cross-link shell (session/xshell.h), attached by the caller: per list entry 1 exterior (in place of element
+     * flag 4 in the outside walk and the exterior answers), per tile 1 when it holds one, and their triangles (NULL: none) */
+    const uint8_t *xmask, *xtile;
+    const uint32_t *xtris;
 } cc_tiles_toc;
 
 /* The table of contents at p[0..n) checked (n may stop at the toc bytes: `with_blobs` 0), every rule above. 0 ok,
@@ -167,9 +194,55 @@ int cc_tiles_proxy_check(const uint8_t *p, size_t n, cc_error *err);
  * triangle in `cat` (one byte a triangle). 0 ok, -1 damaged or out of memory. */
 int cc_tiles_proxy_mesh(const uint8_t *p, size_t n, const float box[6], Arena *a, cc_mesh *m, uint8_t **cat);
 
+/* ---- SHELL1 (ADR 0078 amendment 8, shell.h): the exterior shell, baked after the pyramid ----
+ * With the header's bake flag 1: element flag 4 marks the elements seen from outside, tile flag 16 the tiles holding one,
+ * and the blobs end with the SHELL TABLE and a trailer (the section's last 16 bytes: "TSHT", u32 table bytes, u64 the
+ * table's offset from the blobs' start; 8-aligned). Readers of the layout without it are unchanged: the blobs are only
+ * longer. The table, "TSH1" (asked apart: tiles=shell):
+ *   0 "TSH1"  4 u32 version 1  8 u32 nT  12 u32 views  16 u32 resolution  20 u32 depth tolerance mm
+ *   24 u32 exterior elements  28 u32 0;  then nT records of 32 bytes, in tile order:
+ *   0 u32 exterior detail triangles under it, copies counted (a leaf: its exterior elements'; saturating, <= detail)
+ *   4 u32 flags: 1 a shell proxy: its exterior elements' proxy, the TPX1 blob below (the tile's own when all its
+ *     elements are exterior; a proxy of the exterior ones only, error measured against them, when it has both kinds)
+ *   8 u64 the blob's offset from the blobs' start   16 u32 its bytes   20 u32 its triangles (a leaf: = the first field)
+ *   24 u32 its vertices   28 f32 its error mm (0 a leaf; +inf no shell proxy: the outside walk descends)
+ * The outside walk (CC_TILES_SEL_SHELL): tiles without flag 16 are skipped, leaves draw their exterior elements
+ * (leaf answer with CC_TILES_ANS_SHELL, GET ...&tile=a,b&shell=1), proxies their shell proxy. The full walk is unchanged
+ * (the tiles' own proxies depict all their elements). */
+#define CC_TILES_SHELL_HEAD 32u
+#define CC_TILES_SHELL_REC 32u
+enum { CC_TILE_SHELL_PROXY = 1 };
+/* leaf answers: CC_TILES_ANS_SHELL its exterior elements only (the first fetch, GET ...&tile=a,b&shell=1),
+ * CC_TILES_ANS_INTERIOR the others (what follows, &shell=2): the two together are the leaf */
+enum { CC_TILES_ANS_SHELL = 1, CC_TILES_ANS_INTERIOR = 2 };
+typedef struct {
+    uint32_t ext, flags;
+    uint64_t off;
+    uint32_t len, tris, verts;
+    float error;
+} cc_tile_shell;
+/* The table p[0..n) checked against `toc` (counts, flags, ranges; the proxies too when toc holds the blobs) and attached
+ * (toc->shell). 0 ok, -1 with err (toc->shell NULL). */
+int cc_tiles_shell_check(const uint8_t *p, size_t n, cc_tiles_toc *toc, cc_error *err);
+void cc_tiles_shell_get(const cc_tiles_toc *toc, uint32_t i, cc_tile_shell *out); /* zeros without a table */
+/* 1 when list entry i is exterior: the cross-link mask when attached, else element flag 4 */
+int cc_tiles_el_exterior(const cc_tiles_toc *toc, uint32_t i);
+typedef struct {
+    uint32_t exterior, elements, mixed; /* elements exterior, elements listed, tiles with both kinds */
+    int shell_build_ok;                 /* the exterior proxies were built (the same tree) */
+    uint64_t ext_tris, added, shell_proxy_tris;
+} cc_tiles_shell_info;
+/* The section sec[0..n) (built without a shell) with the shell of `ext` (per scene element, 1 exterior) into `out`: the
+ * flags set, the mixed tiles' exterior proxies built (a build of the same tree from the exterior elements; `o` its
+ * settings), the table and the trailer appended. Cancellable between steps (`cancel`, may be NULL). 0 ok, -1 err. */
+int cc_tiles_shell_apply(const uint8_t *sec, size_t n, const cc_tiles_src *src, const cc_tiles_opts *o, const uint8_t *ext,
+                         const int *cancel, Buf *out, cc_tiles_shell_info *info, cc_error *err);
+
 /* The leaf answer TLF1 of tile `id` (list[el0..el0+nel)) from a scene or a view file (lazy: the blocks copied
  * from the mapping; else encoded). Appended to `out`. 0 ok, -1 err. */
 int cc_tiles_leaf_answer(const cc_tiles_src *src, const cc_tiles_toc *toc, uint32_t id, Buf *out, cc_error *err);
+/* the same, `flags` CC_TILES_ANS_SHELL: its exterior elements only (a section without the shell: all) */
+int cc_tiles_leaf_answer_ex(const cc_tiles_src *src, const cc_tiles_toc *toc, uint32_t id, unsigned flags, Buf *out, cc_error *err);
 /* A TLF1 answer read back (untrusted): each element's triangles placed in scene mm appended to `a` (tests,
  * tools). 0 ok. */
 int cc_tiles_leaf_mesh(const uint8_t *p, size_t n, Arena *a, cc_mesh *m, uint32_t **tri_row);
@@ -195,7 +268,19 @@ typedef struct {
 } cc_tiles_view;
 /* flags: CC_TILES_SEL_LEAVES: levels of detail off: every leaf in the frustum (error_px and budget ignored). The renderers'
  * settings: error_px (default 1 still), budget (default none), levels of detail (default on), occluders (cc_tiles_occ). */
-enum { CC_TILES_SEL_LEAVES = 1 };
+/* SHELL1 (ADR 0078 amendment 8). CC_TILES_SEL_PRIORITY (the renderers' default, setting shell_mode "priority"): the same
+ * selection as without it, ORDERED exterior first: the tiles holding an exterior element (the cross-link marks when attached,
+ * else tile flag 16), front to back, then the others, front to back. The shell never removes anything: a renderer fetches
+ * and draws what is probably seen first; its run-time occlusion decides what is seen.
+ * CC_TILES_SEL_SHELL (EXPERIMENTAL, shell_mode "filter", off by default: it CAN HIDE VISIBLE ELEMENTS, measured 0 to 1.2 % of
+ * the elements seen per frame on a real project of 17 links): the outside walk, for an eye outside the link's box
+ * (cc_tiles_shell_outside) when no section cuts the link and no exterior element of it is hidden: tiles without exterior
+ * elements skipped, leaves counted by their exterior triangles, proxies by their shell proxy; ignored without the shell. */
+enum { CC_TILES_SEL_LEAVES = 1, CC_TILES_SEL_SHELL = 2, CC_TILES_SEL_PRIORITY = 4 };
+/* SHELL1: 1 when the shell is baked and `eye` (link scene mm) is outside the root's box grown by `margin` mm: the outside
+ * walk applies (the caller also checks sections and hidden elements). The settings' shell_mode: off, outside, auto. */
+int cc_tiles_shell_outside(const cc_tiles_toc *toc, const double eye[3], double margin);
+#define CC_TILES_SHELL_MARGIN 2000.0 /* mm: interior tiles are asked before the eye reaches the box */
 uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double error_px, uint64_t budget, unsigned flags,
                          const uint8_t *descend, uint32_t *out, uint32_t cap, uint64_t *tris);
 

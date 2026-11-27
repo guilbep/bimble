@@ -612,6 +612,10 @@ static int link_convert_main(int argc, char **argv) {
                    k + 1, x->rc ? "failed" : "ok", x->ms, x->hlod_ms, (unsigned long long)x->tiles_count, (unsigned long long)x->tiles_levels,
                    (unsigned long long)x->tiles_proxy_tris, (unsigned long long)x->tiles_bytes, x->tiles_ms, (unsigned long long)x->cache_bytes, pk,
                    x->tiles_why[0] ? " " : "", x->tiles_why);
+            printf("file %d: shell ms %.0f classify_ms %.0f exterior %llu elements %llu ext_tris %llu detail %llu bytes %llu peak %llu mixed %llu%s%s\n", k + 1,
+                   x->shell_ms, x->shell_classify_ms, (unsigned long long)x->shell_ext, (unsigned long long)x->shell_elements,
+                   (unsigned long long)x->shell_ext_tris, (unsigned long long)x->shell_detail, (unsigned long long)x->shell_bytes,
+                   (unsigned long long)x->shell_peak, (unsigned long long)x->shell_mixed, x->shell_why[0] ? " " : "", x->shell_why); /* SHELL1 */
             fflush(stdout);
             if (x->rc) bad = 1;
             if (keep) kept[k] = x;

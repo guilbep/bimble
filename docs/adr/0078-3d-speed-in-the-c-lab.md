@@ -774,10 +774,123 @@ fed to its GPU culling: a bit per element in the storage buffer its compute pass
 copies and ranges dropped there), or the runs turned into its indirect draws; (4) the pick: one texel of the element
 attachment (`copyTextureToBuffer`, `mapAsync`).
 
+## Amendment 8 (27 Nov 2026, ticket SHELL1): the exterior shell, per link and across the links
+
+The orchestrator's ticket, on the owner's folder of 17 linked IFC files (110.5 M triangles): the pyramid alone leaves an
+outside view at 76.1 M triangles at 1 px (32.0 M with the per-tile occluders): the buildings' parts are too large on
+screen to simplify and most triangles are inside. The research note's first technique (`docs/research/2026-11-27-massive-model-rendering-literature.md`):
+bake which elements can be seen from outside at all. Choices by Claude on ticket SHELL1 under the owner's rules ("performance
+is everything"; decisions on facts measured on his data; every optimisation a setting with a good default and an off value).
+Code: `ccore/src/shell.{h,c}` (the classification, pure), `src/tiles.{h,c}` (the section, the walk, the answers),
+`session/link_cache.c` (the bake), `session/xshell.{h,c}` (the cross-link pass), `session/mesh.c` + `host/server.c`
+(answers, the frame query, the truth render), `ccore/tools/tiles.mjs --shell` (the numbers).
+
+53. **The classification: orthographic depth views over the sphere, an element seen in one of them is exterior.** For N
+   directions (the six sides, the eight corner diagonals, then a Fibonacci sphere; no libm: the golden angle's rotation by
+   recurrence) an orthographic view of the link's bounding sphere at R x R pixels. Pass 1: the opaque elements write their
+   depth at the pixel centres they cover (both faces). Pass 2: every element not yet exterior is tested, its box first (hidden
+   when every 8 x 8 block it covers holds only surfaces nearer than its nearest point by more than d), then its triangles:
+   seen when one is no more than d mm behind the buffer at a pixel centre it covers; a triangle that covers no pixel centre
+   (a part thinner than a pixel) is tested with conservative coverage at the depth of its point nearest the pixel's centre,
+   unless it faces the view edge on (|n . f| < 0.05: its neighbours show, or not). **Opaque = the occluders' rule** (decision
+   37: `IfcWall*`, `IfcSlab`, `IfcRoof`, `IfcFooting`, `IfcColumn`, `IfcBeam`, `IfcCovering`, never the glass category): windows,
+   curtain walls' plates and members, doors, railings, stairs, furniture and MEP never hide anything, so what is behind a
+   window is exterior. **Why orthographic and complete**: a ray from an eye outside the link's box to a point inside meets the
+   box's hull once, so the whole line in front of the point lies outside the hull: the view along that direction sees what the
+   eye sees. Only the sampling can miss (a direction between the samples, a sliver behind an edge). The depth pass skips an
+   element whose box is behind every block it covers (exact: it would write nothing; the pyramid's order draws a cell's large
+   elements first). Bounded: a batch of views' buffers (at most 64 MB), a run of leaves' placed triangles (400,000); work views
+   x triangles; deterministic (a view drawn by one worker in the elements' order, marks or-ed: the same bytes for 1 and 4
+   threads and in steps, `shell_test`). **Alternatives:** perspective viewpoints on a sphere (Pixyz: 256 at 512 px), which
+   sample eye positions where the orthographic views sample lines (complete in the limit); ray casting from the outside
+   (two-stage recursive tracing); voxels (needs closed solids, a voxel's size of error); an id buffer with one pass (what is
+   behind glass and thin parts need the second pass anyway); the "touch" safeguard (an element reaching the link's box faces
+   counted exterior: built, `cross_touch=1`, measured below, off).
+54. **The defaults, by measurement: 64 views at 1024 px, d = 100 mm.** On the synthetic buildings (6.69 M triangles, 18
+   buildings of 10 storeys with interiors, walls 300 mm in a 200 m scene) 64, 256 and 1,024 views at 1024 px mark the same
+   8,298 of 73,260 elements (14.7 % of the triangles), 0 missing in 31 truth frames; at 512 px the walls (about a pixel) leak:
+   15.6 k (24 %), still 0 missing: the resolution matters, not the views. On the local folder the cross-link pass's views do
+   not converge (below): more directions keep finding gaps (glazing, joinery, open fronts).
+55. **Stored in the reserved places, the layout unchanged** (`tiles.h`): element flag 4 EXTERIOR, tile flag 16 "holds
+   exterior elements", the header's bake flag 1 "shell computed". The exterior triangle counts and the shell proxies do not fit
+   the record (one free u16): the blobs end with a SHELL TABLE (`TSH1`: per tile its exterior detail triangles and its shell
+   proxy: offset, bytes, triangles, vertices, error) found by a 16-byte trailer (`TSHT`, table bytes, offset). Readers of the
+   layout before it read the new sections unchanged (the blobs only longer; the reserved flags already accepted): the cache's
+   format stays (8 since TESS1); the SRCE record of the bake settings gains `shell=64x1024 shell_d=100`, so a cache baked
+   before is indexed again from itself, never converted. The shell proxies (a tile with both kinds: a proxy of its exterior
+   elements only, the same tree built with the others left out) are kept beside the tiles' own and used by the experimental
+   filter only: **the coarse levels the renderers draw stay the tiles' own proxies, from all elements** (a proxy of the
+   exterior only would hide what a section or a window reveals; nothing measured shows it safe). Bytes: about 12 % of a
+   `TILE` section on a real project, 0.95 MB on the buildings set.
+56. **Across the links.** On the local folder (17 links of one project split by discipline) the links' own shells marked
+   97.6 % of the elements exterior, **99.2 % of the triangles**: an MEP, structure or joinery file has no envelope of its
+   own. So a cross-link pass is built (`session/xshell.{h,c}`, the same code: `cc_shell_start_parts`): the visible links
+   classified together, each link's cache read in place and placed, every link's opaque elements hiding the others', in
+   groups of links whose world boxes overlap (grown by 1 m: a link far from the others, a georeference kilometres away, made
+   every view's pixel metres wide: the first run left 26 elements exterior, the truth render caught it), in a background job
+   started when the visible links, their caches, placements or the settings change; per link a mark per entry of its element
+   list (`toc.xmask`), the link's own shell the fallback; kept in the cache folder (`links/xshell-<key>.bin`, read untrusted),
+   not beside the `.bimble` (the project's folder may be the user's and read only; it is a cache); `tiles=xshell` (202 while it
+   runs); settings `cross=0|1|<views>x<res>`, `cross_d=`, `cross_touch=` in `BIMBLE_TILES` (not in a cache's SRCE). On the
+   local folder it marks about two elements in five, in under half a minute and 106 MB of buffers (the numbers: the ticket's
+   report, private data).
+57. **The shell orders, it never removes (the orchestrator's decision on these numbers).** As a FILTER (the outside walk:
+   tiles without exterior elements skipped, leaves drawn by their exterior elements) the cross-link shell selects 29 M
+   triangles at the site view instead of 77 M (17–19 M with the occluders), but **misses up to 1.2 % of the elements seen**,
+   and large ones (coverings, slabs, a pipe, tens of metres long). Neither 2048 px nor d = 400 mm nor the box-touch safeguard brings it to zero (fewer misses,
+   never none), and the views curve does not converge (from 32 to 256 views the marks keep growing: more directions find more
+   gaps). The native renderer's run-time occlusion on the
+   same project draws a few million triangles with 0 missing (its truth frames, ticket NUI2). So: **`shell_mode` = `priority` (the default) | `off` |
+   `filter` (EXPERIMENTAL, off: "can hide visible elements: measured 0–1.2 % on a real project")**. In priority the walk
+   (`CC_TILES_SEL_PRIORITY`) returns the same selection as without the shell, ordered exterior first (the tiles holding an
+   exterior element, front to back, then the others); `&tile=...&shell=1` answers a leaf's exterior elements and a proxy whole
+   (the first fetch), `&shell=2` the leaf's other elements (what follows): after an open or a camera jump a renderer fetches
+   and draws what is probably seen first, and its run-time occlusion decides what is seen. A miss of the shell is a later
+   arrival, never a hole. What it buys (triangles fetched before every element the truth render sees is drawn, plain order
+   against exterior first): synthetic buildings, site view 6.57 M against 0.98 M, approach at 20 m 2.14 M against 0.29 M;
+   on the local folder 1.1 to 3.4 times fewer (the shell's misses arrive with the rest, front to back: they set the figure).
+   Rows in the page's Optimisations registry and the native app's Optimisations group.
+58. **What the shell does not guarantee.** It is sampled: a part seen only through a gap narrower than a pixel of the views,
+   or only from a direction between two sampled ones, is not marked (in priority it arrives later). It assumes the occluder
+   classes are opaque where the model says so: an open door leaf (an `IfcDoor` never hides) makes more exterior; a wall standing
+   where an opening was not cut hides what is behind it. Its marks hold for an eye outside the link's (or group's) box only; a
+   moved, added, hidden or re-read link starts the cross-link pass again (the links' own shells meanwhile). It decides an order,
+   not visibility: the renderers' occlusion does.
+59. **Back-face culling proven per element.** The element flag 1 "closed and outward" (decision 38) is checked by
+   `cc_shell_cull_proof`: each flagged element drawn alone from 26 sphere directions, whole and culled; no pixel may be deeper
+   culled, at most 1 % of the pixel centres left by edge rounding (a centre on an edge both faces leave). `shell_test` proves
+   every flagged element of the golden IFC files and fixtures, on the reader's meshes and on the cache's (BMG1 read in place),
+   and any folder named by `SHELL_PROOF_DIR`: 397 and, on the 17 synthetic links, 8,285 flags hold, 0 fail; at a few pixels
+   across, 0 of 187,106 views lose an element by culling. A renderer losing elements with culling has another cause (the
+   front face's convention under a flipped Y, mirrored copies not flipped, the flag read by row instead of list entry).
+
+### Evidence (ticket SHELL1)
+
+`ccore/test/shell_test.c` (also under ASan and UBSan): a closed room's contents interior, a window's view exterior, an open
+courtyard, nested shells, the section with its shell (flags, table, walks, answers, 2,000 damaged tables), hostile links
+(a zero-size link, non-finite points, 100,000 tiny elements in 1.0 s within 31 MB), the same bytes with 1 and 4 threads and in
+steps, the cross-link pass (a thing inside another scene's room, turned and moved: exterior alone, interior together), the
+priority walk, the culling proofs. `ccore/test/link_tiles_test.mjs`: the bake, the table, the first fetch and the rest
+together each leaf, the walker's modes, the truth render (0 missing in priority), the invalidations (a section box, hidden
+exterior elements), the cross-link pass (two links), `shell=0`.
+
+`ccore/tools/tiles.mjs --shell` (native host, 1920 x 1080, 60°, 1 px; orbits at the site distance, a half and a quarter of it,
+8 azimuths, 25° up; an approach to 2 m of the box's face; one inside camera):
+
+| set | camera | off | off + occ | filter: own shells | filter: cross-link (+ occ) | filter missing | priority missing | first picture plain / priority |
+|---|---|---|---|---|---|---|---|---|
+| buildings (synthetic) | site orbit | 5.5–6.7 M | 3.9–5.4 M | 0.82–0.94 M | (one scene) | 0 | 0 | 6.57 M / 0.98 M |
+| buildings | approach 20 m | 3.90 M | 1.00 M | 0.57 M (0.17 M) | | 0 | 0 | 2.14 M / 0.29 M |
+
+Local folder: priority misses 0 in every frame (by construction: the same tiles); the filter's figures above; the rest in
+the ticket's report (private data). Bake: a link's own shell takes seconds per 10 M triangles at 64 views x 1024 (buffers at
+most 106 MB; the indexing peak stays the pyramid's); the cross-link pass about as long over the links together. Synthetic links (17 x 93 k, objects apart): 100 % exterior, as they are. The viewer wasm:
+637,787 bytes after the merge with `next` at 9161472 (shell 635,764 against 612,384 on next at a490b49; budget 1,000,000).
+
 ## What is left
 
 From ticket TILE1 (amendment 6): the page drawing by tiles (VIS1) and a native viewer (NAT2); then `HLOD` dropped (or
-served from the pyramid's levels). The exterior shell at bake time (SHELL1). Edge collapse with locked borders for the
+served from the pyramid's levels). The exterior shell: done as an order, not a filter (amendment 8, SHELL1); left: the renderers' first fetch exterior first (VIS1, NUI2 read `&shell=1` then `&shell=2`). Edge collapse with locked borders for the
 coarse levels (better shape per triangle than clustering; decision 32). A vertex-cache and fetch order at bake
 (meshoptimizer's, C++: not in the core now). Leaf answers without BMG1's edges (`&edges=0`: re-encoded by the host) and
 compressed over HTTP for the web version (deflate saves 91 % of leaves' bytes on the synthetic links; decision 35).

@@ -600,7 +600,7 @@ static int build(const cc_tiles_src *src, Buf *out, uint64_t step, double *ms) {
     cc_tiles t;
     cc_error e;
     double t0 = now_ms();
-    int rc = cc_tiles_start(&t, src, &(cc_tiles_opts){CC_TILES_LEAF_TRIS, CC_TILES_PROXY_TRIS, CC_TILES_ROOT_TRIS, CC_TILES_RES, CC_TILES_OCC}, &e);
+    int rc = cc_tiles_start(&t, src, &(cc_tiles_opts){CC_TILES_LEAF_TRIS, CC_TILES_PROXY_TRIS, CC_TILES_ROOT_TRIS, CC_TILES_RES, CC_TILES_OCC, 0, 0, 0, 0, 0, 0, 0, 0}, &e);
     while (!rc) {
         int st = cc_tiles_step(&t, step, &e);
         if (st < 0) rc = -1;
@@ -739,7 +739,7 @@ int main(void) {
     /* cancel half way: everything freed (ASan) */
     {
         cc_tiles t;
-        cc_tiles_start(&t, &src, &(cc_tiles_opts){CC_TILES_LEAF_TRIS, CC_TILES_PROXY_TRIS, CC_TILES_ROOT_TRIS, CC_TILES_RES, CC_TILES_OCC}, &e);
+        cc_tiles_start(&t, &src, &(cc_tiles_opts){CC_TILES_LEAF_TRIS, CC_TILES_PROXY_TRIS, CC_TILES_ROOT_TRIS, CC_TILES_RES, CC_TILES_OCC, 0, 0, 0, 0, 0, 0, 0, 0}, &e);
         int st = cc_tiles_step(&t, 5000, &e);
         check_true("cancel: a build stopped after a step frees everything", st == 0);
         cc_tiles_free(&t);

@@ -82,13 +82,24 @@ void cc_mesh_tiles_free(cc_session *s);
  * eye and frustum moved into the link's frame by its placement): tiles, triangles, proxy bytes and (leaf_bytes) the
  * leaves' answers' bytes, the tables' bytes; or (bounds_only) the world box of every link's root. JSON into `out`.
  * The native host serves it as GET /mesh?tiles_frame=1&eye=x,y,z&at=x,y,z&fov=deg&w=&h=&err=px&budget=&leaf_bytes=1&occ=1&lod=0
- * (every input a renderer's setting: err 1, budget none, lod 1, occ 0 by default; tiles_frame=bounds: the box; occ=1: tiles hidden by the drawn tiles' occluders left out, counted apart). Tools and tests (ccore/tools/tiles.mjs). */
+ * (every input a renderer's setting: err 1, budget none, lod 1, occ 0 by default; tiles_frame=bounds: the box; occ=1: tiles hidden by the drawn tiles' occluders left out, counted apart).
+ * SHELL1: &shell=off|priority|filter (default priority, as the renderers' shell_mode), &margin=mm, &xshell=0, &truth=1.
+ * Tools and tests (ccore/tools/tiles.mjs). The answers of cc_link_tiles: req "shell" the shell table (204 none),
+ * "first:a,b,c" the first fetch, exterior first (GET ...&tile=a,b,c&shell=1), "rest:a,b,c" what follows (&shell=2),
+ * "filter:a,b,c" the experimental outside walk's content (&shell=filter); "xshell" the cross-link marks. */
 typedef struct {
     double eye[3], at[3], tan_half, w, h, error_px;
     uint64_t budget;
     int leaf_bytes, bounds_only;
     int occlusion; /* the drawn tiles' occluders in one depth buffer (tiles.h cc_tiles_occ): tiles hidden left out */
     int lod;       /* levels of detail: 1 on (the default), 0 off: every leaf in the frustum */
+    int shell;     /* SHELL1: 0 off, 3 priority (the default: the same tiles, those with exterior elements first), 2 filter
+                    * (EXPERIMENTAL, can hide visible elements: the outside walk where the eye is outside the link's box grown by
+                    * shell_margin mm, no section cuts it, none of its exterior elements hidden) */
+    double shell_margin;
+    int xshell;    /* SHELL1: 1 the cross-link marks (xshell.h) when ready (the default), 0 the links' own shells only */
+    int truth;     /* SHELL1: a full-detail software render of every link at w x h (glazing not occluding): per link the
+                    * elements seen and those the selection does not depict (missing), with the largest missing listed */
 } cc_tiles_frame_q;
 int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out);
 #endif

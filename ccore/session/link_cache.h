@@ -76,6 +76,11 @@ typedef struct cc_link_job {
     uint64_t tiles_count, tiles_levels, tiles_proxy_tris, tiles_bytes;
     double tiles_ms;
     char tiles_why[160];
+    /* SHELL1 (src/shell.h): the exterior shell baked after the pyramid, in TILE: elements found exterior of those listed,
+     * their triangles of the detail, the bytes it added to TILE, the time and the classification's buffers at most */
+    uint64_t shell_ext, shell_elements, shell_ext_tris, shell_detail, shell_bytes, shell_peak, shell_mixed;
+    double shell_ms, shell_classify_ms;
+    char shell_why[160];
     uint32_t hlod_dropped;
     /* SIZE3: the cache mapped (pf->map_file) and `vf` read in place over it (viewfile.h
      * cc_viewfile_read_mapped): the link takes the mapping with the view file and unmaps it after
