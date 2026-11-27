@@ -6,8 +6,7 @@
 // every other link at 155 mm steps (this test fails on that code). Checks:
 //   1. the same synthetic building (a slab 18,300 mm long, 14 columns, two beams 15.6 m, a 12 m beam turned 30 degrees) linked
 //      alone at 0 and, at 2,600 km, beside a small link at 0: the same picture (at most 0.2 % of pixels differ);
-//   2. Measure on the building at 0 and far: 18,300 mm to 1.5 mm (far: KNOWN failure of the core's measure in f32,
-//      printed as "known:"; NATIVE_GEO_MEASURE=1 makes it fail);
+//   2. Measure on the building at 0 and far: 18,300 mm to 1.5 mm (far too: MEAS2 measures each link in its own frame);
 //   3. the session log names the scene origin and the far link (f32 steps reported).
 // Without the binary, SDL3 or a Vulkan device: "skipped: <why>"; CCORE_NATIVE_REQUIRED=1 makes that a failure.
 import { spawnSync } from "node:child_process";
@@ -101,14 +100,9 @@ quit
   const r0 = run("geo-at-0", script(g0, [0, 0, 0]));
   const r1 = run("geo-far", script(g1, FAR), { BIMBLE_LOG_DIR: logs });
   for (const [nm, r] of [["geo-at-0", r0], ["geo-far", r1]]) {
-    const knownOnly = nm === "geo-far" && process.env.NATIVE_GEO_MEASURE !== "1" && r.code === 1 && /drive: FAIL measure/.test(r.err) && (r.err.match(/drive: FAIL/g) ?? []).length === 1;
-    check(`${nm}: exits 0, no signal${knownOnly ? " (1: the known measure failure below)" : ""}`, (r.code === 0 || knownOnly) && !r.signal, `${r.code} ${r.signal ?? ""} ${r.err.trim().split("\n").slice(-2).join(" | ")}`);
+    check(`${nm}: exits 0, no signal`, r.code === 0 && !r.signal, `${r.code} ${r.signal ?? ""} ${r.err.trim().split("\n").slice(-2).join(" | ")}`);
     for (const l of r.err.split("\n").filter((x) => /^drive: (ok|FAIL) /.test(x))) {
       const what = `${nm}: ${l.slice(7).replace(/^(ok|FAIL) /, "")}`;
-      // KNOWN (NUI3, reported to the core's owner): the core's Measure snaps in f32 in the core's frame (session/measure.c:
-      // cc_msnap.p), so at 2,600 km the corner lands 132 mm off (2600018432 for 2600018300) and a click on the slab may miss.
-      // Declared, not silent: NATIVE_GEO_MEASURE=1 makes it a failure (the gate's rule: a declared skip is reported).
-      if (nm === "geo-far" && /measure/.test(l) && l.startsWith("drive: FAIL") && process.env.NATIVE_GEO_MEASURE !== "1") { console.log(`known: ${what} (the core's measure in f32 at national coordinates)`); continue; }
       check(what, l.startsWith("drive: ok"));
     }
   }
