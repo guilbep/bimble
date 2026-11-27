@@ -841,7 +841,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // ---- GPU1 (ADR 0083): the WebGPU renderer when asked (gpu/switch.ts; null: WebGL2 draws). It only turns the
   // scene, the camera and the states into pixels on its own canvas; everything else of the viewport is shared. ----
   let gpuR: GpuRenderer | null = null;
-  gpuSwitch(canvas, stats, (r) => { gpuR = r; dirty = true; });
+  gpuSwitch(canvas, stats, (r) => { gpuR = r; dirty = true; }, () => gpuView());
   const gpuView = (): GpuView => {
     const { e, mvp } = matrices(), m = mesh, sel = new Set(state.value.linked ? [] : state.value.selection), k = (2 * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.height);
     return { mesh: m, boxes, shown, colour: elColour, selected: (el) => sel.has(m?.ids[el] ?? ""), prx, proxiesOn: proxiesOn(), mvp, eye: e, target,
@@ -857,11 +857,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const LINKS_WEBGL2 = "linked models are drawn by WebGL2 for now";
   const gpuDraw = (): boolean => {
     const linksNow = (mesh?.links?.length ?? 0) > 0 || prePrx.length > 0; // (also their proxies before the mesh)
-    if (gpuR && linksNow && perfRenderer.reason !== LINKS_WEBGL2) perfRenderer.using = "WebGL2", perfRenderer.reason = LINKS_WEBGL2;
-    else if (gpuR && !linksNow && perfRenderer.reason === LINKS_WEBGL2) perfRenderer.using = "WebGPU", perfRenderer.reason = null;
-    gpuR?.show(!ghostN && !markN && !linksNow);
-    if (!gpuR || ghostN || markN || linksNow) return false;
-    gpuR.frame(gpuView());
+    const v = gpuR && !linksNow && !ghostN && !markN ? gpuView() : null;
+    const ready = !!gpuR && !!v && (!gpuR.prepare || gpuR.prepare(v)); // GPU2: WebGL2 draws while WebGPU gets ready
+    if (gpuR && linksNow) perfRenderer.using = "WebGL2", perfRenderer.reason = LINKS_WEBGL2;
+    else if (gpuR && ready && perfRenderer.using !== "WebGPU") perfRenderer.using = "WebGPU", perfRenderer.reason = null;
+    gpuR?.show(ready);
+    if (!gpuR || !v || !ready) { if (gpuR && !ready && v) dirty = true; return false; }
+    gpuR.frame(v);
     const b = clipBox();
     stats.boxHandles = b && !plan ? boxHandles(b) : [];
     drawOverlay();

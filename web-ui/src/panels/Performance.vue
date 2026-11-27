@@ -12,7 +12,7 @@ import { onMounted, onUnmounted, shallowRef } from "vue";
 import { state } from "../bimble";
 import { t } from "../i18n";
 import { currentPanel } from ".";
-import { adapterNames, perfRecord, perfReport, perfSnapshot, perfWait, type FrameStats, type PerfSnapshot } from "../perf";
+import { adapterNames, chooseRenderer, howToWebgpu, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
 import { linkGpu } from "../gl/linkmem"; // SIZE3 (C)
 
 const snap = shallowRef<PerfSnapshot>(perfSnapshot());
@@ -44,6 +44,13 @@ async function copy() {
   }
   (window as unknown as { __bbPerfCopied?: string }).__bbPerfCopied = text; // the lab test reads what was copied
 }
+// GPU2: the renderer switch (live; remembered in the setting `renderer`): what is asked, what draws, why not
+const choose = (a: "webgl2" | "webgpu") => { const err = chooseRenderer(a); if (err) note.value = err; };
+const liveAdapter = () => { // (the adapter of the renderer drawing now, not the last snapshot's)
+  const a = renderer.using === "WebGPU" ? renderer.adapter : snap.value.adapter;
+  return a ? `${adapterNames(a, " · ") || t("perf.unknown")}${a.software ? ` · ${t("perf.softwareShort")}` : ""}` : t("perf.unknown");
+};
+const why = () => whyPlain(renderer.using === "WebGPU" || renderer.asked !== "webgpu" ? null : renderer.reason);
 function record() {
   perfRecord();
   snap.value = perfSnapshot();
@@ -57,6 +64,16 @@ function record() {
       <span style="flex:1"></span>
       <button type="button" class="cx" :aria-label="t('perf.closePanel')" data-bb="perf-close" @click="currentPanel = null"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
+    <!-- GPU2: the switch where he measures: live, remembered; what draws now, the adapter, and why WebGPU does not draw when asked -->
+    <div class="sw" role="group" :aria-label="t('perf.switch')" data-bb="perf-switch">
+      <button v-for="r in (['webgl2', 'webgpu'] as const)" :key="r" type="button" :class="{ on: (renderer.asked === 'webgpu') === (r === 'webgpu') }"
+        :aria-pressed="(renderer.asked === 'webgpu') === (r === 'webgpu')" :data-bb="`perf-switch-${r}`" @click="choose(r)">{{ r === 'webgpu' ? 'WebGPU' : 'WebGL2' }}</button>
+    </div>
+    <div class="note" data-bb="perf-drawing">{{ t('perf.drawing', { what: renderer.using }) }}<template v-if="renderer.switchMs !== null && renderer.switchMs !== undefined"> · {{ t('perf.switched', { ms: ms(renderer.switchMs) }) }}</template></div>
+    <div class="note mono" data-bb="perf-adapter-line">{{ liveAdapter() }}</div>
+    <div v-if="renderer.progress" class="note" role="status" data-bb="perf-progress">{{ renderer.progress }}</div>
+    <div v-if="why()" class="warn" data-bb="perf-why">{{ t(why()!.key, { what: why()!.what ?? '' }) }}</div>
+    <div v-if="why() && howToWebgpu(renderer.reason)" class="note" data-bb="perf-how">{{ t(howToWebgpu(renderer.reason)!) }}</div>
     <div class="note">{{ t('perf.hint') }}</div>
     <dl class="kv">
       <dt>{{ t('perf.renderer') }}</dt>
@@ -137,4 +154,8 @@ function record() {
 .inputs { margin: 0; padding-left: 20px; }
 .cx { width: 22px; height: 22px; border: 0; padding: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--bb-radius-pill); }
 textarea { width: 100%; font-size: 11px; }
+/* GPU2: the renderer switch (two states, the status bar's segmented look) */
+.sw { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--bb-radius-pill); background: var(--bb-sunk); align-self: flex-start; }
+.sw button { padding: 3px 14px; border-radius: var(--bb-radius-pill); border: 0; background: none; color: var(--bb-stone); font: inherit; font-family: var(--bb-font-data); cursor: pointer; }
+.sw .on { background: var(--bb-ink); color: var(--bb-on-ink); }
 </style>

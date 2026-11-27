@@ -12,6 +12,8 @@
 // of the next frame drawn (dropped when no frame comes within 2 s: it changed nothing on screen).
 // Nothing here is sent anywhere; file names leave the page only in the copied text, when asked.
 import { linkGpu } from "./gl/linkmem"; // SIZE3 (C)
+import { reactive } from "vue";
+import { setSettings, userSettings } from "./bimble";
 
 /** One frame drawn: when it started (performance.now), what it took (ms), moving or still, what it drew. */
 export interface PerfFrame { at: number; ms: number; moving: boolean; tris: number; draws: number; synced: boolean }
@@ -24,7 +26,12 @@ export interface PerfAdapter { vendor: string; architecture: string; device?: st
   /** WebGPU: the fill rate measured when the device opened (megapixels a second; device.ts). */
   fillMpxS?: number | null }
 /** What draws the 3D view: asked (the setting or ?gpu=), in use, the adapter, why WebGPU is not in use. */
-export interface PerfRenderer { asked: "auto" | "webgl2" | "webgpu"; using: "WebGL2" | "WebGPU"; adapter: PerfAdapter | null; reason: string | null; gpuCull: boolean }
+export interface PerfRenderer { asked: "auto" | "webgl2" | "webgpu"; using: "WebGL2" | "WebGPU"; adapter: PerfAdapter | null; reason: string | null; gpuCull: boolean;
+  /** GPU2: the other renderer being made ready while this one still draws ("WebGPU: 3 of 17 models on the GPU"), else null. */
+  progress?: string | null;
+  /** GPU2: the last live switch (the toggle): to which renderer, when it was asked (performance.now), the ms from
+   *  the ask to the end of the first frame the other renderer drew (null while it is not in). */
+  switchTo?: "WebGL2" | "WebGPU" | null; switchAt?: number | null; switchMs?: number | null }
 export interface PerfLink { name: string; elements: number; triangles: number; visible: boolean;
   /** LNK3D (ADR 0078 amendment 3): its detail on the GPU (false: its proxies only; null: not told) and its GPU bytes. */
   detail?: boolean | null; gpuBytes?: number | null }
@@ -44,7 +51,60 @@ let waiters = 0;
 let recording: { until: number; frames: PerfFrame[]; inputs: PerfInput[] } | null = null;
 let lastRecord: { seconds: number; frames: PerfFrame[]; inputs: PerfInput[] } | null = null;
 
-export const renderer: PerfRenderer = { asked: "auto", using: "WebGL2", adapter: null, reason: null, gpuCull: false };
+/** Reactive (GPU2): the status bar's chip and the panel's switch follow it at once. */
+export const renderer: PerfRenderer = reactive<PerfRenderer>({ asked: "auto", using: "WebGL2", adapter: null, reason: null, gpuCull: false,
+  progress: null, switchTo: null, switchAt: null, switchMs: null });
+
+// ---- GPU2: the live toggle (the panel's switch, the status bar's chip, the palette's "renderer webgpu|webgl2"). Here,
+// not in gpu/switch.ts, so the main chunk does not carry the switch: the viewport's switches listen. ----
+let chosen: "webgl2" | "webgpu" | null = null;
+const appliers = new Set<() => void>();
+/** The toggle's choice (over ?gpu= and the setting until the page reloads), or null. */
+export const chosenRenderer = (): "webgl2" | "webgpu" | null => chosen;
+export const onRendererChosen = (f: () => void): void => { appliers.add(f); };
+/** Switches the 3D view's renderer live and remembers it (the setting `renderer`). Returns the setting's error, if
+ *  any (the switch still happens). */
+export function chooseRenderer(a: "webgl2" | "webgpu"): string | null {
+  chosen = a;
+  renderer.asked = a;
+  renderer.switchTo = a === "webgpu" ? "WebGPU" : "WebGL2", renderer.switchAt = performance.now(), renderer.switchMs = null;
+  if (renderer.using === renderer.switchTo && !renderer.progress) renderer.switchMs = 0; // already there
+  let err: string | null = null;
+  try { err = userSettings.value?.values.renderer === a ? null : setSettings({ renderer: a }); } catch (e) { err = e instanceof Error ? e.message : String(e); }
+  for (const f of appliers) f();
+  return err;
+}
+/** The toggle's other side: WebGPU when WebGL2 was asked (or automatic), else WebGL2. */
+export const toggleRenderer = (): string | null => chooseRenderer(renderer.asked === "webgpu" ? "webgl2" : "webgpu");
+/** Why WebGPU is not drawing, in plain words (an i18n key and its value), from the switch's reason. */
+export type WhyKey = "perf.why.starting" | "perf.why.noWebgpu" | "perf.why.noAdapter" | "perf.why.software" | "perf.why.lost" | "perf.why.feature" | "perf.why.failed" | "perf.why.notAsked";
+export const FEATURE_REASON = "not drawn by WebGPU yet: ";
+export function whyPlain(reason: string | null): { key: WhyKey; what?: string } | null {
+  if (!reason) return null;
+  if (reason === "starting…") return { key: "perf.why.starting" };
+  if (reason.startsWith(FEATURE_REASON)) return { key: "perf.why.feature", what: reason.slice(FEATURE_REASON.length) };
+  if (/linked models are drawn by WebGL2/.test(reason)) return { key: "perf.why.feature", what: "linked models" };
+  if (/no navigator\.gpu|no WebGPU/.test(reason)) return { key: "perf.why.noWebgpu" };
+  if (/no adapter/.test(reason)) return { key: "perf.why.noAdapter" };
+  if (/fallback|software|CPU\)/.test(reason)) return { key: "perf.why.software" };
+  if (/lost/.test(reason)) return { key: "perf.why.lost" };
+  if (/WebGL2 asked|automatic is WebGL2/.test(reason)) return { key: "perf.why.notAsked" };
+  return { key: "perf.why.failed" };
+}
+/** What the user can do when WebGPU has no adapter or no API, per platform (the orchestrator's note: on Linux
+ *  Chromium 153 gives WebGPU no adapter without flags; these three were verified on Asahi, Chromium 153, a browser
+ *  process with a headless display, GPU2). null: nothing to say (WebGPU draws, or another reason). */
+export type HowKey = "perf.how.linuxChromium" | "perf.how.chrome" | "perf.how.firefox" | "perf.how.other";
+export function howToWebgpu(reason: string | null): HowKey | null {
+  const w = whyPlain(reason);
+  if (!w || (w.key !== "perf.why.noAdapter" && w.key !== "perf.why.noWebgpu" && w.key !== "perf.why.software")) return null;
+  const ua = navigator.userAgent;
+  if (/Firefox\//.test(ua)) return "perf.how.firefox";
+  const chromium = /Chrome\/|Chromium\//.test(ua);
+  if (chromium && /Linux/.test(ua) && !/Android/.test(ua)) return "perf.how.linuxChromium";
+  return chromium ? "perf.how.chrome" : "perf.how.other";
+}
+// ---- end GPU2 ----
 
 /** The names of CPU rasterisers (SwiftShader, llvmpipe, lavapipe, Microsoft's Basic Render). Not the
  *  word "software": Dawn calls Mesa's Asahi GPU (the M1 Pro, Vulkan) architecture "software" (REAL1). */
@@ -74,8 +134,12 @@ export function perfFrame(moving: boolean, t0: number, sync: WebGL2RenderingCont
     if (wait) sync.readPixels(0, 0, 1, 1, sync.RGBA, sync.UNSIGNED_BYTE, px);
   }
   const f: PerfFrame = { at: t0, ms: 0, moving, tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, synced: wait && sync !== null };
+  // GPU2: the first frame of the renderer a live switch asked for ends the switch's time (WebGL2: a context; WebGPU: a promise)
+  const by = sync === null ? null : sync instanceof Promise ? "WebGPU" : "WebGL2";
+  const sw = renderer.switchTo && renderer.switchMs === null && renderer.switchAt !== null && by === renderer.switchTo && t0 >= renderer.switchAt! ? renderer.switchAt! : null;
   const done = () => {
     f.ms = performance.now() - t0;
+    if (sw !== null && renderer.switchMs === null) renderer.switchMs = f.at + f.ms - sw;
     push(f);
   };
   if (sync instanceof Promise && wait) void sync.then(done, done);

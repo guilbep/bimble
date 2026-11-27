@@ -13,6 +13,8 @@
 // M failed"; exits non-zero on a failure.
 import { join } from "node:path";
 import { CCORE, lab, sleep, waitFor } from "./lib/lab.mjs";
+import { LAB_GPU, webgpuFlags } from "./lib/chromium.mjs";
+import { adapter as inputAdapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
@@ -21,7 +23,9 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`);
 };
 
-const L = await lab({ name: "lab_perf", model: join(CCORE, "golden/frame.json"), query: "perf=1" });
+// GPU2: a WebGPU adapter for the toggle (SwiftShader's, a fallback adapter, accepted with ?gpuSoftware=1; the GPU's under LAB_GPU=vulkan)
+const SOFT = LAB_GPU === "software";
+const L = await lab({ name: "lab_perf", model: join(CCORE, "golden/frame.json"), query: SOFT ? "perf=1&gpuSoftware=1" : "perf=1", chromiumFlags: webgpuFlags() });
 try {
   const q = (sel) => L.evalJs(`document.querySelector(${JSON.stringify(sel)})?.textContent?.trim() ?? null`);
   await waitFor("the panel", 20000, () => L.evalJs("!!document.querySelector('[data-bb=perf]')"));
@@ -101,6 +105,51 @@ try {
     await new Promise((r) => setTimeout(r, 200));
     const row = [...document.querySelectorAll('[data-bb=palette-item]')].find((e) => /Performance/i.test(e.textContent)); if (!row) return false; row.click(); return true; })()`);
   check("the palette's \"performance\" opens the panel", !!picked && !!(await waitFor("the panel from the palette", 3000, () => L.evalJs("!!document.querySelector('[data-bb=perf]')")).catch(() => false)));
+  // ---- GPU2: the renderer toggle, live: the panel's switch, the status bar's chip, the palette ----
+  await L.evalJs("(async () => { (await import('/src/dialogs/index.ts')).currentDialog.value = null; (await import('/src/panels/index.ts')).currentPanel.value = 'performance'; })()");
+  await waitFor("the panel's switch", 3000, () => L.evalJs("!!document.querySelector('[data-bb=perf-switch-webgpu]')"));
+  const gpuInfo = await inputAdapter(L.evalJs);
+  const R = () => L.evalJs("(() => { const r = window.__bbPerf.snapshot().renderer; return { using: r.using, asked: r.asked, reason: r.reason, switchMs: r.switchMs ?? null, progress: r.progress ?? null }; })()");
+  const clickAt = async (sel) => {
+    const c = await L.evalJs(`(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await L.S("Input.dispatchMouseEvent", { type: "mousePressed", x: c.x, y: c.y, button: "left", buttons: 1, clickCount: 1 });
+    await L.S("Input.dispatchMouseEvent", { type: "mouseReleased", x: c.x, y: c.y, button: "left", buttons: 0, clickCount: 1 });
+  };
+  /** A real click on `sel`, timed (input_time.mjs): the page's part is the switch's label pressed and the chip's; presented: the
+   *  first frame after it from either renderer (the picture never blank: WebGL2's stays while WebGPU gets ready). */
+  const timedSwitch = async (sel, to) => {
+    const f0 = await L.evalJs("window.__bbGl.frames");
+    await L.evalJs(watchSource({ kind: "pointerdown",
+      page: `document.querySelector('[data-bb=perf-switch-${to}]')?.getAttribute('aria-pressed') === 'true' && /${to === "webgpu" ? "WebG(PU|L2\\*)" : "WebGL2"}/.test(document.querySelector('[data-bb=status-renderer]')?.textContent ?? '')`,
+      presented: `window.__bbGl.frames > ${f0}` }));
+    await clickAt(sel);
+    return verdict(await readTimes(L.evalJs), gpuInfo);
+  };
+  check("the panel's switch says WebGL2 is asked and drawing", /WebGL2/.test((await q("[data-bb=perf-drawing]")) ?? "") && (await L.evalJs("document.querySelector('[data-bb=perf-switch-webgl2]').getAttribute('aria-pressed')")) === "true");
+  check("the status bar's chip names the renderer: WebGL2", /^WebGL2/.test((await q("[data-bb=status-renderer]")) ?? ""), await q("[data-bb=status-renderer]"));
+  const v1 = await timedSwitch("[data-bb=perf-switch-webgpu]", "webgpu");
+  check(`the switch to WebGPU (a real click): ${v1.line}`, v1.ok);
+  const r1 = await waitFor("WebGPU drawing (or the reason it does not)", 30000, async () => { const r = await R(); return r.reason !== "starting…" && !r.progress ? r : null; });
+  console.log(`WebGPU asked: ${JSON.stringify(r1)}`);
+  check("WebGPU asked: WebGPU draws, live (no reload)", r1.using === "WebGPU" && (await L.evalJs("!!document.querySelector('canvas[data-bb-gpu=webgpu]')")), JSON.stringify(r1));
+  const sw1 = r1.using === "WebGPU" ? await waitFor("the switch's time", 10000, async () => (await R()).switchMs).catch(() => null) : null; // (its first frame's GPU work done)
+  check("the switch's time (the click to the end of the first WebGPU frame) is reported", typeof sw1 === "number", `${sw1?.toFixed?.(1)} ms`);
+  check("the chip says WebGPU", /^WebGPU/.test((await q("[data-bb=status-renderer]")) ?? ""), await q("[data-bb=status-renderer]"));
+  check("the choice is remembered (the setting renderer)", (await L.evalJs("(async () => (await import('/src/bimble.ts')).userSettings.value?.values.renderer)()")) === "webgpu");
+  const v2 = await timedSwitch("[data-bb=status-renderer]", "webgl2");
+  check(`the chip switches back to WebGL2 (a real click): ${v2.line}`, v2.ok);
+  const r2 = await waitFor("WebGL2 drawing", 30000, async () => { const r = await R(); return r.using === "WebGL2" && !r.progress ? r : null; });
+  check("WebGL2 draws again, the WebGPU canvas gone", r2.using === "WebGL2" && !(await L.evalJs("!!document.querySelector('canvas[data-bb-gpu=webgpu]')")), JSON.stringify(r2));
+  // the palette's "renderer webgpu"
+  await L.evalJs("(async () => { (await import('/src/dialogs/index.ts')).currentDialog.value = 'palette'; })()");
+  await waitFor("the palette", 3000, () => L.evalJs("!!document.querySelector('[data-bb=palette-query]')"));
+  const palR = await L.evalJs(`(async () => { const i = document.querySelector('[data-bb=palette-query]'); i.value = 'renderer webgpu'; i.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 200));
+    const row = [...document.querySelectorAll('[data-bb=palette-item]')].find((e) => /WebGPU/.test(e.textContent)); if (!row) return false; row.click(); return true; })()`);
+  const r3 = palR && await waitFor("WebGPU from the palette", 30000, async () => { const r = await R(); return r.using === "WebGPU" && !r.progress ? r : null; }).catch(() => null);
+  check("the palette's \"renderer webgpu\" switches to WebGPU", !!r3, JSON.stringify(r3));
+  await L.evalJs("(async () => (await import('/src/perf.ts')).chooseRenderer('webgl2'))()");
+  await waitFor("WebGL2 again", 30000, async () => { const r = await R(); return r.using === "WebGL2" && !r.progress ? r : null; });
   check("no uncaught page error", L.errors.length === 0, L.errors.join(" | "));
 } catch (e) {
   check("the run", false, e?.stack ?? String(e));

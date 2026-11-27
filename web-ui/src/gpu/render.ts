@@ -392,13 +392,14 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
       buf.unmap(), buf.destroy();
       return { w, h, rgba: out };
     },
-    destroy() {
+    destroy(keepDevice = false) {
       gen++;
       canvas.remove();
       scene.destroy(), cull.destroy();
       for (const b of [frameU, cubeBuf, identity, boxBuf, outlineBuf]) b.destroy();
       color?.destroy(), depth?.destroy();
-      device.destroy();
+      ctx.unconfigure();
+      if (!keepDevice) device.destroy(); // GPU2: kept for the next switch
       delete window.__bbGpu;
     },
   };
