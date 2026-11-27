@@ -156,7 +156,10 @@ int core_action(App *a, const char *name, const char *body) {
 
 /* The selection, through the core (select: a JSON array of GlobalIds; a link's: {"link","ids"}), and the
  * properties (query element, or element {id, link}: bimble.ts selectLinked, linkedElement). */
+static void select_rest(App *a);
 void core_select(App *a, uint32_t elem1) {
+    a->nmsel = 0;
+    select_rest(a);
     a->selected = 0, a->sel_id[0] = 0, a->sel_link[0] = 0;
     Buf out, body;
     buf_init(&out), buf_init(&body);
@@ -184,6 +187,54 @@ void core_select(App *a, uint32_t elem1) {
     buf_free(&out), buf_free(&body);
     a->vis_dirty = 1;
     a->dirty = 1;
+}
+
+/* NUI2, Ctrl-click: the selection grows (or loses the element clicked again); the core is told the whole set when every
+ * element is the open model's or one link's (its select takes one link's ids), else the last picked only */
+static void select_rest(App *a) { (void)a; }
+void core_select_add(App *a, uint32_t elem1) {
+    if (elem1 <= NV_ELEM0) return;
+    uint32_t keep = a->selected;
+    int was = keep == elem1;
+    for (int i = 0; i < a->nmsel && !was; i++)
+        if (a->msel[i] == elem1) a->msel[i] = a->msel[--a->nmsel], was = 1;
+    if (was && keep == elem1) { /* the last picked clicked again: the previous one leads */
+        uint32_t next = a->nmsel ? a->msel[--a->nmsel] : 0;
+        uint32_t tmp[256];
+        int n = a->nmsel;
+        memcpy(tmp, a->msel, sizeof tmp);
+        core_select(a, next);
+        memcpy(a->msel, tmp, sizeof tmp), a->nmsel = n;
+    } else if (!was) {
+        uint32_t tmp[256];
+        int n = a->nmsel;
+        memcpy(tmp, a->msel, sizeof tmp);
+        if (keep && n < 256) tmp[n++] = keep;
+        core_select(a, elem1);
+        memcpy(a->msel, tmp, sizeof tmp), a->nmsel = n;
+    }
+    /* the core's set: the ids of the open model, or of one link */
+    char id[23], link[256], first_link[256] = "";
+    int same = 1;
+    Buf body, out;
+    buf_init(&body), buf_init(&out);
+    for (int i = -1; i < a->nmsel; i++) {
+        uint32_t e = i < 0 ? a->selected : a->msel[i];
+        if (!e || !scene_elem(a, e - 1, id, link, sizeof link)) continue;
+        if (i < 0) snprintf(first_link, sizeof first_link, "%s", link);
+        else if (strcmp(link, first_link)) same = 0;
+        buf_puts(&body, body.len ? ",\"" : "\""), buf_puts(&body, id), buf_putc(&body, '"');
+    }
+    if (same && a->selected) {
+        Buf b2;
+        buf_init(&b2);
+        if (first_link[0]) buf_puts(&b2, "{\"link\":"), json_str(&b2, first_link), buf_puts(&b2, ",\"ids\":["), buf_append(&b2, body.p, body.len), buf_puts(&b2, "]}");
+        else buf_putc(&b2, '['), buf_append(&b2, body.p, body.len), buf_putc(&b2, ']');
+        core_call(a, "select", NULL, buf_cstr(&b2), &out);
+        buf_free(&b2);
+    }
+    buf_free(&body), buf_free(&out);
+    a->vis_dirty = 1, a->dirty = 1;
 }
 
 /* ---- the shared data (embedded) ---- */
@@ -336,6 +387,7 @@ void core_visibility(App *a) {
         free(mark);
     }
     if (a->selected > NV_ELEM0) nv_render_set_state(a->r, a->selected - 1, 1);
+    for (int i = 0; i < a->nmsel; i++) if (a->msel[i] > NV_ELEM0 && a->msel[i] - 1 < total) nv_render_set_state(a->r, a->msel[i] - 1, 1);
     if (core_query(a, "visibility", NULL, &b) == 0) {
         const JrVal *sb = jr_get(b.root, "section_box"), *box = sb ? jr_get(sb, "box") : NULL;
         const JrVal *mn = box && box->type == JR_OBJ ? jr_get(box, "min") : NULL, *mx = box && box->type == JR_OBJ ? jr_get(box, "max") : NULL;

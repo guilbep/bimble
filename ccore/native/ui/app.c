@@ -108,7 +108,7 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
         if (a->drag == 1 && !a->drag_moved) {
             input_start(a, ev, a->measure_on ? "measure click" : "pick");
             if (a->measure_on) tool_measure_input(a, ev->button.x, ev->button.y, 1);
-            else app_pick_at(a, ev->button.x, ev->button.y), a->pick_add = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+            else app_pick_at(a, ev->button.x, ev->button.y), a->pick_add = (SDL_GetModState() & SDL_KMOD_CTRL) != 0 || a->drive_ctrl, a->drive_ctrl = 0;
             a->dirty = 1;
         } else if (a->drag == 3 && !a->drag_moved) { /* a right click: the context menu (the element under it picked first) */
             input_start(a, ev, "context menu");
@@ -503,7 +503,12 @@ static void frame(App *a) {
             if (a->frame_ms > target * 0.6) a->tri_live = drawn * 7 / 10 > 500000 ? drawn * 7 / 10 : 500000;
             else if (a->frame_ms < target * 0.25 && a->tri_live) a->tri_live = a->tri_live * 3 / 2 > drawn * 4 ? 0 : a->tri_live * 3 / 2;
         } else if (!a->moving) a->tri_live = 0;
-        if (pick) a->pick_pending = 0, core_select(a, picked > NV_ELEM0 ? picked : 0);
+        if (pick) {
+            a->pick_pending = 0;
+            if (a->pick_add) { if (picked > NV_ELEM0) core_select_add(a, picked); } /* Ctrl-click (on nothing: the selection kept) */
+            else core_select(a, picked > NV_ELEM0 ? picked : 0);
+            a->pick_add = 0;
+        }
         /* the first picture: something drawn, or nothing left to draw (an empty model) */
         if (!a->t_first_picture && (nv_render_nparts(a->r) > 0 || scene_complete(a))) a->t_first_picture = t1;
     }

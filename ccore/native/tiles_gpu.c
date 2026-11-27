@@ -42,6 +42,18 @@ static const uint32_t SPV_FACE_INST2[] =
 static const uint32_t SPV_FACE_ID_FRAG2[] =
 #include "face_id.frag.h"
     ;
+static const uint32_t SPV_FACE_WORLD_C[] =
+#include "face_world_clip.vert.h"
+    ;
+static const uint32_t SPV_FACE_INST_C[] =
+#include "face_inst_clip.vert.h"
+    ;
+static const uint32_t SPV_PROXY_C[] =
+#include "face_proxy_clip.vert.h"
+    ;
+static const uint32_t SPV_FACE_ND[] =
+#include "face_id_nodiscard.frag.h"
+    ;
 static const uint32_t SPV_HIZ0[] =
 #include "hiz0.comp.h"
     ;
@@ -647,8 +659,17 @@ void nv_tiles_init(R *r) {
     T->face_w_back = gpipe(r, fw, ff, 16, 2, SDL_GPU_CULLMODE_BACK);
     T->face_i_back = gpipe(r, fi, ff, 12, 1, SDL_GPU_CULLMODE_BACK);
     T->proxy = gpipe(r, fp, ff, 0, 0, SDL_GPU_CULLMODE_NONE);
-    SDL_GPUShader *all[] = {fw, fi, fp, ff};
-    for (int k = 0; k < 4; k++) if (all[k]) SDL_ReleaseGPUShader(d, all[k]);
+    SDL_GPUShader *cw = shader(d, SPV_FACE_WORLD_C, sizeof SPV_FACE_WORLD_C, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
+    SDL_GPUShader *ci = shader(d, SPV_FACE_INST_C, sizeof SPV_FACE_INST_C, SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
+    SDL_GPUShader *cp2 = shader(d, SPV_PROXY_C, sizeof SPV_PROXY_C, SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
+    SDL_GPUShader *fn = shader(d, SPV_FACE_ND, sizeof SPV_FACE_ND, SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0, 1);
+    T->c_face_w = gpipe(r, cw, fn, 16, 2, SDL_GPU_CULLMODE_NONE), T->c_face_w_back = gpipe(r, cw, fn, 16, 2, SDL_GPU_CULLMODE_BACK);
+    T->c_face_i = gpipe(r, ci, fn, 12, 1, SDL_GPU_CULLMODE_NONE), T->c_face_i_back = gpipe(r, ci, fn, 12, 1, SDL_GPU_CULLMODE_BACK);
+    T->c_proxy = gpipe(r, cp2, fn, 0, 0, SDL_GPU_CULLMODE_NONE);
+    if (!T->c_face_w || !T->c_face_w_back || !T->c_face_i || !T->c_face_i_back || !T->c_proxy)
+        fprintf(stderr, "bimble: the clip-distance pipelines were refused (%s): the section box by discard\n", SDL_GetError());
+    SDL_GPUShader *all[] = {fw, fi, fp, ff, cw, ci, cp2, fn};
+    for (int k = 0; k < 8; k++) if (all[k]) SDL_ReleaseGPUShader(d, all[k]);
     T->hiz0 = cpipe(r, SPV_HIZ0, sizeof SPV_HIZ0, 1, 0, 0, 1, 0, 8, 8);
     T->hizn = cpipe(r, SPV_HIZN, sizeof SPV_HIZN, 0, 0, 0, 1, 0, 8, 8);
     T->test = cpipe(r, SPV_TTEST, sizeof SPV_TTEST, 0, 1, 1, 0, 1, 64, 1);
@@ -668,8 +689,8 @@ void nv_tiles_release(R *r) {
         nv_tileset_unref(d, ts);
     }
     free(T->sets), free(T->map);
-    SDL_GPUGraphicsPipeline *gp[] = {T->face_w_back, T->face_i_back, T->proxy};
-    for (int k = 0; k < 3; k++) if (gp[k]) SDL_ReleaseGPUGraphicsPipeline(d, gp[k]);
+    SDL_GPUGraphicsPipeline *gp[] = {T->face_w_back, T->face_i_back, T->proxy, T->c_face_w, T->c_face_w_back, T->c_face_i, T->c_face_i_back, T->c_proxy};
+    for (int k = 0; k < 8; k++) if (gp[k]) SDL_ReleaseGPUGraphicsPipeline(d, gp[k]);
     SDL_GPUComputePipeline *cp[] = {T->hiz0, T->hizn, T->test, T->gate, T->seen};
     for (int k = 0; k < 5; k++) if (cp[k]) SDL_ReleaseGPUComputePipeline(d, cp[k]);
     if (T->seen_buf) SDL_ReleaseGPUBuffer(d, T->seen_buf);
@@ -1150,6 +1171,10 @@ void nv_tiles_draw(R *r, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int p
     nv_tiles_r *T = &r->tl;
     (void)cmd;
     int gated = T->read_vis_planned;
+    /* the section box by clip planes when it is on and asked (section_clip), the pipelines there */
+    int cl = T->o.clip_planes && r->clip_min[3] > 0.5f && T->c_face_w && T->c_face_w_back && T->c_face_i && T->c_face_i_back && T->c_proxy;
+    SDL_GPUGraphicsPipeline *P_W = cl ? T->c_face_w : r->face_w, *P_WB = cl ? T->c_face_w_back : T->face_w_back, *P_I = cl ? T->c_face_i : r->face_i,
+                            *P_IB = cl ? T->c_face_i_back : T->face_i_back, *P_P = cl ? T->c_proxy : T->proxy;
     for (int ps = 1; ps <= 2; ps++) {
         if (gated ? ps != pass : pass != 1) continue; /* without the test, everything in one pass */
         SDL_GPUBuffer *cb = ps == 1 || !gated ? T->cmd_a : T->cmd_b;
@@ -1160,18 +1185,18 @@ void nv_tiles_draw(R *r, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int p
                 const Page *pp = &pg[q];
                 SDL_GPUBufferBinding ib = {.buffer = pp->b[B_I], .offset = 0};
                 if (k == K_PROXY) {
-                    if (!T->proxy) continue;
-                    SDL_BindGPUGraphicsPipeline(rp, T->proxy);
+                    if (!P_P) continue;
+                    SDL_BindGPUGraphicsPipeline(rp, P_P);
                     SDL_GPUBuffer *st[3] = {r->colour, pp->b[B_P], pp->b[B_TT]};
                     SDL_BindGPUVertexStorageBuffers(rp, 0, st, 3);
                 } else if (k == K_MERGED || k == K_MERGED_BACK) {
-                    SDL_BindGPUGraphicsPipeline(rp, k == K_MERGED_BACK && T->face_w_back ? T->face_w_back : r->face_w);
+                    SDL_BindGPUGraphicsPipeline(rp, k == K_MERGED_BACK && P_WB ? P_WB : P_W);
                     SDL_GPUBuffer *st[1] = {r->colour};
                     SDL_BindGPUVertexStorageBuffers(rp, 0, st, 1);
                     SDL_GPUBufferBinding vb = {.buffer = pp->b[B_V], .offset = 0};
                     SDL_BindGPUVertexBuffers(rp, 0, &vb, 1);
                 } else {
-                    SDL_BindGPUGraphicsPipeline(rp, k == K_SHAPES_BACK && T->face_i_back ? T->face_i_back : r->face_i);
+                    SDL_BindGPUGraphicsPipeline(rp, k == K_SHAPES_BACK && P_IB ? P_IB : P_I);
                     SDL_GPUBuffer *st[3] = {r->colour, pp->b[B_PL], T->inst};
                     SDL_BindGPUVertexStorageBuffers(rp, 0, st, 3);
                     SDL_GPUBufferBinding vb = {.buffer = pp->b[B_SV], .offset = 0};

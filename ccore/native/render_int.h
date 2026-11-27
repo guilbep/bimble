@@ -8,6 +8,7 @@
 /* NUI2: the tile path's state in the renderer (tiles_gpu.c) */
 typedef struct {
     SDL_GPUGraphicsPipeline *face_w_back, *face_i_back, *proxy;
+    SDL_GPUGraphicsPipeline *c_face_w, *c_face_w_back, *c_face_i, *c_face_i_back, *c_proxy; /* the clip-distance variants */
     SDL_GPUComputePipeline *hiz0, *hizn, *test, *gate;
     SDL_GPUTexture *hiz;          /* the depth pyramid: its levels side by side (R32F) */
     uint32_t hiz_w, hiz_h, hiz_levels, lv[16][3]; /* per level: x offset, w, h */

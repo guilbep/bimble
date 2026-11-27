@@ -33,6 +33,12 @@ for s in native/shaders/*.vert native/shaders/*.frag native/shaders/*.comp; do
     [[ "$G/spv/$b.h" -nt "$s" && "$G/spv/$b.h" -nt native/shaders/common.glsl ]] || glslc -O -mfmt=c -o "$G/spv/$b.h" "$s"
 done
 [[ "$G/spv/face_id.frag.h" -nt native/shaders/face.frag ]] || glslc -O -DWITH_ID -mfmt=c -o "$G/spv/face_id.frag.h" native/shaders/face.frag
+# NUI2: the section box by clip distances (vertex stage) and the fragment stage without discard, measured against discard
+[[ "$G/spv/face_id_nodiscard.frag.h" -nt native/shaders/face.frag ]] || glslc -O -DWITH_ID -DNO_DISCARD -mfmt=c -o "$G/spv/face_id_nodiscard.frag.h" native/shaders/face.frag
+for v in face_world face_inst face_proxy; do
+    [[ "$G/spv/${v}_clip.vert.h" -nt native/shaders/$v.vert && "$G/spv/${v}_clip.vert.h" -nt native/shaders/common.glsl ]] ||
+        glslc -O -DCLIP -mfmt=c -o "$G/spv/${v}_clip.vert.h" "native/shaders/$v.vert"
+done
 # 2. the embedded files: the shell's data (exported from the web UI's TypeScript, committed) and the lab's fonts
 BRAND=../web-ui/src/brand
 EMB=(native/ui/data/ribbon.json native/ui/data/keys.json native/ui/data/machine.json native/ui/data/strings.fr.json

@@ -94,6 +94,16 @@ make native-test                  # = ccore/ci/run.sh native (the CI job ccore-n
 - Its own environment: `BIMBLE_NATIVE_LOADERS` (link loader threads, default 2), `BIMBLE_LINK_GPU_MB`
   (the links' GPU budget for one run; else the setting), and the host's `BIMBLE_CONFIG_DIR`,
   `BIMBLE_CACHE_DIR`, `BIMBLE_LINK_CACHE_BESIDE=0`, `BIMBLE_LINK_CACHE_MIN`.
+- **The tile path** (NUI2, ADR 0084 amendment): `--set renderer_path=tiles` draws every link with a section `TILE`
+  (and the open model) by tiles, with exact two-pass occlusion; its settings `draw_visible`, `occlusion_groups`,
+  `error_px`, `lod`, `still_px`, `cull_back` (`--set key=value` for a run; Settings › Optimisations).
+  `--truth` draws each 3D frame without then with occlusion and compares the id and depth buffers (summary.md:
+  frames, frames with ids missing, ids missing, coplanar ties). `--compare k=v,k=v --compare …` runs the same
+  script once per set and prints the summaries side by side (`<out>/compare.md`). Driver steps for tiles:
+  `look_box fx fy fz tx ty tz` (a camera inside the scene's box), `check_tiles` (every leaf's elements inside
+  its box). `BIMBLE_TILES_DEBUG=1`: one line a frame (walk, commands, tests, tiles loaded and wanted).
+- A crash: `ccore/native/symbolize.sh [session folder]` turns the session log's raw stack into functions and
+  lines with `ccore/out/app/debug/<build id>.debug` (kept by `native/build.sh app`, the last 20 builds).
 
 ## 3. Tests
 

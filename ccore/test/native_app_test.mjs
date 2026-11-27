@@ -288,6 +288,27 @@ quit
   check("pointer-links: exits 0", rpl.code === 0 && !rpl.signal, `${rpl.code} ${rpl.signal ?? ""}`);
   expectations("pointer-links", rpl);
 
+  // ---- 3c'. NUI2: Ctrl-click grows the selection (three elements), Hide hides the three ----
+  const rms = run("ctrl-select", `
+wait complete
+frames 3
+click_world 9000 5000 5780
+frames 3
+expect_nselected 1
+ctrl_click_world 18150 10150 0
+frames 3
+expect_nselected 2
+ctrl_click_world 18150 -150 0
+frames 3
+expect_nselected 3
+action hide_now
+frames 3
+expect_hidden 3
+quit
+`, fixture);
+  check("ctrl-select: exits 0", rms.code === 0 && !rms.signal, `${rms.code} ${rms.signal ?? ""}`);
+  expectations("ctrl-select", rms);
+
   // ---- 3d. NUI2: the tile path (renderer_path=tiles) with occlusion, its truth test on (--truth: every 3D frame drawn
   // without, then with occlusion, the id and depth buffers compared: an element whose pixel shows something farther is
   // missing): the open model by tiles (a pick, hide), six links by tiles (a pick in a link, orbit, zoom); 0 missing ----

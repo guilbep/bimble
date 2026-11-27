@@ -23,4 +23,5 @@ void main() {
     v_col = unpack_srgb(ov != 0u ? ov : colour[cat]);
     v_id = cat + 1u;
     gl_Position = vp * vec4(w, 1.0);
+    clip_box(w);
 }

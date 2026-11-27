@@ -497,6 +497,7 @@ static void hlod_walk(R *r, P *p, const float pl[5][4], const double eye[3], flo
 typedef struct {
     float vp[16];
     float bias[4];
+    float cmin[4], cmax[4]; /* NUI2: the section box for the clip-distance variants */
 } VUni;
 typedef struct {
     float light[4];
@@ -604,6 +605,7 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
     VUni vu;
     memcpy(vu.vp, vp, sizeof vp);
     vu.bias[0] = 1e-4f, vu.bias[1] = vu.bias[2] = vu.bias[3] = 0;
+    memcpy(vu.cmin, r->clip_min, sizeof vu.cmin), memcpy(vu.cmax, r->clip_max, sizeof vu.cmax);
     SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof vu);
     FUni fu;
     double l[3] = {eye[0] - cam->target[0], eye[1] - cam->target[1], eye[2] - cam->target[2]};

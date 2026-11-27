@@ -164,6 +164,9 @@ struct App {
     float lx, ly, dx0, dy0;
     int drag_moved;
     int pick_pending, pick_x, pick_y, pick_add;
+    uint32_t msel[256];        /* NUI2, Ctrl-click: the other selected elements (global + 1), the last picked is `selected` */
+    int nmsel;
+    int drive_ctrl;            /* the driver's Ctrl held for the next click */
     uint32_t selected;         /* global element + 1, 0 none */
     char sel_id[23], sel_link[256];
     int box_on, box_drag;      /* the section box (scene mm) and its handle held */
@@ -265,6 +268,7 @@ const char *T(App *a, const char *key);                       /* the string for 
 const char *Tf(App *a, char *out, size_t n, const char *key, const char *var, const char *val);
 int data_load(App *a);
 void core_select(App *a, uint32_t elem1);
+void core_select_add(App *a, uint32_t elem1); /* Ctrl-click: added, or removed when it was selected */
 void core_visibility(App *a);
 int core_key(App *a, SDL_Keycode k, SDL_Keymod mod, int typing);
 void json_str(Buf *b, const char *s);                         /* a JSON string literal */

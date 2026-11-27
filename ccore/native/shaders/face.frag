@@ -12,7 +12,9 @@ layout(location = 1) out uint o_id;
 vec3 to_linear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 to_srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 void main() {
+#ifndef NO_DISCARD
     if (bmin.w > 0.5 && (any(lessThan(v_pos, bmin.xyz)) || any(greaterThan(v_pos, bmax.xyz)))) discard; // NAT2
+#endif
 #ifdef WITH_ID
     o_id = v_id;
 #endif

@@ -18,6 +18,7 @@
  *   box_handle <face> <dx> <dy> <ms>                a drag of the section box's handle on that face (0 -x .. 5 +z), found where it is
  *                                                   drawn, by (dx, dy) logical px
  *   expect_box_moved <face> <mm>                    that face moved by at least mm since the last box_handle
+ *   ctrl_click_world x y z | expect_nselected <n>     a Ctrl-click (the selection grows) / how many are selected
  *   expect_selected <GlobalId> | expect_link <name> | expect_none
  *   expect_measure <mm> <tol> | expect_hidden <n> | expect_parts <n> | expect_text <key> <text>
  *   quit
@@ -240,6 +241,7 @@ static int run_step(App *a, Step *s, double now) {
         held = 0;
         return 1;
     }
+    if (!strcmp(op, "ctrl_click_world")) a->drive_ctrl = 1, op = "click_world"; /* a Ctrl-click: the selection grows */
     if (!strcmp(op, "click") || !strcmp(op, "rclick") || !strcmp(op, "click_world")) {
         if (!strcmp(op, "click_world")) {
             if (!world_xy(a, arg, &x, &y)) { expect(a, 0, "click_world: the point is not in front of the camera"); return 1; }
@@ -400,6 +402,12 @@ static int run_step(App *a, Step *s, double now) {
     if (!strcmp(op, "check_tiles")) { /* every leaf of every tile set: its elements' vertices inside the tile's box (the boxes the walker and
                                        * the occlusion trust); stderr: per set, the leaves and elements outside */
         tiles_check(a);
+        return 1;
+    }
+    if (!strcmp(op, "expect_nselected")) {
+        int want = atoi(arg), got = (a->selected != 0) + a->nmsel;
+        snprintf(what, sizeof what, "%d elements selected (got %d)", want, got);
+        expect(a, got == want, what);
         return 1;
     }
     if (!strcmp(op, "expect_none")) { expect(a, !a->selected, "nothing selected"); return 1; }

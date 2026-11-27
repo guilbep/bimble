@@ -18,4 +18,5 @@ void main() {
     v_id = elem + 1u;
     gl_Position = vp * vec4(w, 1.0);
     if (hidden_elem(elem)) gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
+    clip_box(w);
 }

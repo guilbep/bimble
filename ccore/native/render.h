@@ -124,6 +124,7 @@ typedef struct {
     int lod;             /* levels of detail (0: every leaf in the frustum) */
     float min_px;        /* settings still_px: an element under this many pixels is skipped (0: off) */
     int cull_back;       /* settings cull_back: back faces of closed outward elements culled */
+    int clip_planes;     /* section_clip: the section box by clip distances (1) or by discard in the fragment stage (0) */
     int groups;          /* occlusion_groups: occlusion down to groups of 8 elements (seen last frame: pass 1; else tested); 0: by tile */
     uint64_t budget;     /* the resident tiles' GPU bytes (0: none) */
     uint64_t tri_budget; /* the walker's triangle budget (0: none; the moving budget sets it) */
