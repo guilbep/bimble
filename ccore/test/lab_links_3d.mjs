@@ -254,17 +254,17 @@ async function main() {
   // the eye clicked for real (CDP input), timed by test/lib/input_time.mjs (ADR 0074, FIRST1): the page's time
   // (the row and the viewport's frame without the link) asserted at 200 ms, the presented frame as its rule says
   const gpu = await adapter(evalJs);
-  const eyeClick = async (visible) => {
-    const rect = `(() => { const r = document.querySelector('[data-bb=link-row][data-name="link_1.ifc"] [data-bb=link-eye]').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`;
+  const eyeClick = async (visible, name = "link_1.ifc", k = 1, more = "true") => {
+    const rect = `(() => { const r = document.querySelector('[data-bb=link-row][data-name="${name}"] [data-bb=link-eye]').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`;
     // (the panel may hold it below the fold: scrolled into view, every scroll put back after the click)
-    await evalJs(`(() => { const e = document.querySelector('[data-bb=link-row][data-name="link_1.ifc"] [data-bb=link-eye]'); window.__scrolls = [];
+    await evalJs(`(() => { const e = document.querySelector('[data-bb=link-row][data-name="${name}"] [data-bb=link-eye]'); window.__scrolls = [];
       for (let p = e.parentElement; p; p = p.parentElement) window.__scrolls.push([p, p.scrollTop, p.scrollLeft]); e.scrollIntoView({ block: "center" }); })()`);
     await calm();
     let at = await evalJs(rect); // where it stays (the panel laid out)
     for (let i = 0; i < 20; i++) { await sleep(100); const b = await evalJs(rect); if (b[0] === at[0] && b[1] === at[1]) break; at = b; }
     const top = await evalJs(`!!document.elementFromPoint(${at[0]}, ${at[1]})?.closest('[data-bb=link-eye]')`);
-    if (!top) throw new Error(`the eye of link_1 is covered at ${at}`);
-    const cond = `document.querySelector('[data-bb=link-row][data-name="link_1.ifc"]')?.dataset.visible === '${visible ? 1 : 0}' && window.__bbGl.linkDraw[1].visible === ${visible}`;
+    if (!top) throw new Error(`the eye of ${name} is covered at ${at}`);
+    const cond = `document.querySelector('[data-bb=link-row][data-name="${name}"]')?.dataset.visible === '${visible ? 1 : 0}' && window.__bbGl.linkDraw[${k}].visible === ${visible} && (${more})`;
     await evalJs(watchSource({ kind: "pointerdown", page: cond, presented: cond }));
     await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1], button: "none", buttons: 0 });
     await S("Input.dispatchMouseEvent", { type: "mousePressed", x: at[0], y: at[1], button: "left", buttons: 1, clickCount: 1 });
@@ -362,8 +362,14 @@ async function main() {
   const panel = await waitFor("the Links panel says it", 5000, () => evalJs(`document.querySelector('[data-bb=link-row][data-name="link_3.ifc"] [data-bb=link-detail]')?.dataset.detail === '0' ? document.querySelector('[data-bb=link-row][data-name="link_3.ifc"] [data-bb=link-detail]').textContent : null`)).catch(() => null);
   check("the budget set low: the hidden link's detail leaves the GPU; the Links panel says \"proxies only\"", rel !== null && rel.gpuBytes < gpu0 && panel === "proxies only",
     `GPU ${(gpu0 / 1e6).toFixed(2)} -> ${((rel?.gpuBytes ?? 0) / 1e6).toFixed(2)} MB, panel ${JSON.stringify(panel)}, ${JSON.stringify(rel?.linkDetail?.map((x) => [x.name, x.detail]))}`);
-  const showBack = `() => import('/src/shell/links.ts').then((l) => l.modelOp("show", "link_3.ifc"))`;
-  const backMs = await timed("show a link whose detail was released", showBack, `window.__bbGl.linkDetail?.find((x) => x.name === "link_3.ifc")?.detail === true && window.__bbGl.linkDraw[3].visible`);
+  // SIZE2FIX: its eye clicked for real: the frame after the click draws it AT ONCE from its proxies (kept in the page:
+  // nothing fetched for that picture), timed by input_time.mjs; its detail follows (its mesh asked again)
+  const prxReq0 = meshRequests.filter((u) => /link_proxies/.test(u)).length;
+  const backV = await eyeClick(true, "link_3.ifc", 3,
+    `(window.__bbGl.linkProxies?.find((x) => x.name === "link_3.ifc")?.drawnTris ?? 0) > 0 || window.__bbGl.linkDetail?.find((x) => x.name === "link_3.ifc")?.detail === true`);
+  check(`show a link whose detail was released (its eye clicked): drawn at once from its proxies: ${backV.line}`, backV.ok && meshRequests.filter((u) => /link_proxies/.test(u)).length === prxReq0,
+    `link_proxies requests ${prxReq0} -> ${meshRequests.filter((u) => /link_proxies/.test(u)).length}`);
+  const backMs = await waitFor("its detail back", 10000, () => evalJs(`window.__bbGl.linkDetail?.find((x) => x.name === "link_3.ifc")?.detail === true`)).then(() => 0).catch(() => -1);
   await calm();
   const after3 = await evalJs("Array.from(window.__bbGl.bench.read().rgba)"), st3 = await gl();
   let d3 = 0;
@@ -382,10 +388,32 @@ async function main() {
   await evalJs("window.__bbGl.gpuBudget = 0");
   await sleep(600);
   await calm();
-  const st4 = await gl();
-  const det = Object.fromEntries((st4.linkDetail ?? []).map((x) => [x.name, x.detail]));
+  await evalJs("(window.__bbGl.bench.frame(0, false), window.__bbGl.bench.frame(0, false), window.__bbGl.bench.frame(0, false), 0)"); // SIZE2FIX: frames drawn (the budget counts them)
+  const want4 = (d) => d["link_4.ifc"] === true && d["link_0.ifc"] === true && d["link_3.ifc"] === false && d["link_2.ifc"] === false;
+  const det = await waitFor("the budget's answer", 10000, async () => { const d = Object.fromEntries(((await gl()).linkDetail ?? []).map((x) => [x.name, x.detail])); return want4(d) ? d : null; })
+    .catch(async () => Object.fromEntries(((await gl()).linkDetail ?? []).map((x) => [x.name, x.detail]))); // (a link on screen may be loading: its detail follows)
   check("a budget of 0, link_4 out of view for 2 s: its detail kept (its element selected); links out of view released, the one on screen kept",
     det["link_4.ifc"] === true && det["link_0.ifc"] === true && det["link_3.ifc"] === false && det["link_2.ifc"] === false, JSON.stringify(det));
+  { // SIZE2FIX: a slow machine (CPU throttled 4x, as GitHub's runner on the software rasteriser): link_0 released (out of
+    // view), then the camera back on it while frames are drawn moving (each frame's budget leaves most out): its detail
+    // asked again ONCE and kept (in view: needed, whatever the frame drew), never released and asked again in a loop
+    await evalJs(`window.__bbGl.bench.look(${JSON.stringify(draw0[N - 1].origin)}, 20000)`); // link_0 out of view
+    await calm();
+    for (let i = 0; i < 3; i++) { await sleep(1000); await evalJs("(window.__bbGl.bench.frame(0, false), 0)"); }
+    await waitFor("link_0 released", 10000, () => evalJs(`window.__bbGl.linkDetail?.find((x) => x.name === "link_0.ifc")?.detail === false`)).catch(() => null);
+    const loads0 = (await gl()).linkDetail?.find((x) => x.name === "link_0.ifc")?.loads ?? -1;
+    await S("Emulation.setCPUThrottlingRate", { rate: 4 });
+    try {
+      await evalJs(`window.__bbGl.bench.look(${JSON.stringify(draw0[0].origin)}, 20000)`);
+      await evalJs(`(async () => { const t0 = performance.now(); while (performance.now() - t0 < 4000) { window.__bbGl.bench.frame(0.004, true);
+        await new Promise((r) => setTimeout(r, 30)); } })()`); // moving frames, the loop and its budget step between them
+      const back = await waitFor("link_0's detail back", 15000, () => evalJs(`window.__bbGl.linkDetail?.find((x) => x.name === "link_0.ifc")?.detail === true`)).catch(() => false);
+      await calm();
+      const l0 = (await gl()).linkDetail?.find((x) => x.name === "link_0.ifc");
+      check("CPU throttled 4x, a budget of 0: the link back in view is asked again once and kept, not released and asked again while frames are drawn",
+        !!back && l0?.detail === true && l0.loads - loads0 <= 1, `loads ${loads0} -> ${l0?.loads}, detail ${l0?.detail}`);
+    } finally { await S("Emulation.setCPUThrottlingRate", { rate: 1 }); }
+  }
   await evalJs(`window.__bbGl.bench.look(${JSON.stringify(near)}, 140000)`);
   await evalJs("delete window.__bbGl.gpuBudget");
 

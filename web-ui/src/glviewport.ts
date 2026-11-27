@@ -1571,8 +1571,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     /** The last frame drew some of it in detail. */
     drawn?: boolean; listBytes?: number;
     /** SIZE2: its face list is on the GPU (its lists dropped from the page with its heavy arrays); its mesh is being asked again. */
-    listsOnGpu?: boolean; fetching?: boolean }
+    listsOnGpu?: boolean; fetching?: boolean;
+    /** SIZE2FIX: the last frame (drawFrame) that needed it (in view, not stood for by a proxy), the frame its detail came back. */
+    needFrame?: number; loadFrame?: number }
   let slots: Slot[] = [];
+  /** SIZE2FIX: frames drawn with the batch pass (the budget's clock: a slow machine that draws few frames releases nothing it needs). */
+  let drawFrame = 0;
   /** SIZE2: per link model its own elements in list order and its batches (made once per mesh), its instances. */
   let ownOrd: ({ order: number[]; batches: Batch[] } | undefined)[] = [], instOfNow: number[][] = [];
   /** SIZE2: triangles read back from the GPU for picks (a link's arrays dropped), by model and block: bounded. */
@@ -1655,6 +1659,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     x.listsOnGpu = false;
     if (x.lists) uploadLists(x);
     x.loads++;
+    x.loadFrame = drawFrame; // SIZE2FIX: not released again within NEED_FRAMES of coming back
     return true;
   };
   /** Uploads slot x's draw lists (faces, edges, instances) into its buffers. */
@@ -2391,13 +2396,16 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     for (const x of linkPrx.values()) x.drawnCells = x.drawnTris = 0;
     // ---- end LNK3D (C) ----
     const missing: Float32Array[] = []; // LNK3D (D): batches needed while their link's detail is away: their boxes
+    drawFrame++; // SIZE2FIX: a link is needed by frames drawn, not by wall time
+    const needNow = performance.now();
+    const need = (mdl: number) => { const x = slots[mdl]; if (x && mdl > 0) x.needFrame = drawFrame, x.needAt = needNow; };
     for (const d of dbs) {
       if (d.b.shown === 0) { d.k0 = d.k1 = 0; continue; } // LNK3D: every element of it hidden (a link hidden too)
       const sl = slots[d.model];
       if (sl && !sl.gl) { // LNK3D (D): its link's detail released: asked again when this frame would draw it
         if (!planes || boxInFrustum(planes, d.b.box, 0)) {
           const nr = linkNeed[d.model], r2 = linkRep[d.model];
-          if (!(nr && d.b.group >= 0 && nr[d.b.group])) wanted.add(d.model);
+          if (!(nr && d.b.group >= 0 && nr[d.b.group])) wanted.add(d.model), need(d.model);
           if (!(r2 && d.b.group >= 0 && r2[d.b.group])) missing.push(d.b.box);
         }
         d.k0 = d.k1 = 0;
@@ -2412,6 +2420,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       // LNK3D (F): edges only where they read: a batch whose box spans at least EDGE_MIN_PX on screen
       d.noEdge = Math.hypot(bx[3]! - bx[0]!, bx[4]! - bx[1]!, bx[5]! - bx[2]!) / (orthoEye ? orthoMmPx : dist * pxK) < EDGE_MIN_PX;
       seen.push({ d, c: { b: d.b, dist, k0: slice && fill ? cutEnd({ b: d.b, dist, k0: 0 }, fill.t) : 0 } });
+      need(d.model); // SIZE2FIX: in view and not stood for by a proxy: needed, whatever this frame's budget or pass draws
     }
     if (slice && fillEdges) for (const { d } of seen) d.k0 = d.k1 = 0; // the last pass: edges only (below)
     else {
@@ -2443,7 +2452,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     const unfinished = [...unDs.map(({ d }) => d.b.box), ...missing];
     for (const x of slots) x.drawn = false; // LNK3D (D): a link drawn in detail by the last frame is needed (on screen)
-    for (const d of dbs) if (d.k1 > d.k0 && d.model > 0) { const x = slots[d.model]; if (x) x.drawn = true, x.needAt = performance.now(); }
+    for (const d of dbs) if (d.k1 > d.k0 && d.model > 0) { const x = slots[d.model]; if (x) x.drawn = true; }
     stats.moving = { moving: movingNow, slice, budget, t: cutT, batches: dbs.length, culled, outlines: unfinished.length, tris: 0, proxied: prxCells.length };
     // 3D2: the proxies' runs (cells in order: their parts lie side by side), faces in a frame that starts
     // over, edges then and in the last pass of a fill
@@ -3767,14 +3776,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // least recently needed (hidden ones, those drawn as proxies, those out of view) give their buffers back,
   // never the selected element's link nor one needed in the last NEED_MS. ----
   const wanted = new Set<number>();
-  const NEED_MS = 2000;
+  const NEED_MS = 2000, NEED_FRAMES = 3;
   const budgetStep = () => {
     const m = mesh;
     if (!m || slots.length < 2) return;
     const now = performance.now(), sel = state.value.linked?.link ?? null;
     const selK = sel === null ? -1 : 1 + (m.links ?? []).findIndex((l) => l.name === sel);
-    if (selK > 0 && slots[selK]) slots[selK]!.needAt = now;
-    for (const x of slots) if (x.drawn) x.needAt = now; // on screen in detail: needed while it stays
+    if (selK > 0 && slots[selK]) slots[selK]!.needAt = now, slots[selK]!.needFrame = drawFrame;
     let changed = false;
     const w = [...wanted].filter((k) => slots[k] && !slots[k]!.gl && m.links?.[k - 1]?.visible);
     wanted.clear();
@@ -3790,7 +3798,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     let total = gpuNow();
     if (total > budget) {
       const shownK = (x: Slot) => (m.links?.[x.k - 1]?.visible ? 1 : 0);
-      const cand = slots.filter((x) => x.k > 0 && x.gl && x.k !== selK && (!shownK(x) || now - x.needAt > NEED_MS))
+      // SIZE2FIX: in view or needed: never released. Released only when hidden, or not needed for NEED_FRAMES frames
+      // drawn AND NEED_MS, never while its mesh is being asked nor within NEED_FRAMES frames of its detail coming back
+      // (a slow machine's frames are few: wall time alone released the link on screen, then asked it again)
+      const idle = (x: Slot) => drawFrame - (x.needFrame ?? -Infinity) >= NEED_FRAMES && now - x.needAt > NEED_MS;
+      const cand = slots.filter((x) => x.k > 0 && x.gl && x.k !== selK && !x.fetching && drawFrame - (x.loadFrame ?? -Infinity) >= NEED_FRAMES && (!shownK(x) || idle(x)))
         .sort((a, b) => shownK(a) - shownK(b) || a.needAt - b.needAt); // the hidden ones first, then the least recently needed
       for (const x of cand) {
         if (total <= budget) break;
