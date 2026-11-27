@@ -17,6 +17,7 @@
 //   --panel               opens the performance panel (its own GPU wait per frame is then in every frame)
 //   --strip N             a screenshot every N frames while moving and during the refill after a stop (0: none, the
 //                         default: a screenshot costs tens of ms and changes what it measures)
+//   --need-gb G           waits for G GB available before Chromium starts (default 3; a --project 7: its open peaks high)
 //   --no-profile          no CPU profile (the Profiler domain samples at 100 µs and costs a few % of script time)
 //   --query 'a=1&b=2'     more lab URL parameters
 //   --compare A B         prints a before/after table from two run folders (their summary.json), nothing else
@@ -37,6 +38,9 @@
 //   screenshot NAME       a PNG (device px) and a copy at most 1280 px wide
 //   sleep MS; mark LABEL  a pause; a label in the logs (and a screenshot)
 //   repeat N { steps }    the steps N times (one level)
+//   js EXPR; redraw       a page expression (g is window.__bbGl, e.g. "js g.lineEdges = true"); one whole frame now
+//   throughput; drawcalls whole frames under variants (edges, state, back faces, screen-size cut: GPU ms per million
+//                         triangles); the same triangles in 6,000 .. 17 draw calls and as multi-draws
 // Recorded into ccore/out/drive/NAME/ (git-ignored; files may hold your file names: never commit them):
 //   report.txt (the performance panel's "Copy report" text, read from perf.ts), frames.json and frames.tsv (every frame:
 //   kind, script ms, GPU ms by timer query or fence, draws, triangles, culled batches, proxies, outlines), inputs.json
@@ -52,7 +56,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port, vitePort } from "../test/ports.mjs";
-import { CHROMIUM, gpuFlags, RENDERER_EXPR } from "../test/lib/chromium.mjs";
+import { CHROMIUM, chromiumEnv, gpuFlags, RENDERER_EXPR } from "../test/lib/chromium.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = process.env.DRIVE_UI ? resolve(process.env.DRIVE_UI) : resolve(CCORE, "../web-ui"); // DRIVE_UI: another tree's web-ui (the code before a change)
@@ -169,8 +173,9 @@ export class Drive {
     const o = this.o;
     const [cw, ch] = String(o.size).split("x").map(Number);
     this.cw = cw, this.ch = ch;
-    mkdirSync(SCRATCH_ROOT, { recursive: true });
-    const tmp = mkdtempSync(join(SCRATCH_ROOT, "run-"));
+    const root = o.scratchRoot ?? SCRATCH_ROOT; // (a test: its own temp folder)
+    mkdirSync(root, { recursive: true });
+    const tmp = mkdtempSync(join(root, "run-"));
     this.temps.push(tmp);
     const home = join(tmp, "home"), config = join(tmp, "config"), cache = join(tmp, "cache");
     for (const d of [home, config, cache]) mkdirSync(d, { recursive: true });
@@ -181,7 +186,7 @@ export class Drive {
     this.port = port(`drive_host_${process.pid}`), this.vite = vitePort(`drive_${process.pid}`), this.token = `drive-${process.pid}`;
     let what = null, bytes = 0, synthDir = null;
     if (o.links) {
-      synthDir = join(SCRATCH_ROOT, `synth-${o.links}-${o.storeys}`);
+      synthDir = join(root, `synth-${o.links}-${o.storeys}`);
       mkdirSync(join(synthDir, "links"), { recursive: true });
     } else if (o.project) {
       // a scratch folder of symbolic links to every file beside the project: what the host writes (a cache, a
@@ -230,14 +235,15 @@ export class Drive {
     this.nLinks = (await this.q("links_panel").catch(() => ({ models: [] }))).models.length;
     const vite = this.start("vite", "npx", ["vite", "--port", String(this.vite), "--strictPort"], { cwd: UI, env: { ...process.env, BIMBLE_VITE_FROZEN: "1" } }); // no reload by an edit during the run
     await this.waitFor(`Vite on ${this.vite}`, 60000, async () => { if (vite.exitCode !== null) throw new Error(vite.out); return (await fetch(`http://localhost:${this.vite}/`)).ok; });
-    await this.waitFor("3 GB available", 600000, () => memGb() >= 3, 2000);
+    const need = Number(o.needGb ?? (o.project ? 7 : 3)); // a project of links peaks at several GB in the tab during its open
+    await this.waitFor(`${need} GB available`, 1800000, () => memGb() >= need, 2000);
     this.log(`${memGb().toFixed(1)} GB available, load ${loadNow()}; starting Chromium (LAB_GPU=${o.gpu}) at ${cw}x${ch} css px, dpr ${o.dpr}`);
     const prof = join(tmp, "chromium");
     this.chrome = this.start("chromium", CHROMIUM, ["--headless=new", ...gpuFlags(o.gpu), "--remote-debugging-port=0", `--user-data-dir=${prof}`,
-      "--no-first-run", "--no-default-browser-check", "--js-flags=--expose-gc", `--window-size=${cw},${ch}`, "about:blank"], { env: { ...process.env, TMPDIR: tmp } });
+      "--no-first-run", "--no-default-browser-check", "--js-flags=--expose-gc", `--window-size=${cw},${ch}`, "about:blank"], { env: chromiumEnv() }); // (a short TMPDIR: the singleton socket)
     this.minMem = memGb();
     this.dog = setInterval(() => this.sample(), 250);
-    const wsUrl = await this.waitFor("DevTools line", 60000, () => this.chrome.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1]);
+    const wsUrl = await this.waitFor("DevTools line", 120000, () => this.chrome.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1] ?? (this.chrome.exitCode !== null && Promise.reject(new Error(`Chromium exited: ${this.chrome.out.slice(-800)}`)))).catch((e) => { throw new Error(`${e.message}; Chromium said: ${this.chrome.out.slice(-800)}`); });
     this.cdp = await cdpConnect(wsUrl);
     const { targetId } = await this.cdp.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
@@ -249,10 +255,11 @@ export class Drive {
     this.tNav = Date.now();
     await this.S("Page.navigate", { url: `http://localhost:${this.vite}/?native=1&gl=1&port=${this.port}&token=${this.token}${o.panel ? "&perf=1" : ""}${o.query ? `&${o.query}` : ""}` });
     await this.waitFor("the page", 120000, () => this.ev("!!window.__bbGl"));
+    this.browserVersion = (await this.cdp.send("Browser.getVersion").catch(() => ({}))).product ?? "?"; // (numbers across a Chromium upgrade are not strictly comparable)
     this.gpu = await this.ev(RENDERER_EXPR);
     this.gpu.software = !this.gpu.hardware;
     this.ext = await this.ev(`(() => { const gl = document.getElementById("bimble").getContext("webgl2"); return ["WEBGL_multi_draw", "EXT_disjoint_timer_query_webgl2", "EXT_color_buffer_float", "WEBGL_draw_instanced_base_vertex_base_instance", "WEBGL_multi_draw_instanced_base_vertex_base_instance", "OVR_multiview2"].filter((e) => gl.getExtension(e)); })()`);
-    this.log(`adapter: ${this.gpu.renderer}${this.gpu.software ? " (SOFTWARE: a CPU rasteriser, not a GPU)" : ""}; extensions: ${this.ext.join(", ") || "none"}`);
+    this.log(`${this.browserVersion}; adapter: ${this.gpu.renderer}${this.gpu.software ? " (SOFTWARE: a CPU rasteriser, not a GPU)" : ""}; extensions: ${this.ext.join(", ") || "none"}`);
     if (o.profile) { await this.S("Profiler.enable"); await this.S("Profiler.setSamplingInterval", { interval: 200 }); }
     return this;
   }
@@ -393,6 +400,12 @@ export class Drive {
         }
         case "key": await this.S("Input.dispatchKeyEvent", { type: "keyDown", key: a[1] }); await this.S("Input.dispatchKeyEvent", { type: "keyUp", key: a[1] }); break;
         case "fit": await this.ev("(window.__bbGl.bench.snap(0, 0), 0)"); break;
+        case "camera": { // far: the home camera fitted; close: then 5 times nearer; look X Y Z D: at a world point from D mm (home angles)
+          if (a[1] === "far") await this.ev("(window.__bbGl.bench.snap(0, 0), 0)");
+          else if (a[1] === "close") await this.ev("(window.__bbGl.bench.snap(0, 0), window.__bbGl.bench.zoom(0.2), window.__bbGl.bench.frame(0, false), 0)");
+          else if (a[1] === "look") await this.ev(`(window.__bbGl.bench.look([${a[2]}, ${a[3]}, ${a[4]}], ${a[5]}), window.__bbGl.bench.frame(0, false), 0)`);
+          break;
+        }
         case "action": { const r = await this.hcall("action", a[1], a[2] ? JSON.parse(a.slice(2).join(" ")) : {}); if (r.status !== 200) throw new Error(`action ${a[1]}: ${r.text.slice(0, 200)}`); break; }
         case "open": await this.ev(`(() => { const b = [...document.querySelectorAll("button")].find((x) => x.getAttribute("aria-label") && /perf/i.test(x.className + x.innerHTML) && x.querySelector(".pft")); if (b && !document.querySelector('[data-bb="perf"]')) b.click(); return !!b; })()`); break;
         case "close": await this.ev(`(() => { const b = document.querySelector('[data-bb="perf-close"]'); if (b) b.click(); return !!b; })()`); break;
@@ -404,7 +417,66 @@ export class Drive {
           break;
         }
         case "mark": await this.screenshot(`mark-${a.slice(1).join("-")}`, true); break;
+        case "eval": { const v = await this.ev(`(() => { const g = window.__bbGl; return (${a.slice(1).join(" ")}); })()`); console.log(`drive: eval ${a.slice(1).join(" ")} = ${JSON.stringify(v)}`); break; }
+        case "js": await this.ev(`(() => { const g = window.__bbGl; ${a.slice(1).join(" ")}; return 0; })()`); break; // a page expression (g: window.__bbGl), e.g. "js g.lineEdges = true"
+        case "redraw": await this.ev("(window.__bbGl.bench.frame(0, false), 0)"); break; // one whole frame now
+        case "truth": { // what a still frame submits against what can be seen (the ground truth), and its time
+          const label = a[1] ?? `t${(this.truths ?? []).length}`;
+          const r = await this.ev(`(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r));
+            for (let i = 0; i < 4; i++) { await raf(); b.frame(0, false); }
+            const n0 = g.frameRecs.length, ms = [];
+            for (let i = 0; i < 5; i++) { await raf(); ms.push(b.frame(0, false)); }
+            for (let i = 0; i < 6; i++) await raf();
+            const recs = g.frameRecs.slice(n0).filter((f) => f.kind === "w"), still = { tris: g.frameTris, draws: g.frameDraws, js: recs.map((f) => f.js), gpu: recs.map((f) => f.gpu).filter((x) => x != null), ms, vis: g.vis ?? null };
+            const pic = b.read().rgba;
+            const truth = b.idCount();
+            await raf(); b.frame(0, false);
+            const missing = b.missing();
+            const n1 = g.frameRecs.length, mms = [];
+            for (let i = 0; i < 10; i++) { await raf(); mms.push(b.frame(i % 2 ? -0.0105 : 0.0105, true)); }
+            for (let i = 0; i < 6; i++) await raf();
+            const mr = g.frameRecs.slice(n1).filter((f) => f.kind === "m");
+            const moving = { ms: mms, tris: mr.map((f) => f.tris), gpu: mr.map((f) => f.gpu).filter((x) => x != null) };
+            b.frame(0, false);
+            let t = ""; for (let k = 0; k < pic.length; k += 32768) t += String.fromCharCode.apply(null, pic.subarray(k, k + 32768));
+            return { still, truth, missing, moving, pic: btoa(t) }; })()`);
+          const px = Buffer.from(r.pic, "base64");
+          let changed = null, any = null;
+          if (a[2] === "ref" || !this.refPic) this.refPic = px;
+          else if (this.refPic.length === px.length) {
+            changed = 0, any = 0;
+            for (let k = 0; k < px.length; k += 4) { const d = Math.max(Math.abs(px[k] - this.refPic[k]), Math.abs(px[k + 1] - this.refPic[k + 1]), Math.abs(px[k + 2] - this.refPic[k + 2])); if (d > 40) changed++; if (d > 0) any++; }
+          }
+          const row = { label, stillTris: r.still.tris, stillDraws: r.still.draws, stillMs: med(r.still.ms), stillGpu: med(r.still.gpu), stillJs: med(r.still.js), vis: r.still.vis,
+            truthElements: r.truth.elements, truthTris: r.truth.tris, truthPixels: r.truth.pixels, missing: r.missing?.n ?? null, missingIds: r.missing?.first ?? [],
+            movingMs: med(r.moving.ms), movingGpu: med(r.moving.gpu), movingTris: med(r.moving.tris), changed, any };
+          (this.truths ??= []).push(row);
+          writeFileSync(join(this.dir, "truth.json"), JSON.stringify(this.truths, null, 1));
+          this.log(`truth ${label}: ${JSON.stringify(row)}`);
+          break;
+        }
+        case "throughput": { // whole frames under variants: GPU ms (timer query) and ms per million triangles
+          const V = { base: "", lineEdges: "g.lineEdges = true;", "visible off": "g.visible = false;", "no front-to-back": "g.noFrontToBack = true;", noEdges: "g.noEdges = true;", "noEdges+cheapFrag": "g.noEdges = true; g.cheapFrag = true;", "noEdges+noState": "g.noEdges = true; g.noState = true;",
+            "noEdges+cullBack": "g.noEdges = true; g.cullBack = true;", "noEdges+noProxies": "g.noEdges = true; g.noProxies = true;", "stillPx1": "g.stillPx = 1;", "noEdges+stillPx1": "g.noEdges = true; g.stillPx = 1;" };
+          const rows = [];
+          for (const [name, set] of Object.entries(V)) {
+            const r = await this.ev(`(async () => { const g = window.__bbGl, raf = () => new Promise((r) => requestAnimationFrame(r));
+              delete g.noEdges; delete g.cheapFrag; delete g.noState; delete g.cullBack; delete g.noProxies; delete g.stillPx; delete g.lineEdges; delete g.noFrontToBack; g.visible = true; ${set}
+              for (let i = 0; i < 3; i++) { await raf(); g.bench.frame(0, false); }
+              const ms = [], n0 = g.frameRecs.length; for (let i = 0; i < 7; i++) { await raf(); ms.push(g.bench.frame(0, false)); }
+              for (let i = 0; i < 6; i++) await raf();
+              const recs = g.frameRecs.slice(n0).filter((f) => f.kind === "w");
+              delete g.noEdges; delete g.cheapFrag; delete g.noState; delete g.cullBack; delete g.noProxies; delete g.stillPx; delete g.lineEdges; delete g.noFrontToBack; g.visible = true;
+              return { ms, gpu: recs.map((f) => f.gpu).filter((x) => x != null), tris: g.frameTris, draws: g.frameDraws, plain: g.plain ?? null }; })()`);
+            const gm = med(r.gpu), tm = med(r.ms);
+            rows.push({ variant: name, totalMs: tm, gpuMs: gm, tris: r.tris, draws: r.draws, msPerMTris: (gm ?? tm) / Math.max(1e-9, r.tris / 1e6), plain: r.plain });
+          }
+          this.throughput = rows;
+          writeFileSync(join(this.dir, "throughput.json"), JSON.stringify(rows, null, 1));
+          break;
+        }
         case "drawcalls": { // the same triangles in N draw calls (and one multi-draw a model): what a draw call costs here
+          if (!(await this.ev("!!window.__bbGl.bench.drawCalls"))) { this.log("drawcalls: this page has no drawCalls hook (skipped)"); break; }
           const rows = [];
           for (const n of [6000, 2000, 600, 200, 60, 17]) rows.push(await this.ev(`window.__bbGl.bench.drawCalls(${n}, 3, false)`));
           for (const n of [6000, 600]) { const r = await this.ev(`window.__bbGl.bench.drawCalls(${n}, 3, true)`); if (r) rows.push({ ...r, multi: true }); }
@@ -460,7 +532,7 @@ export class Drive {
     const gpuOf = (f) => f.gpu ?? f.fence;
     const moving = kinds("m"), still = [...kinds("w")], slices = kinds("s");
     const s = {
-      name: basename(dir), at: new Date().toISOString(), load: loadNow(), adapter: this.gpu.renderer, software: this.gpu.software, extensions: this.ext, timer: page.timer,
+      name: basename(dir), at: new Date().toISOString(), load: loadNow(), browser: this.browserVersion, adapter: this.gpu.renderer, software: this.gpu.software, extensions: this.ext, timer: page.timer,
       size: this.o.size, dpr: Number(this.o.dpr), canvas: page.canvas, settings: this.o.settings ?? null, panel: !!this.o.panel, minMemGb: this.minMem, stopped: this.stopWhy,
       open: { firstPictureMs: page.proxyPreview ? page.proxyPreview.at : page.firstFrameMs, firstDetailMs: page.firstFrameMs, completeMs: page.fullFrameMs }, // performance.now() of the page (navigation start = 0)
       moving: { js: stat(moving.map((f) => f.js)), gpu: stat(moving.map(gpuOf).filter((x) => x != null)), draws: med(moving.map((f) => f.draws)), tris: med(moving.map((f) => f.tris)), outlines: med(moving.map((f) => f.outlines)), proxied: med(moving.map((f) => f.proxied)) },
@@ -472,7 +544,7 @@ export class Drive {
       network: { requests: this.net.size, bytes: [...this.net.values()].reduce((n, r) => n + r.bytes, 0) },
       memory: { rendererMaxMb: Math.max(0, ...this.memory.map((r) => r.renderer)), gpuProcessMaxMb: Math.max(0, ...this.memory.map((r) => r.gpuProcess)), hostMaxMb: Math.max(0, ...this.memory.map((r) => r.host ?? 0)), gpuBytes: page.gpuBytes },
       linkProxies: page.linkProxies.reduce((a, x) => ({ cells: a.cells + x.cells, drawnCells: a.drawnCells + x.drawnCells, drawnTris: a.drawnTris + x.drawnTris }), { cells: 0, drawnCells: 0, drawnTris: 0 }),
-      profileTop: top.slice(0, 10), drawcalls: this.drawcalls ?? null, shots: this.shots.map((x) => x.small ?? x.full), errors: this.consoleLines.length + (page.drv?.errors?.length ?? 0),
+      profileTop: top.slice(0, 10), drawcalls: this.drawcalls ?? null, throughput: this.throughput ?? null, truths: this.truths ?? null, shots: this.shots.map((x) => x.small ?? x.full), errors: this.consoleLines.length + (page.drv?.errors?.length ?? 0),
     };
     writeFileSync(join(dir, "summary.json"), JSON.stringify(s, null, 1));
     writeFileSync(join(dir, "summary.md"), summaryMd(s));
@@ -487,7 +559,7 @@ export class Drive {
     }
     for (const t of this.temps) rmSync(t, { recursive: true, force: true });
     this.temps = [];
-    if (this.o.clean && this.o.links) rmSync(join(SCRATCH_ROOT, `synth-${this.o.links}-${this.o.storeys}`), { recursive: true, force: true });
+    if (this.o.clean && this.o.links) rmSync(join(this.o.scratchRoot ?? SCRATCH_ROOT, `synth-${this.o.links}-${this.o.storeys}`), { recursive: true, force: true });
   }
 }
 
@@ -525,7 +597,7 @@ export function profileTop(p, n) {
 
 function summaryMd(s) {
   const st = (x) => (x && x.n ? `${f1(x.median)} / ${f1(x.p95)} / ${f1(x.max)} (n ${x.n})` : "–");
-  const L = [`# drive: ${s.name}`, "", `${s.at}; load ${s.load}; adapter \`${s.adapter}\`${s.software ? " — SOFTWARE (a CPU rasteriser): not a GPU's numbers" : " (real GPU)"}; GPU time by ${s.timer ? "timer query" : "fence (draw start to the GPU's end, to a loop's resolution)"}`,
+  const L = [`# drive: ${s.name}`, "", `${s.at}; load ${s.load}; ${s.browser ?? "?"}; adapter \`${s.adapter}\`${s.software ? " — SOFTWARE (a CPU rasteriser): not a GPU's numbers" : " (real GPU)"}; GPU time by ${s.timer ? "timer query" : "fence (draw start to the GPU's end, to a loop's resolution)"}`,
     `window ${s.size} css px at dpr ${s.dpr} (canvas ${s.canvas.join(" x ")}); settings ${s.settings ?? "default"}; panel ${s.panel ? "open" : "closed"}; extensions: ${s.extensions.join(", ") || "none"}`, "",
     "| | median / p95 / max ms |", "|---|---|",
     `| open → first picture / first detail / complete (page clock) | ${f0(s.open.firstPictureMs)} / ${f0(s.open.firstDetailMs)} / ${f0(s.open.completeMs)} |`,
@@ -539,6 +611,11 @@ function summaryMd(s) {
     `Link proxies: ${f0(s.linkProxies.cells)} cells held, last frame drew ${f0(s.linkProxies.drawnCells)} (${f0(s.linkProxies.drawnTris)} triangles).`,
     `Memory: renderer ≤ ${f0(s.memory.rendererMaxMb)} MB, GPU process ≤ ${f0(s.memory.gpuProcessMaxMb)} MB, host ≤ ${f0(s.memory.hostMaxMb)} MB, GPU buffers ${f0((s.memory.gpuBytes ?? 0) / 1048576)} MB; min available ${f1(s.minMemGb, 2)} GB${s.stopped ? `; STOPPED: ${s.stopped}` : ""}.`,
     `Network: ${s.network.requests} /mesh requests, ${f1(s.network.bytes / 1048576)} MB. Console errors: ${s.errors}.`, ""];
+  if (s.truths) L.push("Still frames against the ground truth (every shown element's faces as ids, read back), then 10 moving frames:", "",
+    "| label | still ms (GPU) | still triangles / draws | elements seen (pixels) | their triangles | submitted / seen | moving ms (GPU): triangles | pixels > 40 / any vs the first | seen but not drawn |", "|---|---|---|---|---|---|---|---|---|",
+    ...s.truths.map((r) => `| ${r.label} | ${f1(r.stillMs)} (${f1(r.stillGpu)}) | ${f0(r.stillTris)} / ${f0(r.stillDraws)} | ${f0(r.truthElements)} (${f0(r.truthPixels)}) | ${f0(r.truthTris)} | ${f1(r.stillTris / Math.max(1, r.truthTris))} | ${f1(r.movingMs)} (${f1(r.movingGpu)}): ${f0(r.movingTris)} | ${f0(r.changed)} / ${f0(r.any)} | ${f0(r.missing)} |`), "");
+  if (s.throughput) L.push("Whole frames under variants (median of 7; GPU by timer query; total: drawn then a 1x1 readPixels):", "", "| variant | GPU ms | total ms | triangles | draws | GPU ms per million triangles |", "|---|---|---|---|---|---|",
+    ...s.throughput.map((r) => `| ${r.variant} | ${f1(r.gpuMs)} | ${f1(r.totalMs)} | ${f0(r.tris)} | ${f0(r.draws)} | ${f1(r.msPerMTris, 2)} |`), `Models drawn without the state texel (u_plain): ${s.throughput[0]?.plain ? s.throughput[0].plain.filter(Boolean).length + " of " + s.throughput[0].plain.length : "?"}.`, "");
   if (s.drawcalls) L.push("The same triangles in N draw calls (whole faces of every loaded model; best of 3; ms):", "", "| parts asked | draw calls | triangles | script submit | to the pixels |", "|---|---|---|---|---|",
     ...s.drawcalls.filter(Boolean).map((r) => `| ${r.n}${r.multi ? " (multi-draw)" : ""} | ${f0(r.draws)} | ${f0(r.tris)} | ${f1(r.submit)} | ${f1(r.total)} |`), "");
   if (s.profileTop.length) L.push("CPU profile, top self time:", "", "| ms | % | function |", "|---|---|---|", ...s.profileTop.map((r) => `| ${f1(r.self)} | ${f1(r.pct)} | \`${r.name}\` ${r.url}:${r.line} |`), "");
