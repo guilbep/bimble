@@ -506,17 +506,17 @@ export class Drive {
           break;
         }
         case "throughput": { // whole frames under variants: GPU ms (timer query) and ms per million triangles
-          const V = { base: "", lineEdges: "g.lineEdges = true;", "visible off": "g.visible = false;", "no front-to-back": "g.noFrontToBack = true;", noEdges: "g.noEdges = true;", "noEdges+cheapFrag": "g.noEdges = true; g.cheapFrag = true;", "noEdges+noState": "g.noEdges = true; g.noState = true;",
+          const V = { base: "", lineEdges: "g.lineEdges = true;", "visible off": "g.visible = false;", "front-to-back": "g.frontToBack = true;", noEdges: "g.noEdges = true;", "noEdges+cheapFrag": "g.noEdges = true; g.cheapFrag = true;", "noEdges+noState": "g.noEdges = true; g.noState = true;",
             "noEdges+cullBack": "g.noEdges = true; g.cullBack = true;", "noEdges+noProxies": "g.noEdges = true; g.noProxies = true;", "stillPx1": "g.stillPx = 1;", "noEdges+stillPx1": "g.noEdges = true; g.stillPx = 1;" };
           const rows = [];
           for (const [name, set] of Object.entries(V)) {
             const r = await this.ev(`(async () => { const g = window.__bbGl, raf = () => new Promise((r) => requestAnimationFrame(r));
-              delete g.noEdges; delete g.cheapFrag; delete g.noState; delete g.cullBack; delete g.noProxies; delete g.stillPx; delete g.lineEdges; delete g.noFrontToBack; g.visible = true; ${set}
+              delete g.noEdges; delete g.cheapFrag; delete g.noState; delete g.cullBack; delete g.noProxies; delete g.stillPx; delete g.lineEdges; delete g.frontToBack; g.visible = true; ${set}
               for (let i = 0; i < 3; i++) { await raf(); g.bench.frame(0, false); }
               const ms = [], n0 = g.frameRecs.length; for (let i = 0; i < 7; i++) { await raf(); ms.push(g.bench.frame(0, false)); }
               for (let i = 0; i < 6; i++) await raf();
               const recs = g.frameRecs.slice(n0).filter((f) => f.kind === "w");
-              delete g.noEdges; delete g.cheapFrag; delete g.noState; delete g.cullBack; delete g.noProxies; delete g.stillPx; delete g.lineEdges; delete g.noFrontToBack; g.visible = true;
+              delete g.noEdges; delete g.cheapFrag; delete g.noState; delete g.cullBack; delete g.noProxies; delete g.stillPx; delete g.lineEdges; delete g.frontToBack; g.visible = true;
               return { ms, gpu: recs.map((f) => f.gpu).filter((x) => x != null), tris: g.frameTris, draws: g.frameDraws, plain: g.plain ?? null }; })()`);
             const gm = med(r.gpu), tm = med(r.ms);
             rows.push({ variant: name, totalMs: tm, gpuMs: gm, tris: r.tris, draws: r.draws, msPerMTris: (gm ?? tm) / Math.max(1e-9, r.tris / 1e6), plain: r.plain });

@@ -30,6 +30,7 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => bye(130
 const CAMERA = String.raw`(async (setCam, fast) => {
   const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r));
   const pix = () => b.read().rgba;
+  g.noProxies = true; // (the culling's exactness: far cells' proxies at 1 px stand for elements the ground truth draws)
   setCam(b);
   if (fast) { for (let i = 0; i < 5; i++) { b.frame(0.3, true); await raf(); } for (let i = 0; i < 5; i++) { b.frame(-0.3, true); await raf(); } b.frame(0, true); await raf(); await raf(); await raf(); }
   let usedFirst = null;
@@ -45,6 +46,7 @@ const CAMERA = String.raw`(async (setCam, fast) => {
   const truth = b.idCount();
   b.frame(0, false);
   const missing = b.missing();
+  delete g.noProxies;
   return { used, usedFirst, allTris: all.tris, visTris: vis.tris, hidden: vis.hidden, changed, any, seen: truth.elements, seenTris: truth.tris, missing: missing ? missing.n : -1, ids: missing ? missing.first : [] };
 })`;
 
@@ -76,6 +78,14 @@ async function main() {
   check("culling used on at least 50 of 60 cameras (this camera's pyramid)", usedN >= 50, `${usedN}`);
   check("after fast turns, the first still frame uses the moving frame's pyramid", firstUsed === fastN, `${firstUsed} of ${fastN}`);
   for (const k of ["far", "close", "inside"]) console.log(`  ${k}: submitted ${sum[k][0].toLocaleString("en-US")} -> ${sum[k][1].toLocaleString("en-US")} triangles; the seen elements' ${sum[k][2].toLocaleString("en-US")}`);
+  // the far view with its proxies (1 px, still) against its full detail: a picture within a stated bound (proxies are 3D2's,
+  // not this ticket's; the culling's truth is the sweep above, without them)
+  const prx = await d.ev(`(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r)); b.snap(0, 0);
+    g.noProxies = true; for (let i = 0; i < 3; i++) { await raf(); b.frame(0, false); } const a = b.read().rgba;
+    delete g.noProxies; for (let i = 0; i < 3; i++) { await raf(); b.frame(0, false); } const c = b.read().rgba; let n = 0, ink = 0;
+    for (let k = 0; k < a.length; k += 4) { if (Math.max(Math.abs(a[k] - c[k]), Math.abs(a[k + 1] - c[k + 1]), Math.abs(a[k + 2] - c[k + 2])) > 40) n++; if (a[k] < 235) ink++; }
+    return { changed: n, ink, cells: (g.linkProxies || []).reduce((t, x) => t + x.drawnCells, 0) }; })()`);
+  check("the far view with its proxies differs from its full detail on at most 2 % of the drawn pixels", prx.changed <= 0.02 * Math.max(1, prx.ink), `${prx.changed} of ${prx.ink} drawn pixels over 40 levels, ${prx.cells} proxy cells`);
   check("far and close cameras submit fewer triangles with culling", sum.far[1] < 0.8 * sum.far[0] && sum.close[1] < 0.5 * sum.close[0], `far ${sum.far[1]}/${sum.far[0]}, close ${sum.close[1]}/${sum.close[0]}`);
 
   // the setting off from the Settings dialog (File › Settings): nothing left out; on again

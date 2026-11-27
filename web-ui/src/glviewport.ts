@@ -752,8 +752,9 @@ interface GlStats {
   vis?: { on: boolean; used: boolean; pyramid: boolean; hidden: number; hiddenTris: number; masked: number; ms: number };
   /** VIS1 (a bench hook): every slice of the fill presented as it is drawn (before: one by one on screen). */
   showSlices?: boolean;
-  /** VIS1 (a bench hook): the merged ranges in list order, not nearest first. */
-  noFrontToBack?: boolean;
+  /** VIS1 (a bench hook): the merged ranges nearest first (off: Apple's GPUs remove hidden surfaces per tile, so the order
+   *  gains nothing there, and with culling it changed which of two coplanar faces won: edges found on screen moved). */
+  frontToBack?: boolean;
   /** VIS1 (a bench hook): the budget's cut by bisection (budgetCut) whatever the number of batches. */
   exactCut?: boolean;
   /** VIS1: per model whether its draws skip the state texel (u_plain). */
@@ -2810,7 +2811,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       d.runs = d.runsMemo!;
       visHid += d.hid!, visHidTris += d.hidTris!;
     }
-    stats.vis = { on: visibleOn(), used: useVis, pyramid: hiz?.ready ? hiz.ready.key === vkey : false, hidden: visHid, hiddenTris: visHidTris, masked: visMasked, ms: performance.now() - tVis };
+    if (!idMode) stats.vis = { on: visibleOn(), used: useVis, pyramid: hiz?.ready ? hiz.ready.key === vkey : false, hidden: visHid, hiddenTris: visHidTris, masked: visMasked, ms: performance.now() - tVis };
     // ---- end VIS1 ----
     // the outlines of what a moving frame could not draw (its batches not finished)
     let unDs = movingNow ? seen.filter(({ d }) => d.k1 < d.b.n) : [];
@@ -2984,7 +2985,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
       flush();
       // VIS1 (option 6): the ranges nearest first, so the depth test rejects what is behind before shading it
-      if (multiDraw && offs.length > 1 && stats.noFrontToBack !== true) {
+      if (multiDraw && offs.length > 1 && stats.frontToBack === true) {
         const ord = [...offs.keys()].sort((i, j) => near[i]! - near[j]!);
         const o2 = new Int32Array(ord.length), c2 = new Int32Array(ord.length);
         ord.forEach((k, i) => { o2[i] = offs[k]!, c2[i] = cnts[k]!; });
@@ -3002,7 +3003,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
       // LNK3D (D): each link's loaded detail (VIS1: the nearest link first)
       const near = new Map<number, number>();
-      if (stats.noFrontToBack !== true) for (const { d } of seen) if (d.k1 > d.k0) near.set(d.model, Math.min(near.get(d.model) ?? Infinity, d.dist ?? Infinity));
+      if (stats.frontToBack === true) for (const { d } of seen) if (d.k1 > d.k0) near.set(d.model, Math.min(near.get(d.model) ?? Infinity, d.dist ?? Infinity));
       for (const x of [...slots].sort((p, q) => (near.get(p.k) ?? Infinity) - (near.get(q.k) ?? Infinity))) if (x.k > 0 && x.gl) { useModel(x.gl), setModel(x.k), gl.bindVertexArray(vao); merged(x.k); instFaces(x.k); }
       if (!slice || fill?.t === Infinity) for (const c of linkCut) { const n = drawLinkCells(c.x, c.cells, c.mdl, c.colour); fTris += n, fDraws++, linkPrxTris += n; } // LNK3D (C)
       useModel(hostGl), setModel(0), gl.bindVertexArray(vao);
