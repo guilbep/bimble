@@ -25,9 +25,16 @@
 #include "ifc_read.h"
 #include "platform.h"
 #include "viewfile.h"
+#include "hlod.h"
 
 #define CC_LINK_CACHE_MIN ((uint64_t)1 << 20) /* bytes; below, no cache (ADR 0079) */
-#define CC_LINK_CACHE_FORMAT "bimble-link-cache 4" /* 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD */
+#define CC_LINK_CACHE_FORMAT "bimble-link-cache 5" /* 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD; 5 (SIZE2): HLOD gzipped within a budget, PRPZ */
+/* SIZE2: the proxies' byte budget per link (cc_link_hlod_cap): 15 % of its geometry, within these. */
+#define CC_LINK_HLOD_MIN ((uint64_t)256 << 10)
+#define CC_LINK_HLOD_MAX ((uint64_t)32 << 20)
+/* SIZE2: the most triangles of one link cell's proxy (3D2's 65,536 for the open model): the root of a large
+ * link stays within the budget's floor, so the coarsest level is always kept. */
+#define CC_LINK_HLOD_PROXY_TRIS 4096u
 
 enum { CC_JOB_OK = 0, CC_JOB_FAILED = -1, CC_JOB_REFUSED = -2, CC_JOB_CANCELLED = -3 };
 
@@ -56,6 +63,11 @@ typedef struct cc_link_job {
     uint64_t hlod_cells, hlod_tris, hlod_bytes;
     double hlod_ms;
     char hlod_why[160];  /* "" or why none were baked */
+    /* SIZE2: the geometry section's bytes (the proxies' budget), the cells left without a proxy, the HLOD's
+     * stored (gzipped) bytes, the property sets' bytes as read, each section's bytes (HEAD, META, GEOR, ELEM,
+     * SRCE, HLOD, PROP, PRPZ) */
+    uint64_t geom_bytes, hlod_stored, psets_raw, sections[8];
+    uint32_t hlod_dropped;
 } cc_link_job;
 
 /* A new job for `path` (copied). NULL out of memory. */
@@ -68,6 +80,11 @@ void cc_link_job_free(cc_link_job *j);
 int cc_link_job_done(cc_link_job *j);
 /* The session goes while the job may run: cancelled, and freed by whichever side ends last. */
 void cc_link_job_orphan(cc_link_job *j);
+
+/* SIZE2: the proxies' budget of a link whose geometry section is `geom_bytes` long, and the budget applied:
+ * the finest cells' proxies dropped (the coarsest kept) until the rest fit `cap` bytes; the cells dropped. */
+uint64_t cc_link_hlod_cap(uint64_t geom_bytes);
+uint32_t cc_link_hlod_budget(cc_hlod *h, uint64_t cap);
 
 /* The SRCE text of an IFC now (`head`, `tail`: its first and last MiB, NULL when unread), into
  * out[0..n). 0 ok. */

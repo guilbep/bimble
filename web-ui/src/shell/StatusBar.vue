@@ -82,13 +82,19 @@ const chips = (): Chip[] => {
     <span v-for="k in shownLinks" :key="k.id" data-bb="status-chip" class="chip c-s nx">{{ t("status.linked", { name: k.name.replace(/\.[^.]+$/, "") }) }}</span>
     <span v-if="preview" class="mono q" style="font-size:12px" data-bb="status-preview">{{ preview }}</span>
     <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ counts() }}</span>
-    <!-- GPU1 (ADR 0083): the performance panel, opt-in (also ?perf=1) -->
-    <button type="button" class="pf" data-bb="status-perf" :aria-pressed="currentPanel === 'performance'" :title="t('perf.openTitle')"
-      @click="currentPanel = currentPanel === 'performance' ? null : 'performance'">{{ t('perf.open') }}</button>
-    <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
-      <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
-        :aria-pressed="lang === l" :lang="l" :title="t(l === 'fr' ? 'status.langFr' : 'status.langEn')"
-        @click="setLang(l)">{{ l.toUpperCase() }}</button>
+    <!-- SIZE2: the end group never shrinks: what is before it (hint, coordinates, chips, counts) gives way first -->
+    <span class="end" data-bb="status-end">
+      <!-- GPU1 (ADR 0083): the performance panel, opt-in (also ?perf=1, File > Performance…, the palette); SIZE2: always
+           reachable, an icon alone in a narrow window -->
+      <button type="button" class="pf" data-bb="status-perf" :aria-pressed="currentPanel === 'performance'" :title="t('perf.openTitle')"
+        :aria-label="t('perf.open')" @click="currentPanel = currentPanel === 'performance' ? null : 'performance'"><svg class="pfi" width="14"
+          height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path
+          d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/></svg><span class="pft">{{ t('perf.open') }}</span></button>
+      <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
+        <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
+          :aria-pressed="lang === l" :lang="l" :title="t(l === 'fr' ? 'status.langFr' : 'status.langEn')"
+          @click="setLang(l)">{{ l.toUpperCase() }}</button>
+      </span>
     </span>
   </footer>
 </template>
@@ -123,6 +129,14 @@ const chips = (): Chip[] => {
 /* active: inline style="background:#141414;color:#F5F2EB" in the reference (= .seg .on) */
 .seg .on { background: var(--bb-ink); color: var(--bb-on-ink); }
 /* GPU1: the performance panel's button, quiet as the counts beside it */
-.pf { border: 0; background: none; padding: 2px 6px; border-radius: var(--bb-radius-pill); color: var(--bb-stone); font: inherit; font-size: 12px; cursor: pointer; }
+.pf { border: 0; background: none; padding: 2px 6px; border-radius: var(--bb-radius-pill); color: var(--bb-stone); font: inherit; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .pf[aria-pressed="true"] { background: var(--bb-sunk); color: var(--bb-ink); }
+/* SIZE2: the status bar never pushes its end group (Performance, language) out: everything before it may shrink
+   (clipped with an ellipsis), the end group may not; the bar clips what is left */
+.status { overflow: hidden; }
+.status > :not(.end) { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status > .coords { flex: 0 1 47ch; min-width: 0; }
+.status > .end { flex-shrink: 0; margin-left: auto; display: inline-flex; align-items: center; }
+/* a narrow window: the button's icon alone (its name in aria-label and title) */
+@media (max-width: 1100px) { .pft { display: none; } }
 </style>

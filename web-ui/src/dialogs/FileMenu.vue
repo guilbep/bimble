@@ -9,6 +9,7 @@ import { act, can } from "../shell/send";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/filemenu";
 import { currentDialog } from ".";
+import { currentPanel } from "../panels"; // SIZE2
 import { HIDE_NOT_AVAILABLE, has, notYetAction } from "../shell/capability"; // FAKE1
 import { exportFormat } from "./Export.vue"; // DXF1
 import { shortcutFor } from "../shell/keys";
@@ -22,7 +23,7 @@ const UP = '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v8h14v-8"/
 const INFO = '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>';
 
 // KEY1: the shortcut shown is the key table's (shell/keys.ts, Rust's): none for Open, Print, Settings (Rust has none).
-interface Entry { key: Key; icon: string; action?: string; missing?: string; dialog?: string; format?: "dxf"; cap?: string }
+interface Entry { key: Key; icon: string; action?: string; missing?: string; dialog?: string; format?: "dxf"; cap?: string; panel?: string }
 const sections: { title: Key; entries: Entry[] }[] = [
   { title: "filemenu.files", entries: [
     { key: "filemenu.new", icon: NEW, action: "new" },
@@ -52,6 +53,8 @@ const sections: { title: Key; entries: Entry[] }[] = [
   { title: "filemenu.project", entries: [
     { key: "filemenu.projectInfo", icon: INFO, action: "project" },
     { key: "filemenu.history", icon: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/>', action: "history" },
+    // SIZE2: the performance panel (also the status bar's button and the palette)
+    { key: "filemenu.performance", icon: '<path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/>', panel: "performance" },
     { key: "filemenu.settings", icon: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>', action: "settings" },
     { key: "filemenu.about", icon: INFO, action: "about" },
   ] },
@@ -73,6 +76,11 @@ function editable(): boolean {
   void state.value;
   try { return query<{ editable?: boolean }>("state").editable === true; } catch { return false; }
 }
+/** SIZE2: a panel of the lab (the performance panel), as the status bar's button opens it. */
+function openPanel(name: string) {
+  currentDialog.value = null;
+  currentPanel.value = name;
+}
 function run(name?: string, format?: "dxf") {
   currentDialog.value = null;
   exportFormat.value = format ?? null; // DXF1
@@ -85,9 +93,9 @@ function run(name?: string, format?: "dxf") {
     <template v-for="s in sections" :key="s.title">
       <div class="eyebrow">{{ tx(s.title) }}</div>
       <button v-for="e in s.entries.filter((x) => !(HIDE_NOT_AVAILABLE && notYet(x)))" :key="e.key" class="ti" type="button" role="menuitem"
-        :disabled="!e.dialog && (!on(e.action) || notYet(e))" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`" :data-format="e.format"
+        :disabled="!e.dialog && !e.panel && (!on(e.action) || notYet(e))" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.panel ?? e.missing}`" :data-format="e.format"
         :data-not-yet="notYet(e) ? '' : undefined" :title="notYet(e) ? t('na.tooltip', { name: tx(e.key) }) : undefined"
-        @click="e.dialog ? (currentDialog = e.dialog) : run(e.action, e.format)">
+        @click="e.dialog ? (currentDialog = e.dialog) : e.panel ? openPanel(e.panel) : run(e.action, e.format)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="e.icon"></svg>
         <span style="flex:1">{{ tx(e.key) }}</span><span class="mono" data-bb="file-menu-kbd">{{ shortcutFor(e.action) }}</span>
       </button>

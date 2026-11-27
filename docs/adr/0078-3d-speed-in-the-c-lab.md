@@ -287,6 +287,67 @@ each input's feedback 29-120 ms (hide a link, show it, hide an element, a class,
 colour, the note following it), no `/mesh` request and no draw list rebuilt for any of them; shown
 again, the same picture (0 pixels differ).
 
+## Amendment 4 (27 Nov 2026, ticket SIZE2): a link's mesh on its own, compact, not kept in the page
+
+The owner, on a local folder of 17 IFC files (3.9 GB) linked into a project: "how is that that our bimble-view are so
+big?"; the tab's renderer process at 3.8 GB, the host serving a /mesh of 728,838,144 bytes for 16 links whose caches'
+geometry sections sum to about 230 MB. Measured here: /mesh did send each link's shapes once (BMSH version 3: no copy
+expanded); its size was the raw form, 12 bytes a vertex, 12 a triangle, 32 a segment, against the cache's mesh codec
+(BMG1: 1/16 mm varint deltas): 3.2 times the caches' geometry on the synthetic set as on the owner's. The page then held
+that answer, a merged copy of every array (`parseMesh`) and each link's draw lists, after the GPU had them. Choices by
+Claude on ticket SIZE2 under the same delegation.
+
+23. **A link's mesh on its own, in the cache's codec: BMSH version 4** (`ccore/src/scene_bmsh.h`; `GET /mesh?link=k`,
+   `cc_link_mesh`): version 3's rows, the shape of each element (a placement only for an element that places a shape),
+   then each block (an own mesh or a shape, version 3's first-use order) as one BMG1 mesh. The page reads it back into
+   version 3 (`web-ui/src/gl/bmsh4.ts`, in slices of 25 ms; the C reader `cc_bmsh4_to_bmsh3` gives the same bytes and
+   is the hostile-input test's). `GET /mesh?shapes=1&lazy=1` sends the open model and the LNKS trailer version 3: each
+   link's head (name, flags, placement, colour, its element count, the links' mesh key), no mesh. **Alternative:** gzip
+   over HTTP (the core's deflate on 700 MB per open; f32 positions compress badly) or 16-bit positions per element's box
+   in the GPU buffers (halves the GPU bytes too; a shader and every reader of positions to change: left).
+24. **The page keeps no link's heavy arrays once on the GPU.** The mesh is one table of rows (ids, ranges, shapes,
+   placements: merged as before) and per model its own arrays (`MeshPart`, never merged); a link's are dropped with its
+   draw lists once its buffers and lists are uploaded (`dropPart`). What stays per element: its row (22-byte id as a JS
+   string, category, six u32 ranges), its shape and placement (52 bytes), its box twice (scene and own frame, 48), its
+   batch, face, edge, instance and group slots (20), its state texel (4) and shown flag (1): about 200 bytes an element
+   with the id, against about 40 bytes a triangle before. Each link's batches are made once per mesh and kept (their
+   order is what its face list on the GPU follows), so a later `drawLists` (the open model's proxies) needs no link's
+   arrays. **Picks read the GPU**: an element of a dropped link has its vertices and its face or shape indices read back
+   (`getBufferSubData`, `trisOf`), kept in a cache of 8 MB; a released link (no GPU buffers) is not picked and is asked
+   back. **Alternative:** ask the core for picks on links (it has the box tree): asynchronous, and the sync callers (the
+   wheel's pivot, the pointer readout, the tests' scans of thousands of points) would each wait for the host.
+25. **A released link's detail comes back by asking its mesh again** (`refetchSlot`: `GET /mesh?link=k`, then its lists
+   from its kept order, then dropped again), not from a page copy. Shown again after a release: 158 ms (lab_links_3d,
+   SwiftShader), the same pixels.
+26. **Proxies baked into a link's cache within a budget** (cache format 5, ADR 0079 amendment): at most 15 % of its
+   geometry section (256 KiB to 32 MiB), the finest cells' proxies left out first (the coarsest kept: a released link is
+   drawn by its coarsest usable proxies), 4,096 triangles at most a cell (65,536 for the open model's), gzipped on disk
+   (served inflated, bounded). **Alternative:** 16-bit positions per cell, proxies of a shape instanced, coarser levels
+   below the root: left (see "What is left").
+
+### Evidence (ticket SIZE2)
+
+`ccore/tools/frames.mjs --links 17` (the synthetic set: 17 links of 160 unique meshes, 272 MB of IFC), native host
+(clang), `LAB_GPU=vulkan` (headless Chromium on the machine's GPU: ANGLE, Mesa, Apple M1 Pro), before (`next`) and after:
+
+| | caches (ELEM / HLOD / PROP) | /mesh bytes served | host RSS | tab RSS (GPU process) | JS heap + array buffers | GPU | first picture → complete | still / moving frame |
+|---|---|---|---|---|---|---|---|---|
+| before | 55.4 MB (9.37 / 8.18 / 37.8) | 30.06 MB | 211 MB | 888 MB (110) | 4.1 + 56.7 MB | 36.6 MB | 355 → 534 ms | 4.7 / 1.7 ms |
+| after | 20.2 MB (9.37 / 1.12 / 9.71 PRPZ) | 9.43 MB | 138 MB | 835 MB (113) | 4.2 + 3.9 MB | 34.4 MB | 359 → 869 ms | 6.6 / 4.7 ms |
+
+The pictures of three fixed cameras: 0 of 538,248 pixels differ (at all). The tab's RSS is mostly Chromium's own and its
+GPU driver's on this set; the page's array buffers fall 56.7 → 3.9 MB (the part that grows with triangles). "Complete"
+is later: the links' meshes are asked one after the other and read back in slices.
+
+A local folder of 17 IFC files (4.18 GB, 252,189 elements, 22.5 M stored triangles), the same tool's folder mode
+(`FRAMES_LINK_FOLDER`, `LAB_GPU=vulkan`, a watchdog at 2.5 GB available): /mesh and the links' meshes 728.8 MB (the
+owner's host log, before) → 227.2 MB served; the tab's renderer process 3.8 GB (the owner's, before; not measured again
+here: the machine's memory rule) → 671 MB after the open, JS heap 59 MB + 76 MB array buffers, GPU 1.62 GB (all 17
+links' detail within the default budget); still frame 104 ms (67.9 M triangles drawn, 5,553 draws), moving 77 ms
+(535,514 triangles); first picture (the links' proxies) 0.76 s, the first detailed frame 10.5 s. Left: the JS heap
+peaked at 2.0 GB during the open (every link's mesh read back before the first upload: decision 24 drops them after);
+uploading each link as it arrives would bound that peak.
+
 ## What is left
 
 Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core), GPU occlusion
@@ -309,11 +370,11 @@ Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core)
 - **Rust's CPU occlusion (#5), screen edges while moving (#6), GPU culling of copies (#10)**: not
   ported (the queries stand for #5; #6 needs a depth read-back pass; #10 needs compute shaders).
 - **Proxies of linked models**: done by amendment 3 (baked in each link's cache).
-- **For 100-200 million triangles** (amendment 3's numbers): the page keeps its own copy of every
-  link's mesh (JS memory: the parsed BMSH, about 40 bytes a triangle with its lists), so the budget frees
-  the GPU's copy only; the next step is a mesh per link (`GET /mesh?link=k`, the trailer cut in parts)
-  fetched when needed and dropped from the page too, then tiles streamed by view (the link's HLOD leaves
-  as the unit: the cache already orders them). Quantised vertices (16-bit positions in each leaf's box,
+- **For 100-200 million triangles** (amendment 3's numbers): a mesh per link, fetched and dropped from the page, is
+  done (amendment 4). Left: every link's mesh is still fetched at open (one after the other) and uploaded before the
+  budget releases some; tiles streamed by view (the link's HLOD leaves as the unit: the cache already orders them) would
+  fetch only what the view needs. Proxies of a shared shape instanced, levels coarser than a cell's 4,096 triangles (a
+  link at 50 px should cost a few hundred), 16-bit positions per cell: not built. Quantised vertices (16-bit positions in each leaf's box,
   8-bit normals) would halve the GPU bytes of positions; the state texel per element is already 4 bytes.
 - **Screen-space edges** (in place of the edge pass): a pass of the element id and depth into a render
   target (WebGL2: an R32UI colour attachment beside the depth), then a full-screen pass drawing a line

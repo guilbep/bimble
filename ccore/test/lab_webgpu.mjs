@@ -16,12 +16,17 @@
 //    frame (the budget) on WebGPU is not empty: at least 20 % of the still picture's drawn pixels
 //    (frames.mjs's rule). When no adapter runs here, part 2 prints "SKIP WebGPU parity: <reason>"
 //    (ci/run.sh adds it to the suite's line) and only part 1 counts.
+// 3. LAB_GPU=vulkan (lib/chromium.mjs, REAL1: the machine's GPU, Dawn's Vulkan on Mesa): the real
+//    adapter is accepted WITHOUT ?gpuSoftware=1 (Dawn names Asahi's architecture "software"; it is
+//    not a fallback adapter and fills like a GPU), the panel shows its names as the API gives them and
+//    no "software" line; then the same pictures as 2, with no ?gpuSoftware=1, on the real GPU.
 // Prints "N passed, M failed"; exits non-zero on a failure.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CCORE, lab, sleep, waitFor } from "./lib/lab.mjs";
+import { LAB_GPU, rendererInfo, webgpuFlags } from "./lib/chromium.mjs";
 
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
@@ -29,9 +34,11 @@ const check = (name, ok, detail = "") => {
   else failed++;
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`);
 };
-// Dawn's Vulkan backend on SwiftShader: --use-webgpu-adapter=swiftshader alone gives an adapter whose
-// canvas cannot present here ("A valid external Instance reference no longer exists", Chromium 153).
-const WEBGPU_FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--disable-vulkan-surface"];
+// The flags that add a WebGPU adapter: Dawn's Vulkan on SwiftShader by default, the machine's GPU under
+// LAB_GPU=vulkan (lib/chromium.mjs). SOFT: the adapter is a fallback one, asked with ?gpuSoftware=1.
+const WEBGPU_FLAGS = webgpuFlags();
+const SOFT = LAB_GPU === "software";
+const GPUQ = SOFT ? "gpu=webgpu&gpuSoftware=1" : "gpu=webgpu";
 const BG = [247, 247, 245];
 const TOL_LEVELS = 24, TOL_SHARE = 0.01;
 const CAMS = [[0, 0], [0.8, -0.2], [2.4, 0.3]];
@@ -95,17 +102,17 @@ async function model(name, file, frameTest) {
     check(`${name}: an element under the centre for the states`, typeof id === "string", String(id));
     const states = STATES(id);
     const gl = await pictures(L, "gpu=webgl2", false, id, states);
-    const gp = await pictures(L, "gpu=webgpu&gpuSoftware=1", true, id, states);
+    const gp = await pictures(L, GPUQ, true, id, states);
     const info = await L.evalJs("({ scene: window.__bbGpu?.scene() ?? null, err: window.__bbGl.error })");
     console.log(`${name}: WebGPU scene ${JSON.stringify(info.scene)}; adapter ${JSON.stringify(gp.r.adapter)}`);
-    check(`${name}: ?gpu=webgpu&gpuSoftware=1 draws with WebGPU`, gp.r.using === "WebGPU", JSON.stringify(gp.r));
+    check(`${name}: ?${GPUQ} draws with WebGPU`, gp.r.using === "WebGPU", JSON.stringify(gp.r));
     for (const [k, a] of gl.out) {
       const c = compare(a, gp.out.get(k));
       check(`${name}: ${k}: WebGPU = WebGL2 within ${TOL_LEVELS} levels on ${100 * (1 - TOL_SHARE)} % of the pixels`, c.share <= TOL_SHARE,
         `${c.any} pixels differ at all, ${c.over} by more than ${TOL_LEVELS} (${(100 * c.share).toFixed(3)} %), max ${c.max}${c.size ? `, ${c.size}` : ""}; ${inked(a)} drawn pixels`);
     }
     // GPU culling of copies (the compute pass, an indirect draw per group)
-    const gc = await pictures(L, "gpu=webgpu&gpuSoftware=1&gpuCull=1", true, id, [states[0]]);
+    const gc = await pictures(L, `${GPUQ}&gpuCull=1`, true, id, [states[0]]);
     const cs = await L.evalJs("({ cull: window.__bbPerf.snapshot().renderer.gpuCull, scene: window.__bbGpu?.scene() ?? null, draws: window.__bbGl.frameDraws })");
     console.log(`${name}: GPU culling: ${JSON.stringify(cs)}`);
     check(`${name}: ?gpuCull=1 turns GPU culling on`, cs.cull === true);
@@ -134,7 +141,9 @@ async function model(name, file, frameTest) {
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-webgpu-"));
 try {
   // ---- 1. the fallback (always): navigator.gpu with no adapter ----
-  const L = await lab({ name: "lab_webgpu", model: join(CCORE, "golden/frame.json"), query: "gpu=webgpu&perf=1" });
+  // (SwiftShader whatever LAB_GPU says: Chromium on the machine's Vulkan has an adapter even without
+  // --enable-unsafe-webgpu, and this part is the no-adapter case)
+  const L = await lab({ name: "lab_webgpu", model: join(CCORE, "golden/frame.json"), query: "gpu=webgpu&perf=1", gpu: "software" });
   let adapterHere = null;
   try {
     const r = await settled(L, "any");
@@ -152,11 +161,21 @@ try {
     check("no adapter: the report's renderer line says WebGL2, asked WebGPU, and why", /^renderer: WebGL2 \(asked: webgpu\); WebGPU not used: .*no adapter/m.test(text));
     check("no adapter: no uncaught page error", L.errors.length === 0, L.errors.join(" | "));
     // ---- 2. a software adapter, when this machine has one ----
-    await L.open("gpu=webgpu&perf=1", WEBGPU_FLAGS);
+    await L.open("gpu=webgpu&perf=1", WEBGPU_FLAGS, LAB_GPU);
     const r2 = await settled(L, "any");
     adapterHere = /no adapter|no WebGPU/.test(r2.reason ?? "") ? null : r2;
-    if (adapterHere) {
+    if (adapterHere && SOFT) {
       check("a fallback (software) adapter is refused without ?gpuSoftware=1: WebGL2 draws", r2.using === "WebGL2" && /fallback/.test(r2.reason ?? ""), JSON.stringify(r2));
+    } else if (adapterHere) { // REAL1: the machine's GPU, whatever Dawn calls its architecture
+      const gl = await rendererInfo(L.evalJs);
+      console.log(`LAB_GPU=${LAB_GPU}: WebGL2 ${gl.renderer}; WebGPU adapter ${JSON.stringify(r2.adapter)}`);
+      check(`LAB_GPU=${LAB_GPU}: the real adapter is accepted without ?gpuSoftware=1: WebGPU draws`, r2.using === "WebGPU", JSON.stringify(r2));
+      check(`LAB_GPU=${LAB_GPU}: not a fallback adapter, not labelled software (the evidence: ${r2.adapter?.evidence})`, r2.adapter?.fallback === false && r2.adapter?.software === false, JSON.stringify(r2.adapter));
+      check(`LAB_GPU=${LAB_GPU}: the fill rate was measured and is a GPU's`, (r2.adapter?.fillMpxS ?? 0) >= 2000, String(r2.adapter?.fillMpxS));
+      await waitFor("the panel's adapter", 20000, () => L.evalJs("(() => { const e = document.querySelector('[data-bb=perf-adapter]'); return !!e && /vendor/.test(e.textContent); })()")).catch(() => null);
+      const pa = await L.evalJs("({ names: document.querySelector('[data-bb=perf-adapter]')?.textContent.trim() ?? '', soft: !!document.querySelector('[data-bb=perf-software]'), fill: document.querySelector('[data-bb=perf-fill]')?.textContent.trim() ?? '' })");
+      console.log(`panel: ${JSON.stringify(pa)}`);
+      check(`LAB_GPU=${LAB_GPU}: the panel shows GPUAdapterInfo's names as given and no "software" line`, /vendor/.test(pa.names) && !pa.soft && /\d/.test(pa.fill), JSON.stringify(pa));
     } else console.log(`SKIP WebGPU parity: no WebGPU adapter in Chromium here (${r2.reason}); the fallback above ran instead`);
   } finally {
     await L.close();

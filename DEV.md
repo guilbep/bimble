@@ -200,6 +200,44 @@ it serves, and the page never guesses (FAKE1, `web-ui/src/shell/capability.ts`).
 - `ccore/tools/ifc_dump`: built by `build.sh tcc|native`, dumps what C reads or imports from any
   IFC file (`ccore/README.md`).
 
+### 3D timings on the machine's GPU, not SwiftShader (spike NAT1, ticket REAL1, 26 Nov 2026)
+
+Headless Chromium as the lab tests start it by default draws WebGL2 with **SwiftShader** (a CPU
+rasteriser) and has **no WebGPU adapter**: every frame time committed before REAL1 is SwiftShader's.
+On the dev machine (Apple M1 Pro, Asahi Linux, Mesa) these flags give headless Chromium 153 the real
+GPU (checked with `WEBGL_debug_renderer_info` and `navigator.gpu.requestAdapter()`):
+
+| flags (with `--headless=new`) | WebGL2 renderer | WebGPU adapter |
+|---|---|---|
+| none / `LAB_GPU=software` (the default) | ANGLE, Vulkan 1.3 (SwiftShader Device) | none (with `--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader`: SwiftShader, `isFallbackAdapter`) |
+| `--use-angle=gl --ignore-gpu-blocklist` (`LAB_GPU=gl`) | ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2): **hardware** | none |
+| `--use-angle=vulkan --enable-features=Vulkan --ignore-gpu-blocklist` (+ `--enable-unsafe-webgpu`) (`LAB_GPU=vulkan`) | ANGLE (Mesa, Vulkan 1.4.363 (Apple M1 Pro (G13S C0)), Borealis): **hardware** | vendor `mesa`, architecture `software` (Dawn's name for Mesa's vendor id), **not** a fallback adapter: the M1 Pro (fill 5,800-12,900 Mpx/s against SwiftShader's 720-1,100) |
+| `--use-gl=egl` | none (refused: "not found in allowed implementations") | none |
+
+One place decides: `ccore/test/lib/chromium.mjs` (`LAB_GPU=software|gl|vulkan`, default `software` so CI
+and the committed SwiftShader numbers do not change). It gives the flags (`gpuFlags()`, `webgpuFlags()`)
+and, once the page is up, `rendererInfo()` → `{renderer, hardware}`; `checkGpu()` stops a run whose GPU
+is not the one asked (Chromium falls back to SwiftShader silently when a flag is refused). Used by
+`tools/frames.mjs`, `tools/ux.mjs`, `tools/perf.mjs`, `test/lib/lab.mjs` (lab_perf, lab_webgpu) and the
+lab tests that time inputs or are run on the GPU (`lab_first_input`, `lab_links_3d`,
+`lab_quantity_lists`, `lab_measure`, `lab_visibility`); the other `lab_*.mjs` still start SwiftShader
+themselves. Any of them on the GPU:
+
+```sh
+LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_first_input.mjs     # input_time.mjs then asserts 200 ms presented
+LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_webgpu.mjs          # the real adapter accepted, pictures = WebGL2's
+LAB_GPU=vulkan node ccore/tools/frames.mjs --force --models fixture,heavy,large                 # WebGL2: the real-GPU section of results/frames.md
+LAB_GPU=vulkan node ccore/tools/frames.mjs --force --models fixture,heavy,large --renderer webgpu
+LAB_GPU=vulkan HOST_BIN=$PWD/ccore/out/native/bimble-ccore node ccore/tools/frames.mjs --links 17  # a row of that section
+LAB_GPU=vulkan HOST_BIN=$PWD/ccore/out/native/bimble-ccore FRAMES_LINK_FOLDER=<a folder of IFC files> \
+  FRAMES_CACHE_DIR=<scratch> node ccore/tools/frames.mjs --steps 5,10,14,17   # your own folder, out/frames/folder.md only
+```
+
+A run on the GPU writes only the section "On the machine's GPU" of `ccore/results/frames.md`; a
+SwiftShader run keeps it. A timing taken without these flags measures the CPU, not a GPU: say which in
+every report. The page's performance panel shows the adapter's names as the API gives them and the fill
+rate measured when WebGPU opened its device (`web-ui/src/gpu/device.ts`).
+
 ## 7. Common failures
 
 - **`EADDRINUSE`** on a test port: a process outside the tests took the port between the bind test

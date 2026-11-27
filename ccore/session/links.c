@@ -825,6 +825,25 @@ int cc_links_tick(cc_session *s) {
             ch = 1;
         }
     }
+    if (!s->link_job && s->pf->mem_available && s->pf->stat_path) { /* SIZE2: a link refused for memory, queued again once
+                                                                     * when the memory it needs is free now (checked every 2 s) */
+        double now = s->pf->now_ms(s->pf->ctx);
+        if (now - s->links_retry_at >= 2000.0) {
+            s->links_retry_at = now;
+            for (size_t i = 0; i < s->nlinks; i++) {
+                cc_link *k = &s->links[i];
+                cc_pf_stat st;
+                cc_error e;
+                if (k->state != CC_LS_REFUSED || k->auto_retried || !k->path || s->pf->stat_path(s->pf->ctx, k->path, 1, &st) != CC_PF_OK) continue;
+                if (cc_session_fits(s->pf, k->path, st.size, &e) == 0) {
+                    k->auto_retried = 1, k->state = CC_LS_QUEUED, k->bytes = st.size;
+                    cc_log(s->pf, "bimble-ccore: link %s: memory free now, converted again", k->path);
+                    ch = 1;
+                    break;
+                }
+            }
+        }
+    }
     if (!s->link_job) { /* the next: the smallest queued, so something appears soon */
         int best = -1;
         for (size_t i = 0; i < s->nlinks; i++)

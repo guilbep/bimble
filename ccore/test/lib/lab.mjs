@@ -4,7 +4,7 @@
 //   await L.evalJs("1 + 1"); ... await L.close();
 // Starts out/tcc/bimble-ccore (or $HOST_BIN) on the model (a scratch copy), Vite from web-ui/ and one
 // headless Chromium over raw CDP (1280 x 800), opens /?native=1&gl=1&port=…&token=…&<query>, and
-// waits for the first frame drawn with the mesh. `reopen(query, flags)` closes Chromium and starts
+// waits for the first frame drawn with the mesh. Its GPU: LAB_GPU (lib/chromium.mjs; SwiftShader by default). `reopen(query, flags)` closes Chromium and starts
 // another with other flags (the host and Vite stay): one browser at a time. Kills all it starts.
 // Lives in test/lib/, not test/: ci/run.sh runs every test/*.mjs as a suite.
 import { spawn } from "node:child_process";
@@ -12,7 +12,8 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHROMIUM, port, vitePort } from "../ports.mjs";
+import { port, vitePort } from "../ports.mjs";
+import { CHROMIUM, LAB_GPU, gpuFlags } from "./chromium.mjs";
 import { hostEnv } from "./host_env.mjs";
 
 export const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -58,8 +59,9 @@ async function cdpConnect(wsUrl) {
   return { send, on: (fn) => listeners.push(fn), close: () => ws.close() };
 }
 
-/** Starts the host, Vite and Chromium; `model`: a .bimble or .json path (copied to a scratch folder). */
-export async function lab({ name, model, query = "", chromiumFlags = [], width = 1280, height = 800 }) {
+/** Starts the host, Vite and Chromium; `model`: a .bimble or .json path (copied to a scratch folder);
+ *  `gpu`: software|gl|vulkan (lib/chromium.mjs; LAB_GPU by default), also `L.open`'s third argument. */
+export async function lab({ name, model, query = "", chromiumFlags = [], width = 1280, height = 800, gpu = LAB_GPU }) {
   if (!existsSync(join(UI, "node_modules"))) throw new Error(`no ${UI}/node_modules: run npm ci in web-ui/`);
   const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
   if (!existsSync(BIN)) throw new Error(`no ${BIN}: run ccore/build.sh tcc`);
@@ -94,10 +96,10 @@ export async function lab({ name, model, query = "", chromiumFlags = [], width =
   });
   const L = { tmp, host, vite, errors: [], console: [], chrome: null, cdp: null, S: null };
   L.url = (q) => `http://localhost:${VITE}/?native=1&gl=1&port=${PORT}&token=${TOKEN}${q ? `&${q}` : ""}`;
-  L.open = async (q, flags) => {
+  L.open = async (q, flags, mode = gpu) => {
     if (L.chrome) { L.cdp?.close(); await kill([L.chrome]); }
     L.errors = [], L.console = [];
-    const chrome = start("chromium", CHROMIUM, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0",
+    const chrome = start("chromium", CHROMIUM, ["--headless=new", ...gpuFlags(mode), "--remote-debugging-port=0",
       `--user-data-dir=${join(tmp, `chromium-${procs.length}`)}`, "--no-first-run", "--no-default-browser-check", ...flags, "about:blank"], { env: { ...process.env, HOME: tmp } });
     L.chrome = chrome;
     const wsUrl = await waitFor("DevTools line", 60000, () => chrome.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1]);

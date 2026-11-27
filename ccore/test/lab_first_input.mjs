@@ -34,7 +34,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHROMIUM, port, vitePort } from "./ports.mjs";
+import { port, vitePort } from "./ports.mjs";
+import { CHROMIUM, gpuFlags } from "./lib/chromium.mjs";
 import { hostEnv } from "./lib/host_env.mjs";
 import { adapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
@@ -133,7 +134,7 @@ const TARGET = {
 /** A fresh headless Chromium (its own profile): the session's first page is the case's page. */
 async function browser(label) {
   const chrome = start("chromium", CHROMIUM, [
-    "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0", "--lang=en-US",
+    "--headless=new", ...gpuFlags(), "--remote-debugging-port=0", "--lang=en-US",
     `--user-data-dir=${join(tmp, `chromium-${label}`)}`, "--no-first-run", "--no-default-browser-check", "about:blank",
   ]);
   const wsUrl = await waitFor("DevTools line", 60000, () => chrome.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1]);

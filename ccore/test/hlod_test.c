@@ -24,6 +24,7 @@
 #include "../src/model.h"
 #include "../src/scene.h"
 #include "../src/scene_build.h"
+#include "../session/link_cache.h" /* SIZE2: the proxies' budget */
 #include "check.h"
 
 typedef double P[3];
@@ -457,6 +458,48 @@ static int load(const char *dir, const char *name, cc_model *m, cc_scene *s) {
     return 0;
 }
 
+/* SIZE2 (link_cache.h cc_link_hlod_budget): a link's proxies cut to a byte budget, coarsest cells kept:
+ * what is kept fits the budget, no kept cell is deeper than a cell left without, the BPRX still checks. */
+static void budget(const char *what, const cc_scene *s) {
+    cc_hlod h;
+    cc_hlod_opts o;
+    cc_hlod_default(&o);
+    o.leaf_triangles = 64, o.resolution = 16, o.max_ratio = 1.0; /* a deep tree from a small scene (within_error's) */
+    cc_error err;
+    char t[160];
+    int ok = cc_hlod_build(&h, s, &o, &err) == 0;
+    uint64_t total = 0;
+    for (uint32_t i = 0; ok && i < h.ncells; i++) total += cc_hlod_proxy_bytes(&h.cells[i]);
+    uint32_t had = 0;
+    uint8_t *had_proxy = ok ? calloc(h.ncells + 1, 1) : NULL;
+    for (uint32_t i = 0; ok && i < h.ncells; i++) had += h.cells[i].nproxy > 0, had_proxy ? had_proxy[i] = h.cells[i].nproxy > 0 : 0;
+    uint32_t dropped = ok ? cc_link_hlod_budget(&h, total / 3) : 0;
+    uint64_t kept = 0;
+    uint32_t deepest_kept = 0;
+    for (uint32_t i = 0; ok && i < h.ncells; i++) {
+        const cc_hlod_cell *c = &h.cells[i];
+        kept += cc_hlod_proxy_bytes(c);
+        if (c->nproxy && c->depth > deepest_kept) deepest_kept = c->depth;
+    }
+    snprintf(t, sizeof t, "%s: proxies cut to a third (%llu -> %llu bytes, %u of %u cells dropped)", what, (unsigned long long)total,
+             (unsigned long long)kept, dropped, had);
+    check_true(t, ok && kept <= total / 3 && dropped > 0);
+    /* the coarsest first: every cell that had a proxy and is shallower than the deepest kept one kept it */
+    int order = 1;
+    for (uint32_t i = 0; ok && i < h.ncells; i++)
+        if (had_proxy && had_proxy[i] && !h.cells[i].nproxy && h.cells[i].depth < deepest_kept) order = 0;
+    free(had_proxy);
+    Buf b;
+    buf_init(&b);
+    ok = ok && cc_hlod_bprx(&h, 0, (uint32_t)s->nelements, &b, &err) == 0 && cc_hlod_bprx_check((const uint8_t *)b.p, b.len, (uint32_t)s->nelements, &err) == 0;
+    snprintf(t, sizeof t, "%s: the cut BPRX still checks, coarsest kept (deepest kept depth %u)", what, deepest_kept);
+    check_true(t, ok && order);
+    buf_free(&b);
+    cc_hlod_free(&h);
+    check_true("the budget: 15 % of the geometry within its bounds", cc_link_hlod_cap(0) == CC_LINK_HLOD_MIN && cc_link_hlod_cap((uint64_t)1 << 40) == CC_LINK_HLOD_MAX &&
+                                                                    cc_link_hlod_cap((uint64_t)100 << 20) == ((uint64_t)100 << 20) / 100 * 15);
+}
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -472,6 +515,11 @@ int main(int argc, char **argv) {
         else check_true("tiled", 0);
         cc_scene_free(&big);
         if (i == 0) fit_cap(&s), steps(names[i], &s, 40);
+        if (i == 0) { /* SIZE2 */
+            cc_scene big2;
+            if (tiled(&s, 3, 3, &big2) == 0) budget("frame.json tiled 3 x 3", &big2);
+            cc_scene_free(&big2);
+        }
         cc_scene_free(&s);
         cc_model_free(&m);
     }

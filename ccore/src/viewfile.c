@@ -659,6 +659,11 @@ static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
             v->has_psets = 1;
             v->psets_off = (uint64_t)(s.p - file0), v->psets_len = s.n;
             s.n = 0;
+        } else if (memcmp(kind, "PRPZ", 4) == 0 && !v->has_psets) { /* SIZE2: the packed table, kept on disk */
+            if (cc_psets_packed_check(s.p, s.n, s.n, want_elems)) return fail(e, E_INVALID, "psets: entries");
+            v->has_psets = 1, v->psets_packed = 1;
+            v->psets_off = (uint64_t)(s.p - file0), v->psets_len = s.n;
+            s.n = 0;
         } else if (memcmp(kind, "HEAD", 4) == 0 || memcmp(kind, "META", 4) == 0) {
             return fail(e, E_INVALID, "section repeated");
         } else {
@@ -717,6 +722,16 @@ int cc_viewfile_append_hlod(Buf *out, const char *t, size_t n) {
     return bad ? -1 : 0;
 }
 
+int cc_viewfile_append_psets_packed(Buf *out, const char *t, size_t n) {
+    Buf p;
+    buf_init(&p);
+    buf_append(&p, t, n);
+    section(out, "PRPZ", &p);
+    int bad = p.oom || out->oom;
+    buf_free(&p);
+    return bad ? -1 : 0;
+}
+
 int cc_viewfile_append_psets(Buf *out, const char *t, size_t n) {
     Buf p;
     buf_init(&p);
@@ -762,7 +777,7 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
             uint64_t len = 0;
             for (int i = 0; i < 8; i++) len |= (uint64_t)p[at + 4 + i] << (8 * i);
             if (len > n - at - 12) break;
-            int is_prop = !memcmp(p + at, "PROP", 4), is_hlod = !memcmp(p + at, "HLOD", 4);
+            int is_prop = !memcmp(p + at, "PROP", 4) || !memcmp(p + at, "PRPZ", 4), is_hlod = !memcmp(p + at, "HLOD", 4); /* SIZE2: PRPZ */
             if (is_prop && at + 12 + len == n) pset = at;
             if (is_hlod && !hlod) hlod = at;
             if ((is_prop || is_hlod) && !lazy) lazy = at;
@@ -779,7 +794,12 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
             for (int i = 0; i < 8; i++) len |= (uint64_t)p[hlod + 4 + i] << (8 * i);
             out->has_hlod = 1, out->hlod_off = hlod + 12, out->hlod_len = len;
         }
-        if (!rc && pset && cut < n) { /* the head checked as read_raw does */
+        if (!rc && pset && cut < n && !memcmp(p + pset, "PRPZ", 4)) { /* SIZE2: the packed head checked */
+            const uint8_t *q = p + pset + 12;
+            size_t ln = n - pset - 12;
+            if (cc_psets_packed_check(q, ln, ln, out->nelements)) rc = fail(&e, E_INVALID, "psets: entries");
+            else out->has_psets = 1, out->psets_packed = 1, out->psets_off = pset + 12, out->psets_len = ln;
+        } else if (!rc && pset && cut < n) { /* the head checked as read_raw does */
             const uint8_t *q = p + pset + 12;
             size_t ln = n - pset - 12;
             uint64_t ne = ln >= 4 ? ((uint64_t)q[0] | (uint64_t)q[1] << 8 | (uint64_t)q[2] << 16 | (uint64_t)q[3] << 24) : 0;

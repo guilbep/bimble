@@ -80,6 +80,14 @@ typedef struct cc_platform {
      * the file dialog lists (host/fs.h, the path rule) or a dropped file's staged copy; NULL: all. */
     int (*path_allowed)(void *ctx, const char *path);
     /* ---- end LINKF ---- */
+    /* ---- SIZE2 (NULL in a carrier without them: read_file instead) ---- */
+    /* The file at `path` mapped read-only (the native carrier: mmap), NUL-terminated as read_file's
+     * (`*n` bytes before the NUL; a file whose size is a multiple of the page is not mapped:
+     * CC_PF_IO, the caller reads it), at most `max` bytes; `*handle` for unmap_file. Its pages are
+     * the file's, not the heap's: the kernel may drop them under pressure and read them again. */
+    int (*map_file)(void *ctx, const char *path, size_t max, const char **p, size_t *n, void **handle);
+    void (*unmap_file)(void *ctx, void *handle);
+    /* ---- end SIZE2 ---- */
 } cc_platform;
 
 /* WIN2: the last separator of the path `p`, or NULL: '/', and on Windows '\\' too (Rust's

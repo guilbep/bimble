@@ -18,16 +18,12 @@
 // The watcher is armed before the input (a check started after it can miss the frame and time a
 // later one). Lives in test/lib/, not test/: ci/run.sh runs every test/*.mjs as a suite.
 
+import { rendererInfo } from "./chromium.mjs";
+
 export const PAGE_LIMIT_MS = 200, PRESENTED_LIMIT_MS = 200, SOFTWARE_PRESENTED_LIMIT_MS = 1000;
 
-/** The page's WebGL renderer and whether it is a software rasteriser. */
-export const adapter = (evalJs) => evalJs(`(() => {
-  const gl = document.createElement('canvas').getContext('webgl2') ?? document.createElement('canvas').getContext('webgl');
-  const ext = gl?.getExtension('WEBGL_debug_renderer_info');
-  const renderer = gl ? String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)) : 'none';
-  gl?.getExtension('WEBGL_lose_context')?.loseContext();
-  return { renderer, software: !gl || /swiftshader|llvmpipe|softpipe|software/i.test(renderer) };
-})()`);
+/** The page's WebGL renderer and whether it is a software rasteriser (lib/chromium.mjs: LAB_GPU picks it). */
+export const adapter = async (evalJs) => { const r = await rendererInfo(evalJs); return { renderer: r.renderer, software: !r.hardware }; };
 
 /** A page statement that arms the watcher (embed it in a larger expression, or evaluate it). `kind`:
  *  the event whose timeStamp starts the clock; `page`, `presented`: page expressions (sync);

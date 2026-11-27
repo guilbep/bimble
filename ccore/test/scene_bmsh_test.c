@@ -8,7 +8,13 @@
  *     vertex, triangle and edge counts (one bucket) and no copy among them: the fits per bucket are
  *     capped (MAX_SHAPES_PER_BUCKET), so it ends in linear time (under 2 s here; all pairs would be
  *     18 million fits) and shares nothing; 6,000 translated copies share one shape.
- * Fails on the code before 3D1: scene_bmsh.h did not exist (the lab received every copy placed). */
+ * Fails on the code before 3D1: scene_bmsh.h did not exist (the lab received every copy placed).
+ * SIZE2: BMSH version 4 (the blocks in the mesh codec, what a link is served as): read back
+ * (cc_bmsh4_to_bmsh3) it is version 3 byte for byte on a view file's scene (a link cache's: its meshes
+ * already went through the codec), and within the codec's 0.05 mm with the normals' w dropped on a
+ * model's scene; it is within 5 % of the view file's geometry (ELEM) on both; damaged bytes (every
+ * cut, every byte flipped, a count raised past what is there, a block length past the end) are refused
+ * without a crash and without writing past the cap. Fails on the code before SIZE2: no version 4. */
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +28,8 @@
 #include "../src/scene.h"
 #include "../src/scene_bmsh.h"
 #include "../src/scene_build.h"
+#include "../src/viewfile.h"
+#include "../session/links.h" /* cc_view_scene */
 #include "check.h"
 
 static double now_ms(void) {
@@ -107,6 +115,182 @@ out:
     arena_free(&a);
 }
 
+/* SIZE2: version 4 read back against version 3 (`exact`: byte for byte; else positions within 0.05 mm,
+ * normals' xyz equal and w 0), and its size against the view file's ELEM sections (`elem`, 0: not checked). */
+static void compare4(const char *what, const cc_scene *s, int exact, size_t elem) {
+    Buf v3, v4, back;
+    buf_init(&v3), buf_init(&v4), buf_init(&back);
+    cc_error err;
+    char t[200];
+    int ok = cc_scene_bmsh3(s, NULL, NULL, 7, &v3, &err) == 0 && cc_scene_bmsh4(s, NULL, NULL, 7, &v4, &err) == 0;
+    ok = ok && cc_bmsh4_to_bmsh3((const uint8_t *)v4.p, v4.len, (size_t)1 << 30, &back, &err) == 0;
+    snprintf(t, sizeof t, "%s: version 4 written and read back (%s)", what, ok ? "" : err.msg);
+    check_true(t, ok && back.len == v3.len);
+    if (ok && back.len == v3.len) {
+        int same = 1;
+        if (exact) same = !memcmp(back.p, v3.p, v3.len);
+        else {
+            size_t ne = u32at(&v3, 12), nV = u32at(&v3, 16), nI = u32at(&v3, 20), nS = u32at(&v3, 24);
+            size_t P = 52 + 48 * ne, I = P + 12 * nV, E = I + 4 * nI, N = E + 24 * nS, T = N + 8 * nS;
+            same = !memcmp(back.p, v3.p, P) && !memcmp(back.p + I, v3.p + I, E - I) && !memcmp(back.p + T, v3.p + T, v3.len - T);
+            for (size_t k = 0; same && k < 3 * nV + 6 * nS; k++) {
+                float a, b;
+                size_t o = k < 3 * nV ? P + 4 * k : E + 4 * (k - 3 * nV);
+                memcpy(&a, back.p + o, 4), memcpy(&b, v3.p + o, 4);
+                same = a - b <= 0.05f && b - a <= 0.05f;
+            }
+            for (size_t k = 0; same && k < 2 * nS; k++)
+                same = !memcmp(back.p + N + 4 * k, v3.p + N + 4 * k, 3) && back.p[N + 4 * k + 3] == 0;
+        }
+        snprintf(t, sizeof t, "%s: version 4 read back is version 3 (%s)", what, exact ? "byte for byte" : "within 0.05 mm, normals' w 0");
+        check_true(t, same);
+    }
+    printf("  %s: version 3 %zu bytes, version 4 %zu bytes, view file geometry %zu bytes\n", what, v3.len, v4.len, elem);
+    if (elem) {
+        snprintf(t, sizeof t, "%s: version 4 within 5 %% of the view file's geometry (%zu, %zu)", what, v4.len, elem);
+        check_true(t, (double)v4.len <= 1.05 * (double)elem);
+    }
+    if (ok && v4.len > 60) { /* damaged copies: refused, nothing past the cap, no crash */
+        size_t refused = 0, tried = 0, step = v4.len / 600 + 1;
+        uint8_t *d = malloc(v4.len);
+        for (size_t cut = 0; cut < v4.len; cut += step) {
+            buf_clear(&back);
+            tried++, refused += cc_bmsh4_to_bmsh3((const uint8_t *)v4.p, cut, (size_t)1 << 30, &back, &err) != 0;
+        }
+        snprintf(t, sizeof t, "%s: every cut copy refused (%zu of %zu)", what, refused, tried);
+        check_true(t, refused == tried);
+        size_t over = 0;
+        for (size_t at = 0; d && at < v4.len; at += step) {
+            memcpy(d, v4.p, v4.len);
+            d[at] ^= 0xa5;
+            buf_clear(&back);
+            if (cc_bmsh4_to_bmsh3(d, v4.len, v3.len, &back, &err) == 0 && back.len > v3.len) over++;
+        }
+        snprintf(t, sizeof t, "%s: a flipped byte never writes past the cap", what);
+        check_true(t, over == 0);
+        if (d) { /* nV raised to 2^31: over the cap, refused before any allocation */
+            memcpy(d, v4.p, v4.len);
+            uint32_t big = 0x80000000u;
+            memcpy(d + 16, &big, 4);
+            buf_clear(&back);
+            check_true("version 4: a count over the cap refused", cc_bmsh4_to_bmsh3(d, v4.len, (size_t)1 << 28, &back, &err) != 0 && back.len == 0);
+            size_t ne4 = u32at(&v4, 12), np = 0;
+            for (size_t k = 0; k < ne4; k++) np += u32at(&v4, 52 + 48 * ne4 + 4 * k) != 0;
+            size_t lenat = 52 + 52 * ne4 + 48 * np + 4; /* the first block's length past the end */
+            if (lenat + 4 <= v4.len) {
+                memcpy(d, v4.p, v4.len);
+                uint32_t far = 0xfffffff0u;
+                memcpy(d + lenat, &far, 4);
+                check_true("version 4: a block length past the end refused", cc_bmsh4_to_bmsh3(d, v4.len, (size_t)1 << 30, &back, &err) != 0);
+            }
+        }
+        free(d);
+    }
+    buf_free(&v3), buf_free(&v4), buf_free(&back);
+}
+
+/* SIZE2: the view file of `s` (from model `m`) read back: its scene (as a link cache's) and its ELEM bytes. */
+static void via_viewfile(const char *what, const cc_model *m, const cc_scene *s, int size_check) {
+    Buf vf;
+    buf_init(&vf);
+    cc_viewfile v;
+    cc_scene vs;
+    cc_error err;
+    memset(&vs, 0, sizeof vs);
+    int ok = cc_viewfile_write(m, s, 0, &vf) == 0 && cc_viewfile_read((const uint8_t *)vf.p, vf.len, &v, &err) == 0;
+    size_t elem = 0;
+    for (size_t at = 12; ok && at + 12 <= vf.len;) {
+        uint64_t len;
+        memcpy(&len, vf.p + at + 4, 8);
+        if (!memcmp(vf.p + at, "ELEM", 4)) elem += 12 + (size_t)len;
+        at += 12 + (size_t)len;
+    }
+    ok = ok && cc_view_scene(&vs, &v, &err) == 0;
+    check_true("a view file's scene read back", ok);
+    if (ok) compare4(what, &vs, 1, size_check ? elem : 0); /* (72 tiny boxes: the rows weigh more than their geometry) */
+    cc_scene_free(&vs);
+    cc_viewfile_free(&v);
+    buf_free(&vf);
+}
+
+/* SIZE2: `n` distinct height fields of g x g quads (own meshes, scene coordinates, unique heights), each
+ * with its border as crease edges: a mesh-heavy scene, as an imported link's. */
+static int fields(cc_scene *s, size_t n, uint32_t g) {
+    memset(s, 0, sizeof *s);
+    arena_init(&s->arena, 0);
+    s->elements = arena_alloc(&s->arena, n * sizeof *s->elements, 8);
+    if (!s->elements) return -1;
+    for (size_t k = 0; k < n; k++) {
+        cc_scene_element *e = &s->elements[k];
+        memset(e, 0, sizeof *e);
+        snprintf(e->id.c, sizeof e->id.c, "F%020zu", k);
+        e->shape = -1, e->category = (cc_category)(k % 8);
+        cc_mesh *m = &e->mesh;
+        m->nv = (g + 1) * (g + 1), m->ni = 6 * g * g, m->ne = 4 * g, m->nn = 4 * g;
+        m->pos = arena_alloc(&s->arena, m->nv * sizeof *m->pos, 4);
+        m->idx = arena_alloc(&s->arena, m->ni * sizeof *m->idx, 4);
+        m->edges = arena_alloc(&s->arena, m->ne * sizeof *m->edges, 4);
+        m->normals = arena_alloc(&s->arena, m->nn * sizeof *m->normals, 1);
+        if (!m->pos || !m->idx || !m->edges || !m->normals) return -1;
+        for (uint32_t i = 0; i <= g; i++)
+            for (uint32_t j = 0; j <= g; j++) {
+                float *p = m->pos[i * (g + 1) + j];
+                p[0] = 5000.0f * (float)(k % 10) + 100.0f * (float)i, p[1] = 5000.0f * (float)(k / 10) + 100.0f * (float)j;
+                p[2] = (float)((i * 7 + j * 13 + k * 5) % 97) * 3.0625f;
+            }
+        uint32_t t = 0;
+        for (uint32_t i = 0; i < g; i++)
+            for (uint32_t j = 0; j < g; j++) {
+                uint32_t a = i * (g + 1) + j, b = a + 1, c = a + g + 1, d = c + 1;
+                m->idx[t++] = a, m->idx[t++] = b, m->idx[t++] = d, m->idx[t++] = a, m->idx[t++] = d, m->idx[t++] = c;
+            }
+        for (uint32_t q = 0; q < 4 * g; q++) { /* the border, as segments between vertices */
+            uint32_t side = q / g, r = q % g, a, b;
+            if (side == 0) a = r, b = r + 1;
+            else if (side == 1) a = g * (g + 1) + r, b = a + 1;
+            else if (side == 2) a = r * (g + 1), b = a + g + 1;
+            else a = r * (g + 1) + g, b = a + g + 1;
+            memcpy(m->edges[q], m->pos[a], 12), memcpy(m->edges[q] + 3, m->pos[b], 12);
+            int8_t nn[8] = {0, 0, 127, 0, (int8_t)(q % 3), 0, 127, 0};
+            memcpy(m->normals[q], nn, 8);
+        }
+    }
+    s->nelements = n;
+    return 0;
+}
+
+/* SIZE2: the view file of a scene without a model (META from its ids) read back, then compare4. */
+static void via_viewfile_meta(const char *what, const cc_scene *s) {
+    cc_viewfile_meta mt;
+    cc_viewfile_meta_init(&mt);
+    cc_view_info *info = calloc(s->nelements + 1, sizeof *info);
+    for (size_t k = 0; info && k < s->nelements; k++) info[k].global_id.p = s->elements[k].id.c, info[k].global_id.n = 22;
+    mt.info = info, mt.ninfo = s->nelements;
+    Buf vf;
+    buf_init(&vf);
+    cc_viewfile v;
+    cc_scene vs;
+    cc_error err;
+    memset(&vs, 0, sizeof vs);
+    memset(&v, 0, sizeof v);
+    int ok = info && cc_viewfile_write_meta(&mt, s, 0, &vf) == 0 && cc_viewfile_read((const uint8_t *)vf.p, vf.len, &v, &err) == 0;
+    size_t elem = 0;
+    for (size_t at = 12; ok && at + 12 <= vf.len;) {
+        uint64_t len;
+        memcpy(&len, vf.p + at + 4, 8);
+        if (!memcmp(vf.p + at, "ELEM", 4)) elem += 12 + (size_t)len;
+        at += 12 + (size_t)len;
+    }
+    ok = ok && cc_view_scene(&vs, &v, &err) == 0;
+    check_true("a heavy view file's scene read back", ok);
+    if (ok) compare4(what, &vs, 1, elem);
+    cc_scene_free(&vs);
+    if (ok) cc_viewfile_free(&v);
+    buf_free(&vf);
+    free(info);
+    cc_viewfile_meta_free(&mt);
+}
+
 /* A bipyramid: 5 vertices, 6 triangles, 9 edges, the tips at (x, y, +-h) and three around. */
 static void bipyramid(double tris[6][3][3], const double p[5][3]) {
     static const int T[6][3] = {{0, 2, 3}, {0, 3, 4}, {0, 4, 2}, {1, 3, 2}, {1, 4, 3}, {1, 2, 4}};
@@ -164,9 +348,20 @@ int main(int argc, char **argv) {
     cc_scene s;
     check_true("frame scene builds", cc_scene_build(&s, &m, &err) == 0);
     compare("frame", &s);
+    compare4("frame (model)", &s, 0, 0);
+    via_viewfile("frame (view file)", &m, &s, 0);
     cc_scene_free(&s);
     cc_model_free(&m);
     free(frame);
+
+    { /* SIZE2: a mesh-heavy scene (40 distinct fields of 1,800 triangles), through a view file as a link cache */
+        cc_scene h;
+        if (fields(&h, 40, 30) == 0) {
+            compare4("heavy (built)", &h, 0, 0);
+            via_viewfile_meta("heavy (view file)", &h);
+        } else check_true("heavy scene built", 0);
+        cc_scene_free(&h);
+    }
 
     /* own meshes and shapes mixed: 20 bipyramids, 10 copies of one and 10 of their own */
     {

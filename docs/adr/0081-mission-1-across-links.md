@@ -72,3 +72,15 @@ could not be hidden, its property sets were not read (audit finding C1), there w
   (ADR 0076). Hidden linked elements by a rule on a link's storey are left out on paper too.
 - The wasm build has no files: a cache's property sets cannot be read there ("not available yet
   (no file access)" in the properties).
+
+## Amendment (27 Nov 2026, ticket SIZE2): the property sets packed
+
+Decision 7's `PROP` held each element's sets as their own JSON (142 MB in one cache of the owner's folder), although
+IFC shares an `IfcPropertySet` between elements through `IfcRelDefinesByProperties`. Cache format 5 writes `PRPZ`
+instead (`ccore/src/ifc_psets.h` `cc_psets_pack`): one table of the distinct sets (by their text: a shared set once),
+per element the ids of its sets, the sets' texts in gzip blocks of 64 KiB, each block inflating to exactly the bytes
+it declares (at most 1 MiB: the guard against a block that inflates without end). An element's sets are still read
+from the file when asked (`cc_psets_packed_entry`: its two bounds, its set ids, the block index, one block): memory
+stays the light scene's. The answer is the same text as before, element for element (`test/m1links_test.c`).
+**Alternative:** strings interned per property (name and value tables): smaller still on sets that differ by a value,
+but a reader per property; the gzip blocks take most of that repetition.

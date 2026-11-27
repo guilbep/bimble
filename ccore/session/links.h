@@ -78,6 +78,7 @@ struct cc_link {
     char *cache, *log;    /* malloc'd or NULL: its .bimbleview cache and report */
     int64_t cache_mtime_s;
     int from_cache;       /* the last load read the cache, not the IFC */
+    int auto_retried;     /* SIZE2: refused for memory, queued again once by itself (cc_links_tick) */
     int origin;           /* CC_LO_* (positioning) */
     double move_mm[3];    /* the manual offset, mm */
     double rotation_deg;  /* the manual rotation about Z, degrees */

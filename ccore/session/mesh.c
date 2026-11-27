@@ -31,6 +31,8 @@
 
 #include "ifc_read.h"
 #include "links.h"
+#include "link_cache.h"
+#include "inflate.h"
 #include "mesh.h"
 #include "scene.h"
 #include "scene_bmsh.h"
@@ -132,9 +134,43 @@ static uint64_t links_head(cc_session *s) {
     return h;
 }
 
+/* SIZE2: the LNKS trailer, version 3 (`form` CC_MESH_FORM_LAZY): each link's head without its mesh, which
+ * the page asks on its own (GET /mesh?link=k, cc_link_mesh: BMSH version 4) when it needs it:
+ *   "LNKS", u32 3, u32 n; per link: u32 L, the name (L bytes, padded to 4), u32 flags (1: drawn),
+ *   f64 cos, f64 sin, f64[3] the placed origin, i32 colour (as version 2, always), u32 nE its elements
+ *   (0: nothing to ask), u32 its mesh key (links_mesh_gen: an answer of another key is stale). */
+static int links_lazy(cc_session *s, Buf *out) {
+    buf_append(out, "LNKS", 4);
+    put_u32(out, 3);
+    put_u32(out, (uint32_t)s->nlinks);
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        size_t L = strlen(k->name);
+        put_u32(out, (uint32_t)L);
+        buf_append(out, k->name, L);
+        static const char zero[4];
+        buf_append(out, zero, (4 - L % 4) % 4);
+        put_u32(out, k->visible && k->kind ? 1u : 0u);
+        double c = 1, sn = 0, t[3] = {0, 0, 0}, o[3] = {0, 0, 0};
+        if (k->kind) {
+            cc_link_placement(s, k, &c, &sn, t);
+            const double *lo = cc_link_raw_scene(k)->origin;
+            o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
+        }
+        buf_append(out, &c, 8), buf_append(out, &sn, 8);
+        for (int q = 0; q < 3; q++) buf_append(out, &o[q], 8);
+        int32_t col = k->colour;
+        buf_append(out, &col, 4);
+        put_u32(out, k->kind ? (uint32_t)cc_link_raw_scene(k)->nelements : 0u);
+        put_u32(out, (uint32_t)s->links_mesh_gen);
+    }
+    return out->oom ? -1 : 0;
+}
+
 /* links.h: the LNKS trailer (`form` 3: each link's BMSH in version 3). */
 static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error *err) {
     if (!s->nlinks) return 0;
+    if (form == CC_MESH_FORM_LAZY) return links_lazy(s, out) ? fail(err, "out of memory") : 0;
     /* LINKF: version 2 when a link is placed or coloured (links.h); else version 1, as before */
     int v2 = 0;
     for (size_t i = 0; i < s->nlinks; i++) {
@@ -189,7 +225,7 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
 
 int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_t *rev, double *build_ms) {
     cc_error err;
-    if (form != 3) form = 1;
+    if (form != 3 && form != CC_MESH_FORM_LAZY) form = 1;
     *build_ms = 0;
     Buf *cache = &s->mesh;
     const cc_model *m = cc_mesh_model(s, rev, &err);
@@ -209,7 +245,7 @@ int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_
          * not a second build; when it has none (or it failed), a build here gives the error. */
         const cc_scene *sc = cc_session_scene(s);
         int rc;
-        if (form == 3) { /* 3D1: shapes once */
+        if (form == 3 || form == CC_MESH_FORM_LAZY) { /* 3D1: shapes once */
             cc_scene own;
             int built = 0;
             if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh3(s->ifc, *rev, cache, &err);
@@ -297,6 +333,29 @@ int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, u
     return s->hlod_status;
 }
 
+/* ---- SIZE2: a link's mesh on its own, BMSH version 4 (mesh.h) ---- */
+int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n) {
+    Buf *out = &s->link_mesh_out;
+    buf_free(out); /* the last answer's bytes go (a link's mesh is large: none is kept between calls) */
+    buf_init(out);
+    const cc_link *l = k < s->nlinks ? &s->links[k] : NULL;
+    int st = 200;
+    cc_error err;
+    /* SIZE2FIX: the link asked is the one the page saw: its name and the mesh key of the heads it read (a
+     * link removed, replaced or read again since: superseded, 204, not an error: the page asks again) */
+    if (l && name && (strlen(l->name) != nname || memcmp(l->name, name, nname))) l = NULL;
+    if (l && has_key && key != (uint32_t)s->links_mesh_gen) l = NULL;
+    /* SIZE2FIX2: a request that names the link or carries the key is never a 404: gone, renamed, unloaded, missing,
+     * queued or converting (no geometry now), out of range or of another key: superseded (204); 404 stays for a
+     * bare request (index alone) of no such link */
+    if ((!l || !l->kind) && (name || has_key)) st = 204;
+    else if (!l || !l->kind) st = 404, buf_puts(out, "no such link");
+    else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
+        buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+    *p = out->p ? out->p : "", *n = out->len;
+    return st;
+}
+
 /* ---- LNK3D (ADR 0078 amendment 3): a link's baked proxies (mesh.h) ---- */
 int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
     Buf *out = &s->link_prx_out;
@@ -317,7 +376,16 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
         st = 204, buf_clear(out); /* the cache gone since: none */
     else {
         out->len = (size_t)len;
-        if (cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_raw_scene(l)->nelements, &err))
+        if (len >= 2 && (unsigned char)out->p[0] == 0x1f && (unsigned char)out->p[1] == 0x8b) { /* SIZE2: gzipped (cache format 5) */
+            Buf raw;
+            buf_init(&raw);
+            const char *why = NULL;
+            /* bounded: at most 64 times its stored size and CC_LINK_HLOD_MAX x 2 (the budget's cap with room) */
+            size_t cap = (size_t)(len > (CC_LINK_HLOD_MAX * 2) / 64 ? CC_LINK_HLOD_MAX * 2 : len * 64);
+            if (cc_gunzip((const unsigned char *)out->p, out->len, cap, &raw, &why)) buf_free(&raw), buf_clear(out), buf_puts(out, "proxies: damaged"), st = 500;
+            else buf_free(out), *out = raw;
+        }
+        if (st == 200 && cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_raw_scene(l)->nelements, &err))
             buf_clear(out), buf_puts(out, err.msg), st = 500;
     }
     *p = out->p ? out->p : "", *n = out->len;

@@ -125,7 +125,10 @@ static void flush_out(Conn *c) {
         conn_close(c);
         return;
     }
-    buf_clear(&c->out);
+    /* SIZE2: a large answer sent (a link's mesh, the proxies) does not stay as this connection's capacity:
+     * a kept-alive connection held the largest answer it ever sent (820 MB with 17 links) */
+    if (c->out.cap > ((size_t)4 << 20)) buf_free(&c->out), buf_init(&c->out);
+    else buf_clear(&c->out);
     c->out_off = 0;
     if (!c->keep) {
         start_drain(c);
@@ -585,6 +588,22 @@ static void handle_one(Conn *c, int *again) {
         if (query_param(query, "link_proxies", &prx) && parse_u64(prx, &budget)) {
             int st = cc_link_proxies(cfg->session, budget, &mp, &mn);
             respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, NULL, mp, mn, keep);
+            buf_free(&cfg->session->link_prx_out), buf_init(&cfg->session->link_prx_out); /* SIZE2: none kept */
+            goto mesh_done;
+        }
+        /* SIZE2: ?link=k, link k's mesh on its own (BMSH version 4, mesh.h cc_link_mesh), asked by a page that
+         * fetched ?shapes=1&lazy=1 */
+        if (query_param(query, "link", &prx) && parse_u64(prx, &budget)) {
+            Str nm, ky; /* SIZE2FIX: the link's name and the heads' mesh key, when the page sends them */
+            Buf nb;
+            buf_init(&nb);
+            uint64_t key = 0;
+            int has_name = query_param(query, "name", &nm) && percent_decode(nm, &nb) == 1;
+            int has_key = query_param(query, "key", &ky) && parse_u64(ky, &key);
+            int st = cc_link_mesh(cfg->session, budget, has_name ? (nb.p ? nb.p : "") : NULL, has_name ? nb.len : 0, has_key, key, &mp, &mn);
+            buf_free(&nb);
+            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 204 ? "X-Superseded: 1\r\nAccess-Control-Expose-Headers: X-Superseded\r\n" : NULL, mp, mn, keep);
+            buf_free(&cfg->session->link_mesh_out), buf_init(&cfg->session->link_mesh_out); /* copied into the answer: none kept */
             goto mesh_done;
         }
         if (query_param(query, "proxies", &prx) && parse_u64(prx, &budget)) {
@@ -598,6 +617,7 @@ static void handle_one(Conn *c, int *again) {
         /* 3D1 (ADR 0078): ?shapes=1, BMSH version 3 (each shape once, a placement per element) */
         Str shp;
         mesh_form = query_param(query, "shapes", &shp) && str_eq(shp, "1") ? 3 : 1;
+        if (mesh_form == 3 && query_param(query, "lazy", &shp) && str_eq(shp, "1")) mesh_form = CC_MESH_FORM_LAZY; /* SIZE2 */
         int st = cc_mesh_get_form(cfg->session, mesh_form, &mp, &mn, &rev, &ms);
         if (ms > 0) fprintf(stderr, "bimble-ccore: mesh rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
         char xrev[80];

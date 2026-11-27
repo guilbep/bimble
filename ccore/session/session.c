@@ -56,6 +56,7 @@ void cc_session_free(cc_session *s) {
     buf_free(&s->mesh);
     cc_mesh_proxies_free(s); /* 3D2 */
     buf_free(&s->link_prx_out); /* LNK3D */
+    buf_free(&s->link_mesh_out); /* SIZE2 */
     cc_paper_cache_free(s);
     cc_paper_fonts_free(s); /* D7 */
     cc_versions_free(s); /* H2a */
@@ -101,8 +102,10 @@ int cc_session_fits(const cc_platform *pf, const char *path, uint64_t size, cc_e
     }
     uint64_t avail = pf->mem_available ? pf->mem_available(pf->ctx) : 0;
     uint64_t need = size > UINT64_MAX / k ? UINT64_MAX : size * k;
-    uint64_t base = ends_with_ci(path, ".ifc") ? CC_IFC_READ_PEAK_BASE : (uint64_t)64 << 20;
-    if (size < base / 6) base = size * 6; /* a small file: at most 10 times its size in all */
+    int ifc = ends_with_ci(path, ".ifc");
+    uint64_t base = ifc ? CC_IFC_READ_PEAK_BASE : (uint64_t)64 << 20, small = ifc ? CC_IFC_READ_PEAK_SMALL : 6;
+    if (size < base / small) base = size * small; /* a small file: at most PER_BYTE + SMALL times its size */
+    if (ifc) base += CC_READ_PEAK_FLOOR;          /* SIZE2: the process's own (ifc_read.h) */
     need = need > UINT64_MAX - base ? UINT64_MAX : need + base;
     if (avail && need > avail) {
         snprintf(err->msg, sizeof err->msg,

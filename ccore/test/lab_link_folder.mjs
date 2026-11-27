@@ -21,6 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port, vitePort } from "./ports.mjs";
 import { loops, settled } from "./lib/frames.mjs";
+import { adapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
@@ -163,9 +164,19 @@ async function main() {
   if (process.env.LINKF_PROBE) console.log(`  idle frames before the click (ms apart): ${await evalJs(`new Promise((res) => { const t = []; const f = (x) => { t.push(x); if (t.length < 30) requestAnimationFrame(f); else res(t.slice(1).map((v, i) => (v - t[i]).toFixed(0)).join(' ')); }; requestAnimationFrame(f); })`)}`);
   if (process.env.LINKF_PROBE) await evalJs(`(() => { window.__raf = []; const f = () => { window.__raf.push(performance.now() - (window.__t0 ?? 0)); if (window.__raf.length < 400) requestAnimationFrame(f); }; requestAnimationFrame(f);
     window.__lt = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push([e.startTime - (window.__t0 ?? 0), e.duration]); }).observe({ type: 'longtask', buffered: false }); } catch {} })()`);
-  const ms = await evalJs(`new Promise((res) => { const t0 = performance.now(); window.__t0 = t0; document.querySelector('[data-bb=file-browser-go]').click();
-    const tick = () => document.querySelectorAll('[data-bb=link-model]').length === 4 ? res(performance.now() - t0) : requestAnimationFrame(tick); tick(); })`);
-  check("Link this folder: four rows within 200 ms of the click (ADR 0074)", ms < 200, `${ms.toFixed(1)} ms`);
+  // SIZE2FIX2: a real click, timed by test/lib/input_time.mjs (ADR 0074): the page's own time asserted at 200 ms, the
+  // presented frame strictly on a hardware GPU, reported on the software rasteriser
+  const gpu = await adapter(evalJs);
+  const goClick = async (cond) => {
+    const [x, y] = await evalJs(`(() => { const r = document.querySelector('[data-bb=file-browser-go]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await evalJs(`(() => { window.__t0 = performance.now(); ${watchSource({ kind: "pointerdown", page: cond, presented: cond })}; })()`);
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+    return verdict(await readTimes(evalJs), gpu);
+  };
+  const folderV = await goClick("document.querySelectorAll('[data-bb=link-model]').length === 4");
+  check(`Link this folder: four rows within 200 ms of the click (ADR 0074): ${folderV.line}`, folderV.ok, `load ${readFileSync("/proc/loadavg", "utf8").split(" ")[0]}`);
   if (process.env.LINKF_PROBE) {
     console.log(`probe: rows in the DOM at ${(await evalJs("window.__rowsAt"))?.toFixed(1)} ms, loadavg ${readFileSync("/proc/loadavg", "utf8").trim()}`);
     console.log(`  frames at: ${(await evalJs("window.__raf.filter((t) => t > 0 && t < 1500).map((t) => t.toFixed(0)).join(' ')"))}`);
@@ -278,9 +289,9 @@ async function main() {
   const count = await evalJs("document.querySelector('[data-bb=file-browser-count]')?.textContent ?? ''");
   check("click, Ctrl-click, Shift-click: four files selected, their size shown", /^4 file/.test(count) && /KB|MB/.test(count), count);
   const nBefore = (await rows()).length;
-  const msMany = await evalJs(`new Promise((res) => { const t0 = performance.now(); const n0 = document.querySelectorAll('[data-bb=link-model]').length; document.querySelector('[data-bb=file-browser-go]').click();
-    const tick = () => document.querySelectorAll('[data-bb=link-model]').length >= n0 + 4 ? res(performance.now() - t0) : requestAnimationFrame(tick); tick(); })`);
-  check("Link 4 files: four rows within 200 ms of the click (one call)", msMany < 200, `${msMany.toFixed(1)} ms`);
+  const n0 = await evalJs("document.querySelectorAll('[data-bb=link-model]').length");
+  const manyV = await goClick(`document.querySelectorAll('[data-bb=link-model]').length >= ${n0 + 4}`);
+  check(`Link 4 files: four rows within 200 ms of the click (one call): ${manyV.line}`, manyV.ok, `load ${readFileSync("/proc/loadavg", "utf8").split(" ")[0]}`);
   const many = await waitFor("the four ready", 60000, async () => { const x = await rows(); return x.length === nBefore + 4 && x.every((m) => m.state === "ready") ? x : null; }).catch(() => null);
   check("the four chosen files linked and ready", many !== null, JSON.stringify((await rows()).map((m) => [m.name, m.state])));
 

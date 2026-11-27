@@ -8,6 +8,7 @@ import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { t } from "../i18n";
 import { state } from "../bimble";
 import { linkDetail } from "../gl/linkmem"; // LNK3D (D): detail loaded / proxies only
+import { linkFar } from "../gl/farlinks"; // REAL1: a link thousands of km from the others
 import { send } from "./send";
 import { enabled, linkFolder, linkLog, linksTick, linkNew, linksBusy, linksError, linksPanel, modelOp, modelReload, modelSet, refOp, refReload, reloadAll, type PanelModel, type PanelReference } from "./links";
 
@@ -79,6 +80,7 @@ const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready
       </button>
       <span class="nm" :title="m.path">{{ m.name }}</span>
       <span class="k" data-bb="link-state">{{ stateText(m) }}</span>
+      <span v-if="linkFar[m.name] !== undefined" class="k warn" data-bb="link-far" :title="t('links.farTip')">{{ t('links.far', { km: num(linkFar[m.name]) }) }}</span>
       <span v-if="linkDetail[m.name] !== undefined" class="k" data-bb="link-detail" :data-detail="linkDetail[m.name] ? '1' : '0'" :title="t('links.detailTip')">{{ linkDetail[m.name] ? t('links.detailLoaded') : t('links.proxiesOnly') }}</span>
       <button v-if="m.missing" type="button" data-bb="link-locate" :title="t('links.locateTip')" @click="modelReload(m, true)">{{ t('links.locate') }}</button>
       <button v-else-if="busy(m)" type="button" data-bb="link-cancel" :title="t('links.cancelTip')" @click="modelSet('cancel', m.name)">{{ t('links.cancel') }}</button>
@@ -92,6 +94,8 @@ const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready
       <span class="d" :title="m.log ? t('links.logTip', { path: m.log }) : m.path">{{ detail(m) }}</span>
       <button v-if="m.log" type="button" data-bb="link-log" :title="t('links.logTip', { path: m.log })" @click="showLog(m)">{{ t('links.log') }}</button>
       <button v-if="m.kind === 'ifc' && !m.missing" type="button" data-bb="link-open-editable" :title="t('links.openEditableTip')" @click="confirmEdit = confirmEdit === m.name ? null : m.name">{{ t('links.openEditable') }}</button>
+      <!-- SIZE2: a link refused for memory: converted again on demand (the core retries once by itself when memory frees) -->
+      <button v-if="m.state === 'refused' && !m.missing" type="button" data-bb="link-convert-now" :title="t('links.convertNowTip')" @click="modelReload(m)">{{ t('links.convertNow') }}</button>
       <button v-if="m.state === 'ready'" type="button" data-bb="link-unload" :title="t('links.unloadTip')" @click="modelSet('unload', m.name)">{{ t('links.unload') }}</button>
       <button v-if="m.state === 'unloaded'" type="button" data-bb="link-load" :title="t('links.loadTip')" @click="modelSet('load', m.name)">{{ t('links.load') }}</button>
       <button type="button" data-bb="link-pin" :aria-pressed="m.pinned" :title="t(m.pinned ? 'links.unpinTip' : 'links.pinTip')" @click="modelSet(m.pinned ? 'unpin' : 'pin', m.name)">{{ t(m.pinned ? 'links.pinned' : 'links.unpinned') }}</button>

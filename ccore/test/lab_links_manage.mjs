@@ -123,7 +123,7 @@ async function onPage(cdp, mode) {
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   const S = (m, p) => cdp.send(m, p, sessionId);
-  const consoleLog = [], exceptions = [];
+  const consoleLog = [], exceptions = [], meshResponses = []; // SIZE2FIX: every /mesh answer (url, status)
   const downloads = new Map();
   let chooser = null;
   cdp.on((msg) => {
@@ -136,6 +136,8 @@ async function onPage(cdp, mode) {
     } else if (msg.method === "Runtime.exceptionThrown") {
       const d = msg.params.exceptionDetails;
       exceptions.push(d.exception?.description ?? d.text);
+    } else if (msg.method === "Network.responseReceived" && /\/mesh\?/.test(msg.params.response.url)) {
+      meshResponses.push({ url: msg.params.response.url.replace(/^.*\/mesh\?/, "").replace(/t=[^&]*&?/, ""), status: msg.params.response.status });
     } else if (msg.method === "Log.entryAdded") {
       consoleLog.push({ level: `log.${msg.params.entry.level}`, text: `${msg.params.entry.text} ${msg.params.entry.url ?? ""}`.trim() });
     }
@@ -240,6 +242,81 @@ async function onPage(cdp, mode) {
   await click("[data-bb=link-row][data-name='f2.ifc'] [data-bb=link-remove]");
   await waitFor(`${mode}: f2 removed`, 10000, async () => (await gl()).links.length === 1).catch(() => null);
   check(`${mode}: remove: the row and the link go`, (await rows()).map((r) => r.name).join() === "m1.ifc" && (await gl()).links.length === 1);
+
+  // ---- SIZE2FIX2: a link's mesh asked with its name and the key is never a 404, whatever happened to the link: the
+  // host asked directly (the heads' key read first), the link unloaded (no geometry, the key read again after), of
+  // another name, of an older key, out of range, removed while its request is held (CDP Fetch); a bare index out of
+  // range stays 404. Fails on 7233611: an unloaded link asked with the current key answered 404 ----
+  if (mode === "native") {
+    const H = `http://127.0.0.1:${PORT}`;
+    const heads = async () => { const ab = new Uint8Array(await (await fetch(`${H}/mesh?t=${TOKEN}&shapes=1&lazy=1`)).arrayBuffer()); const dv = new DataView(ab.buffer);
+      let o = 52 + 48 * dv.getUint32(12, true) + 12 * dv.getUint32(16, true) + 4 * dv.getUint32(20, true) + 32 * dv.getUint32(24, true) + 52 * dv.getUint32(12, true);
+      const n = dv.getUint32(o + 8, true); o += 12; const out = [];
+      for (let k = 0; k < n; k++) { const L = dv.getUint32(o, true), name = new TextDecoder().decode(ab.subarray(o + 4, o + 4 + L)); o += 4 + L + ((4 - (L % 4)) % 4);
+        out.push({ name, nE: dv.getUint32(o + 48, true), key: dv.getUint32(o + 52, true) }); o += 56; }
+      return out; };
+    const ask = async (k, q) => (await fetch(`${H}/mesh?t=${TOKEN}&link=${k}${q}`)).status;
+    const h0 = await heads();
+    const m1 = h0.findIndex((h) => h.name === "m1.ifc"), key0 = h0[m1]?.key;
+    const st = {};
+    st.ready = await ask(m1, `&name=m1.ifc&key=${key0}`);
+    st.otherName = await ask(m1, `&name=zz.ifc&key=${key0}`);
+    st.olderKey = await ask(m1, `&name=m1.ifc&key=${key0 + 1000}`);
+    st.outOfRange = await ask(99, `&name=m1.ifc&key=${key0}`);
+    st.bareOutOfRange = await ask(99, "");
+    await B(`b.actionBody("manage_links", { op: "unload", name: "m1.ifc" }); return 1;`);
+    const h1 = await heads();
+    st.unloadedNow = await ask(m1, `&name=m1.ifc&key=${h1[m1]?.key}`);
+    await B(`b.actionBody("manage_links", { op: "load", name: "m1.ifc" }); return 1;`);
+    // the page's own request held while its link is removed, then let go
+    await S("Fetch.enable", { patterns: [{ urlPattern: "*mesh?*link=*", requestStage: "Request" }] });
+    let held = null;
+    const onPause = (msg) => { if (msg.method === "Fetch.requestPaused" && !held) held = msg.params; else if (msg.method === "Fetch.requestPaused") S("Fetch.continueRequest", { requestId: msg.params.requestId }).catch(() => {}); };
+    cdp.on(onPause);
+    await B(`b.manageLink("reload", "m1.ifc"); return 1;`);
+    const paused = await waitFor("a link's mesh request held", 10000, () => held).catch(() => null);
+    const r0 = meshResponses.length;
+    if (paused) {
+      await B(`b.actionBody("manage_links", { op: "remove", name: "m1.ifc" }); return 1;`);
+      await sleep(300);
+      await S("Fetch.continueRequest", { requestId: paused.requestId });
+    }
+    await waitFor("its answer", 5000, () => meshResponses.slice(r0).some((r) => /(^|&)link=/.test(r.url))).catch(() => null);
+    st.removedWhileHeld = meshResponses.slice(r0).find((r) => /(^|&)link=/.test(r.url))?.status ?? null;
+    await S("Fetch.disable");
+    held = { requestId: "" }; // (no more holds)
+    await B(`b.actionBody("link_model", { path: ${JSON.stringify(join(work, "m1.ifc"))} }); return 1;`);
+    await waitFor(`${mode}: m1 back`, 10000, async () => (await gl()).links.some((l) => l.name === "m1.ifc")).catch(() => null);
+    check(`${mode}: a named, keyed request for a link's mesh is never a 404 (superseded: 204), a bare one out of range is`,
+      st.ready === 200 && st.otherName === 204 && st.olderKey === 204 && st.outOfRange === 204 && st.unloadedNow === 204 && st.removedWhileHeld === 204 && st.bareOutOfRange === 404,
+      JSON.stringify(st));
+  }
+
+  // ---- SIZE2FIX: links removed, unloaded, loaded and read again while their meshes are in flight (each request
+  // 250 ms late): a link's mesh is asked by its name and the heads' key; one asked after the links changed is
+  // superseded (204), dropped quietly, the heads asked again: no 404, no console error (checked at the end) ----
+  if (mode === "native") {
+    const m0 = meshResponses.length, c0 = consoleLog.length;
+    await S("Network.emulateNetworkConditions", { offline: false, latency: 250, downloadThroughput: -1, uploadThroughput: -1 });
+    const f2 = JSON.stringify(join(work, "f2.ifc"));
+    for (let i = 0; i < 4; i++) {
+      for (const body of [`b.actionBody("link_model", { path: ${f2} })`, `b.actionBody("manage_links", { op: "unload", name: "m1.ifc" })`,
+        `b.actionBody("manage_links", { op: "load", name: "m1.ifc" })`, `b.actionBody("manage_links", { op: "remove", name: "f2.ifc" })`,
+        `b.manageLink("reload", "m1.ifc")`]) {
+        await B(`${body}; return 1;`);
+        await sleep(90 + 70 * (i % 3));
+      }
+    }
+    await S("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    const lastLink = () => meshResponses.slice(m0).filter((r) => /(^|&)link=/.test(r.url)).pop();
+    const settled = await waitFor(`${mode}: the links settled`, 20000, async () => { const g = await gl(); return g.links.length === 1 && g.links[0].name === "m1.ifc" && g.linkTris > 0 &&
+      lastLink()?.status === 200 && (await rows()).map((r) => r.name).join() === "m1.ifc" ? g : null; }).catch(() => null);
+    const asked = meshResponses.slice(m0), links = asked.filter((r) => /(^|&)link=/.test(r.url)), bad = asked.filter((r) => r.status >= 400);
+    const said = consoleLog.slice(c0).filter((m) => /error|warn/.test(m.level)).map((m) => m.text);
+    check(`${mode}: links changed while their meshes were in flight: no /mesh answer of 400 or more, nothing in the console, the page settles on the links as they are`,
+      bad.length === 0 && said.length === 0 && links.length > 0 && settled !== null,
+      `${asked.length} /mesh answers (${links.length} of a link: ${[...new Set(links.map((r) => r.status))].join(", ")}; the last ${links.at(-1)?.status}), bad ${JSON.stringify(bad.slice(0, 3))}, console ${JSON.stringify(said.slice(0, 2))}, superseded ${settled?.linkSuperseded ?? 0}, links ${JSON.stringify(settled?.links?.map((l) => l.name))}`);
+  }
 
   // ---- a DXF in the ground plan: move by numbers, rotate, undo ----
   const plan = await B("return b.openViews.value.views.find((v) => v.type === 'plan' && v.look === 'down');");

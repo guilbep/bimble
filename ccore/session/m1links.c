@@ -445,6 +445,19 @@ int cc_link_levels_json(cc_session *s, Buf *out) {
 
 /* ---- a linked element's property sets (ifc_psets.h) ---- */
 
+/* SIZE2: the packed table's reads (ifc_psets.h cc_psets_read_fn): a range of the cache's section. */
+typedef struct {
+    const cc_platform *pf;
+    const char *path;
+    uint64_t off, len;
+} PackedRd;
+static int packed_read(void *ctx, uint64_t off, size_t n, void *dst) {
+    const PackedRd *r = ctx;
+    size_t got = 0;
+    if (off > r->len || n > r->len - off) return -1;
+    return r->pf->read_range(r->pf->ctx, r->path, r->off + off, n, dst, &got) == CC_PF_OK && got == n ? 0 : -1;
+}
+
 int cc_link_psets_json(cc_session *s, const cc_link *k, size_t i, Buf *out) {
     const cc_scene *sc = cc_link_scene(k);
     if (i >= sc->nelements) return -1;
@@ -455,6 +468,17 @@ int cc_link_psets_json(cc_session *s, const cc_link *k, size_t i, Buf *out) {
     const char *why = NULL;
     if (k->kind == CC_LINK_IFC && k->psets) {
         if (cc_psets_entry((const uint8_t *)k->psets, k->npsets, idx, &p, &n)) why = "unreadable";
+    } else if (k->kind == CC_LINK_VIEW && k->vf->has_psets && k->vf->psets_packed) { /* SIZE2: the packed table */
+        const cc_platform *pf = s->pf;
+        PackedRd r = {pf, k->cache && k->cache[0] ? k->cache : k->path, k->vf->psets_off, k->vf->psets_len};
+        Buf e;
+        buf_init(&e);
+        int prc = !pf->read_range ? -3 : cc_psets_packed_entry(packed_read, &r, k->vf->psets_len, idx, &e);
+        if (prc == -3) why = "not available yet (no file access)";
+        else if (prc == -2) why = "out of memory";
+        else if (prc) why = "unreadable (the cache changed)";
+        else if (e.len) tmp = e.p, p = (const uint8_t *)e.p, n = e.len, e.p = NULL;
+        buf_free(&e);
     } else if (k->kind == CC_LINK_VIEW && k->vf->has_psets) {
         const cc_platform *pf = s->pf;
         const char *path = k->cache && k->cache[0] ? k->cache : k->path;

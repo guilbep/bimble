@@ -15,7 +15,13 @@
 /** One frame drawn: when it started (performance.now), what it took (ms), moving or still, what it drew. */
 export interface PerfFrame { at: number; ms: number; moving: boolean; tris: number; draws: number; synced: boolean }
 export interface PerfInput { what: string; ms: number; at: number; synced: boolean }
-export interface PerfAdapter { vendor: string; architecture: string; description: string; software: boolean }
+/** The adapter as the API names it (WebGPU's GPUAdapterInfo, or WebGL2's debug renderer strings), shown as
+ *  given; `software`: decided from evidence (REAL1), not from these names alone: WebGPU's isFallbackAdapter,
+ *  a CPU rasteriser's name, and a measured fill rate (`evidence` says which). */
+export interface PerfAdapter { vendor: string; architecture: string; device?: string; description: string; software: boolean;
+  fallback?: boolean; evidence?: string;
+  /** WebGPU: the fill rate measured when the device opened (megapixels a second; device.ts). */
+  fillMpxS?: number | null }
 /** What draws the 3D view: asked (the setting or ?gpu=), in use, the adapter, why WebGPU is not in use. */
 export interface PerfRenderer { asked: "auto" | "webgl2" | "webgpu"; using: "WebGL2" | "WebGPU"; adapter: PerfAdapter | null; reason: string | null; gpuCull: boolean }
 export interface PerfLink { name: string; elements: number; triangles: number; visible: boolean;
@@ -39,8 +45,11 @@ let lastRecord: { seconds: number; frames: PerfFrame[]; inputs: PerfInput[] } | 
 
 export const renderer: PerfRenderer = { asked: "auto", using: "WebGL2", adapter: null, reason: null, gpuCull: false };
 
-/** The words that mean a CPU rasteriser behind the adapter (SwiftShader, llvmpipe, Microsoft's Basic Render). */
-export const isSoftware = (s: string): boolean => /swiftshader|llvmpipe|softpipe|lavapipe|software|basic render/i.test(s);
+/** The names of CPU rasterisers (SwiftShader, llvmpipe, lavapipe, Microsoft's Basic Render). Not the
+ *  word "software": Dawn calls Mesa's Asahi GPU (the M1 Pro, Vulkan) architecture "software" (REAL1). */
+export const isCpuName = (s: string): boolean => /swiftshader|llvmpipe|softpipe|lavapipe|basic render/i.test(s);
+/** A WebGL renderer string that names a CPU rasteriser (ANGLE says "SwiftShader"; some drivers "Software Rasterizer"). */
+export const isSoftware = (s: string): boolean => isCpuName(s) || /software rasteri[sz]er/i.test(s);
 
 /** The WebGL2 context's adapter (WEBGL_debug_renderer_info; the masked names without it). */
 function webglAdapter(gl: WebGL2RenderingContext): PerfAdapter {
@@ -183,6 +192,10 @@ export function perfSnapshot(): PerfSnapshot {
 
 const ms = (x: number | null) => (x === null || !Number.isFinite(x) ? "-" : `${x < 10 ? x.toFixed(1) : Math.round(x)} ms`);
 const mb = (x: number | null) => (x === null ? "-" : `${(x / 1048576).toFixed(1)} MB`);
+/** The adapter's names as the API gives them: vendor, architecture, device, description (WebGPU's GPUAdapterInfo). */
+export const adapterNames = (a: PerfAdapter, sep = " / "): string =>
+  [["vendor", a.vendor], ["architecture", a.architecture], ["device", a.device ?? ""], ["description", a.description]]
+    .filter(([, v]) => v).map(([k, v]) => (a.architecture || a.device ? `${k} ${v}` : v)).join(sep);
 const num = (x: number) => Math.round(x).toLocaleString("en-US");
 const fline = (s: FrameStats) => (s.n ? `n ${s.n}, last ${ms(s.last)}, median ${ms(s.median)}, p95 ${ms(s.p95)}, max ${ms(s.max)}` : "none");
 
@@ -193,7 +206,7 @@ export function perfReport(names: boolean, file: string | null): string {
   L.push("Bimble performance report");
   L.push(`date: ${new Date().toISOString()}; page: ${location.search.includes("ccore=1") || import.meta.env.VITE_CCORE === "1" ? "wasm" : location.search.includes("native=1") ? "native host" : "other"}; user agent: ${navigator.userAgent}`);
   L.push(`renderer: ${r.using} (asked: ${r.asked})${r.reason ? `; WebGPU not used: ${r.reason}` : ""}${r.using === "WebGPU" ? `; GPU culling of copies: ${r.gpuCull ? "on" : "off"}` : ""}`);
-  L.push(`adapter: ${a ? `${[a.vendor, a.architecture, a.description].filter(Boolean).join(" / ") || "(no name given)"}${a.software ? " - SOFTWARE (a CPU rasteriser, not a GPU)" : ""}` : "unknown"}`);
+  L.push(`adapter: ${a ? `${adapterNames(a) || "(no name given)"}${a.software ? " - SOFTWARE (a CPU rasteriser, not a GPU)" : ""}${a.evidence ? ` (${a.evidence})` : ""}` : "unknown"}`);
   L.push(`canvas: ${s.canvas.w} x ${s.canvas.h} px, device pixel ratio ${s.canvas.dpr}`);
   L.push(`frame time (draw to pixels${s.synced ? "" : ", NOT waited for: submit time only"}), last ${RING} frames:`);
   L.push(`  moving: ${fline(s.moving)}`);

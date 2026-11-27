@@ -45,7 +45,8 @@ import { cpus, loadavg, platform, release, tmpdir, totalmem, arch } from "node:o
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-import { CHROMIUM, port } from "../test/ports.mjs";
+import { port } from "../test/ports.mjs";
+import { CHROMIUM, LAB_GPU, gpuFlags } from "../test/lib/chromium.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -108,7 +109,7 @@ async function waitFor(what, timeout, fn) {
   }
   throw new Error(`timeout waiting for ${what}${last ? `: ${last.message ?? last}` : ""}`);
 }
-const chromeArgs = (dir) => ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0",
+const chromeArgs = (dir) => ["--headless=new", ...gpuFlags(), "--remote-debugging-port=0", // REAL1: LAB_GPU (test/lib/chromium.mjs)
   `--user-data-dir=${dir}`, "--no-first-run", "--no-default-browser-check", "about:blank"];
 async function chromium(name) {
   const c = start(name, CHROMIUM, chromeArgs(join(tmp, name)));
@@ -527,8 +528,9 @@ async function main() {
   L.push("## Measuring conditions", "");
   L.push(`- ${new Date().toISOString().slice(0, 10)}, commit ${rev}, mode ${FULL ? `full (${LH_RUNS} Lighthouse runs, ${LOADS} loads, large model)` : `CI (${LH_RUNS} Lighthouse run, ${LOADS} loads, sample model only)`}, ${Math.round((Date.now() - t00) / 1000)} s.`);
   L.push(`- Machine: ${platform()} ${release().split("-")[0]} ${arch()}, ${cpu.length} CPUs (${cpu[0]?.model && cpu[0].model !== "unknown" ? cpu[0].model : "model not reported"}), ${(totalmem() / 2 ** 30).toFixed(0)} GiB; load average at start ${load0.map((x) => x.toFixed(2)).join(" / ")}, at end ${load1.map((x) => x.toFixed(2)).join(" / ")} (1 / 5 / 15 min).`);
-  L.push(`- Browser: ${browserInfo.product}, headless, \`--use-angle=swiftshader\`; GL renderer: ${browserInfo.gpu}. Node ${process.version}. Lighthouse ${LH ? LH.version : "not run"}.`);
-  L.push("- **SwiftShader is software rendering on the CPU.** The frame times below are NOT what a user's GPU gives: compare them across runs and machines through the triangles drawn per frame, not as user-facing fps.");
+  L.push(`- Browser: ${browserInfo.product}, headless, \`LAB_GPU=${LAB_GPU}\` (\`${gpuFlags().join(" ")}\`); GL renderer: ${browserInfo.gpu}. Node ${process.version}. Lighthouse ${LH ? LH.version : "not run"}.`);
+  if (LAB_GPU === "software") L.push("- **SwiftShader is software rendering on the CPU.** The frame times below are NOT what a user's GPU gives: compare them across runs and machines through the triangles drawn per frame, not as user-facing fps.");
+  else L.push(`- **The machine's GPU draws** (\`LAB_GPU=${LAB_GPU}\`, DEV.md): these frame times are not comparable with a SwiftShader run.`);
   L.push("- Served: the production build (`npm run build:ccore`) under `/c/` by a local static server that answers as GitHub Pages does (gzip for html, js, css, wasm, json; `Cache-Control: max-age=600`); every CDP load starts with the HTTP cache emptied (`Network.clearBrowserCache`). Viewport 1280x800 for the CDP numbers; Lighthouse uses its own presets.");
   if (large) L.push(`- Large model: \`bench/large_model.py ${LARGE}\` (synthetic): ${fmtN(large.elements)} elements (${Object.entries(large.by_class).map(([k, v]) => `${fmtN(v)} ${k}`).join(", ")}), ${mb(large.bytes)} (${mb(large.gz)} gzip), served as \`perf/large-${LARGE}.json\`, opened with \`?model=\`.`);
   L.push("");

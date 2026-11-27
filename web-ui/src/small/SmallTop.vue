@@ -5,6 +5,7 @@ import { state, openViews } from "../bimble";
 import { t, lang, setLang } from "../i18n";
 import { viewName } from "../shell/viewName";
 import { sheet, wide, phone } from "./screen";
+import { currentPanel } from "../panels"; // SIZE2
 import labIcon from "../brand/bimble-icon-lab.svg";
 
 const view = computed(() => openViews.value.views.find((v) => v.id === openViews.value.active) ?? null);
@@ -21,6 +22,10 @@ const sub = computed(() => [view.value ? viewName(view.value) : "", state.value.
       <span>{{ sub }}</span>
     </div>
     <span v-if="state.file !== null" class="mchip" :class="state.unsaved ? 'c-o' : 'c-m'" data-bb="state-chip">{{ t(state.unsaved ? 'small.notSaved' : 'small.saved') }}</span>
+    <!-- SIZE2: the performance panel reachable on a small screen too (the status bar's button, its icon alone) -->
+    <button class="tb" type="button" data-bb="status-perf" :aria-label="t('perf.open')" :title="t('perf.openTitle')" :aria-pressed="currentPanel === 'performance'"
+      @click="currentPanel = currentPanel === 'performance' ? null : 'performance'"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/></svg></button>
     <span class="seg" role="group" :aria-label="t('small.language')">
       <button v-for="l in (['fr', 'en'] as const)" :key="l" type="button" class="lg" :aria-pressed="lang === l" @click="setLang(l)">{{ l.toUpperCase() }}</button>
     </span>
