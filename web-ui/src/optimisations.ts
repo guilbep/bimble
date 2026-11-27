@@ -81,9 +81,9 @@ registerOptimisation(setting("gpu_cull", {
 // ---- VIS1 (ADR 0078 amendment 7): the 3D view's own; WebGL2 only for now (the WebGPU renderer draws everything, with
 // lines, and completes its picture on screen: ADR 0078 amendment 7, "What the WebGPU renderer needs") ----
 registerOptimisation(setting("draw_visible", {
-  label: { fr: "Dessiner seulement ce qui se voit", en: "Draw only what can be seen" }, kind: "toggle", default: false, off: false,
-  hint: { fr: "WebGL2 : une image au repos laisse de côté ce que l'image précédente montre caché (désactivé par défaut : en vérification sur de grands projets de liens).",
-    en: "WebGL2: a still picture leaves out what the previous one shows hidden (off by default: being checked on large projects of links)." },
+  label: { fr: "Dessiner seulement ce qui se voit", en: "Draw only what can be seen" }, kind: "toggle", default: true, off: false,
+  hint: { fr: "WebGL2 : une image au repos laisse de côté ce que l'image précédente montre caché (vérifié sur un grand projet de liens : rien de visible omis).",
+    en: "WebGL2: a still picture leaves out what the previous one shows hidden (verified on a large project of links: nothing seen left out)." },
 }));
 registerOptimisation(setting("edge_mode", {
   label: { fr: "Arêtes en 3D", en: "Edges in 3D" }, kind: "choice", default: "screen", off: "lines",

@@ -199,7 +199,7 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
     const e = v.eye;
     frameUniform(v, box);
     const pxK = v.mmPerPx(1); // mm a px at 1 mm (perspective), or mm a px (orthographic)
-    const sizePx = (bx: Float32Array, dist: number) => Math.hypot(bx[3]! - bx[0]!, bx[4]! - bx[1]!, bx[5]! - bx[2]!) / (v.ortho ? pxK : dist * pxK);
+    const sizePx = (bx: ArrayLike<number>, dist: number) => Math.hypot(bx[3]! - bx[0]!, bx[4]! - bx[1]!, bx[5]! - bx[2]!) / (v.ortho ? pxK : dist * pxK);
     // ---- what each batch draws (glviewport.ts draw(): frustum, proxies, budget, outlines, stand-ins) ----
     const p = scene.prx;
     let prxCells: number[] = [], replaced: Uint8Array | null = null;
@@ -233,7 +233,7 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
       });
     }
     for (const x of M.linkPrx) if (x) x.drawnCells = x.drawnTris = 0;
-    const missing: Float32Array[] = [];
+    const missing: ArrayLike<number>[] = [];
     let culled = 0, cutT = 0, budget = Infinity;
     const seen: { d: GpuDb; c: Cut }[] = [];
     for (const d of M.dbs) {

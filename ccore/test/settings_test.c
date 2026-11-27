@@ -602,21 +602,21 @@ int main(void) {
         free(f);
         char *q = ask(s, "query", "settings", "", &st), g[64];
         value_of(q, "draw_visible", g, sizeof g); /* applies (the first object of the answer) */
-        check_true("draw_visible: false by default, and it applies", strstr(q, "\"draw_visible\":false,\"edge_mode\":\"screen\",\"gpu_cull\":") && !strcmp(g, "true"));
+        check_true("draw_visible: true by default (VIS2), and it applies", strstr(q, "\"draw_visible\":true,\"edge_mode\":\"screen\",\"gpu_cull\":") && !strcmp(g, "true"));
         free(q);
-        free(ask(s, "action", "set_settings", "{\"draw_visible\":true}", &st));
+        free(ask(s, "action", "set_settings", "{\"draw_visible\":false}", &st));
         f = read_all(FILE_, &n);
-        check_true("draw_visible: set on, written in its sorted place", st == CC_OK && f && strstr(f, "\"coordinates\":\"survey\",\"draw_visible\":true,\"gpu_cull\":"));
+        check_true("draw_visible: set off, written in its sorted place", st == CC_OK && f && strstr(f, "\"coordinates\":\"survey\",\"draw_visible\":false,\"gpu_cull\":"));
         free(f);
         q = ask(s, "query", "settings", "", &st);
-        check_true("draw_visible: on read back", q && strstr(q, "\"draw_visible\":true"));
+        check_true("draw_visible: off read back", q && strstr(q, "\"draw_visible\":false"));
         free(q);
         char *e = ask(s, "action", "set_settings", "{\"draw_visible\":1}", &st);
         check_true("draw_visible: not a boolean refused", st != CC_OK && strstr(e, "`draw_visible`: true or false"));
         free(e);
-        free(ask(s, "action", "set_settings", "{\"draw_visible\":false}", &st));
+        free(ask(s, "action", "set_settings", "{\"draw_visible\":true}", &st));
         f = read_all(FILE_, &n);
-        check_true("draw_visible: back off, written (the file had it)", st == CC_OK && f && strstr(f, "\"draw_visible\":false"));
+        check_true("draw_visible: back on, written (the file had it)", st == CC_OK && f && strstr(f, "\"draw_visible\":true"));
         free(f);
         cc_settings d;
         cc_settings_default(&d);
@@ -636,7 +636,7 @@ int main(void) {
             free(q2);
             free(ask(s, "action", "set_settings", "{\"edge_mode\":\"lines\",\"cull_back\":true,\"still_px\":1.5,\"refill_offscreen\":false}", &st));
             char *f2 = read_all(FILE_, &n);
-            check_true("VIS1: set, written in their sorted places", st == CC_OK && f2 && strstr(f2, "\"cull_back\":true,\"draw_visible\":false,\"edge_mode\":\"lines\",\"gpu_cull\":")
+            check_true("VIS1: set, written in their sorted places", st == CC_OK && f2 && strstr(f2, "\"cull_back\":true,\"draw_visible\":true,\"edge_mode\":\"lines\",\"gpu_cull\":")
                        && strstr(f2, "\"refill_offscreen\":false,") && strstr(f2, "\"still_px\":1.5,\"text_size\":"));
             free(f2);
             char *e2 = ask(s, "action", "set_settings", "{\"edge_mode\":\"dots\"}", &st);

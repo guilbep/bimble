@@ -82,7 +82,7 @@ export interface GpuModels {
 export interface GpuView {
   mesh: GpuMesh | null;
   /** Per element its box (min xyz, max xyz), shown (0 no, 1 yes, 2 revealed), sRGB colour (0xRRGGBB). */
-  boxes: Float32Array; shown: Uint8Array; colour: Uint32Array;
+  boxes: Float64Array; shown: Uint8Array; colour: Uint32Array;
   /** The selection's elements are not under a proxy (proxies.rs usable). */
   selected: (e: number) => boolean;
   prx: Proxies | null; proxiesOn: boolean;
