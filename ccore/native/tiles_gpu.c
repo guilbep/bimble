@@ -805,7 +805,7 @@ static int small(const Cut *c, const float ctr[3], float r) {
 static uint64_t emit(nv_tiles_r *T, nv_tileset *ts, nv_gtile *g, int pass, uint32_t gate, const Cut *cut) {
     (void)ts;
     uint64_t tris = 0;
-    int back = T->o.cull_back, pgi = g->page;
+    int back = T->o.cull_back && !T->o.reference, pgi = g->page;
     if (pgi < 0) return 0;
     if (g->kind == 2) {
         for (uint32_t k = 0; k < g->nparts; k++)
@@ -857,8 +857,7 @@ static uint64_t emit(nv_tiles_r *T, nv_tileset *ts, nv_gtile *g, int pass, uint3
  * group drawn in pass 1 when one of its elements was seen last frame (the id buffer: seen.comp), else tested on its own
  * box (its members' spheres) against pass 1's depth and drawn in pass 2 when visible. */
 #define CL 8
-static int seen_off = -1;
-static int seen_last(uint32_t e, uint64_t fr) { if (seen_off < 0) seen_off = getenv("NUI2_NOSEEN") != NULL; if (seen_off) return 0; return e < nseen_cpu && seen_cpu[e] + 1ull == fr && fr > 1; }
+static int seen_last(uint32_t e, uint64_t fr) { return e < nseen_cpu && seen_cpu[e] + 1ull == fr && fr > 1; }
 static uint32_t group_test(float lo[3], float hi[3]) {
     uint32_t g = new_gate();
     GROW(F.test, F.ntest, F.ctest, 1);
@@ -874,7 +873,7 @@ static void grow_sphere(float lo[3], float hi[3], const float c[3], float r) {
 static uint32_t CLN = 16; /* occlusion_group: elements a group (the A/B: 8, 16, 32) */
 void nv_tiles_group_size(uint32_t n) { CLN = n < 1 ? 1 : n > 256 ? 256 : n; }
 static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *cut) {
-    int back = T->o.cull_back, pgi = g->page;
+    int back = T->o.cull_back && !T->o.reference, pgi = g->page;
     for (int grp = 0; grp < 2; grp++) {
         uint32_t a = back ? (grp ? g->nclosed : 0) : (grp ? g->nel : 0), b = back ? (grp ? g->nel : g->nclosed) : g->nel;
         int kind = back && grp == 0 ? K_MERGED_BACK : K_MERGED;
