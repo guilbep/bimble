@@ -244,6 +244,15 @@ the section box (or a plan's range) is not snapped (Rust snaps it when it lies i
 hit, a point in the empty space the box removed). Reference plans (DXF, PDF) are not in the C
 core: nothing snaps on them.
 
+A third departure (ticket MEAS2, 27 Nov 2026): a linked model's points are snapped in its own frame.
+Rust adds the link's offset in f32 (`lib.rs:1499`) and keeps the snap in f32 in the shown scene's
+frame: at national coordinates (2,600 km, an empty open model at 0) that is 256 mm steps, the corner
+missed and the face point 38 mm off. C keeps the offset in f64, moves the ray into the link's frame
+in f64 and stores the snap as f32 relative to that frame's origin (f64): two points of one link are
+measured exactly as at the origin. The open model's snaps are bit for bit as before; a link's snap
+near the origin can differ from Rust's below the f32 step of the link's own extent (1.1e-4 mm on the
+test building turned 30 degrees).
+
 **What Rust sees.** Nothing: measurements are session state, never in a file or the history. The
 label and the list are Rust's: `format_mm` and `measurements_json` were moved from the viewer to
 `bimble_api::measure` (the viewer calls them there), and `ccore_golden` writes
@@ -252,7 +261,8 @@ label and the list are Rust's: `format_mm` and `measurements_json` were moved fr
 
 **Where.** `ccore/session/measure.{h,c}`, `ccore/session/calls.c` (`measure_tool`, the action
 `measure`, `query measurements` and `measure`), tests `ccore/test/measure_test.c`,
-`ccore/test/lab_measure.mjs`; the page: `web-ui/src/gl/measure.ts`, `web-ui/src/glviewport.ts`.
+`ccore/test/measure_geo_test.c` (MEAS2), `ccore/test/lab_measure.mjs`; the page: `web-ui/src/gl/measure.ts`,
+`web-ui/src/glviewport.ts`.
 
 ## 8. A plan on paper draws the model's grids (ticket D3)
 

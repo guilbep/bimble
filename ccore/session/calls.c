@@ -4033,7 +4033,8 @@ static int opening_at(cc_session *s, const char *body, size_t n, const cc_mview 
     if (mv) {
         m2 = *mv, m2.plane = NULL;
         if (cc_measure_snap(&m2, ray, NULL, 0.0, 1, &sn) == 1 && d > 0) {
-            double q[3] = {sn.p[0] - ray[0], sn.p[1] - ray[1], sn.p[2] - ray[2]};
+            double q[3]; /* MEAS2: the snap's frame may be a link's: its point moved to the shown scene's, in f64 */
+            for (int k = 0; k < 3; k++) q[k] = (double)sn.p[k] + (sn.org[k] - mv->org[k]) - ray[k];
             t = cc_sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
         }
     }
@@ -4131,7 +4132,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
             const cc_scene *ls = s->links[i].visible ? cc_link_scene(&s->links[i]) : NULL;
             if (!ls) continue;
             layers[nl].sc = ls, layers[nl].vis = NULL;
-            for (int k = 0; k < 3; k++) layers[nl].off[k] = (float)(ls->origin[k] - sc->origin[k]); /* lib.rs:1499 */
+            for (int k = 0; k < 3; k++) layers[nl].off[k] = ls->origin[k] - sc->origin[k]; /* lib.rs:1499; MEAS2: f64 */
             nl++;
         }
         for (size_t i = 0; i < nl; i++) layers[i].box = mboxes_of(s, i, layers[i].sc), layers[i].index = layers[i].box ? &s->mboxes[i] : NULL; /* MEAS1, 3D2: the box tree */
