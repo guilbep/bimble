@@ -23,6 +23,7 @@ void cc_settings_default(cc_settings *s) { /* settings.rs:43-58 */
     strcpy(s->coordinates, "survey");
     strcpy(s->renderer, "auto"); /* GPU1 */
     s->link_gpu_mb = CC_LINK_GPU_MB_DEFAULT; /* SIZE3 */
+    strcpy(s->shell_mode, "auto"); /* SHELL1 */
 }
 
 #ifndef CC_VIEW_ONLY /* the viewer-only wasm has no settings (the 400 KB budget): the stubs at the end */
@@ -34,6 +35,8 @@ static const char *const RENDERERS[] = {"auto", "webgl2", "webgpu"}; /* GPU1: th
 #define NTHEMES (sizeof THEMES / sizeof THEMES[0])
 #define NFONTS (sizeof FONTS / sizeof FONTS[0])
 #define NRENDERERS (sizeof RENDERERS / sizeof RENDERERS[0])
+static const char *const SHELL_MODES[] = {"off", "outside", "auto"}; /* SHELL1: the outside walk */
+#define NSHELL_MODES (sizeof SHELL_MODES / sizeof SHELL_MODES[0])
 #define TEXT_MIN 10.0f /* ui_theme.rs TEXT_SIZES */
 #define TEXT_MAX 16.0f
 
@@ -221,6 +224,7 @@ void cc_settings_of(const JrVal *v, cc_settings *s) { /* settings.rs:70-125 from
         memcpy(s->coordinates, f->s, f->n), s->coordinates[f->n] = 0;
     else if ((f = field(v, "wgs84")) && f->type == JR_BOOL && f->b) strcpy(s->coordinates, "wgs84"); /* 0.14's setting */
     if ((k = known(RENDERERS, NRENDERERS, field(v, "renderer"))) >= 0) strcpy(s->renderer, RENDERERS[k]); /* GPU1 */
+    if ((k = known(SHELL_MODES, NSHELL_MODES, field(v, "shell_mode"))) >= 0) strcpy(s->shell_mode, SHELL_MODES[k]); /* SHELL1 */
     if (!as_u64(field(v, "link_gpu_mb"), &u)) s->link_gpu_mb = u < 64 ? 64 : u > 65536 ? 65536 : (unsigned)u; /* SIZE3 */
 }
 
@@ -298,6 +302,10 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
             int k = known(RENDERERS, NRENDERERS, v);
             if (k < 0) buf_puts(why, "`renderer`: auto, webgl2 or webgpu");
             else strcpy(t.renderer, RENDERERS[k]);
+        } else if (jr_key_is(m, "shell_mode")) { /* SHELL1 */
+            int k = known(SHELL_MODES, NSHELL_MODES, v);
+            if (k < 0) buf_puts(why, "`shell_mode`: off, outside or auto");
+            else strcpy(t.shell_mode, SHELL_MODES[k]);
         } else if (jr_key_is(m, "link_gpu_mb")) { /* SIZE3 */
             unsigned long long u;
             if (as_u64(v, &u) || u < 64 || u > 65536) buf_puts(why, "`link_gpu_mb`: a whole number of MB from 64 to 65536");
@@ -306,7 +314,7 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
         else {
             buf_puts(why, "unknown field `");
             buf_append(why, m->key, m->key_n < 64 ? m->key_n : 64);
-            buf_puts(why, "`, expected one of `coordinates`, `gpu_cull`, `link_gpu_mb`, `memory_share`, `moving_fps`, `moving_proxies`, `renderer`, `text_size`, "
+            buf_puts(why, "`, expected one of `coordinates`, `gpu_cull`, `link_gpu_mb`, `memory_share`, `moving_fps`, `moving_proxies`, `renderer`, `shell_mode`, `text_size`, "
                           "`theme`, `ui_font`, `user_email`, `user_name`");
         }
     }
@@ -338,6 +346,7 @@ static void values(JsonW *w, const cc_settings *s, char *const *recent, size_t n
     for (size_t k = 0; k < NFIELDS; k++) {
         if (k == 2 && with_renderer) jw_key(w, "link_gpu_mb"), jw_u64(w, s->link_gpu_mb); /* SIZE3: sorted between gpu_cull and memory_share */
         if (k == 6 && with_renderer) jw_key(w, "renderer"), jw_str(w, s->renderer); /* GPU1: sorted between recent and text_size */
+        if (k == 6 && with_renderer) jw_key(w, "shell_mode"), jw_str(w, s->shell_mode); /* SHELL1: after renderer */
         jw_key(w, FIELDS[k]);
         if (k != 5) {
             field_value(w, s, k);
@@ -387,6 +396,7 @@ typedef struct {
     int has_recent; /* the text has a "recent" member */
     int has_renderer; /* GPU1: the text has a "renderer" member */
     int has_link_gpu; /* SIZE3: the text has a "link_gpu_mb" member */
+    int has_shell;    /* SHELL1: the text has a "shell_mode" member */
     char *text;
     size_t n;
 } Now;
@@ -419,6 +429,7 @@ static int now_read(cc_session *s, Now *c) {
         c->has_recent = v->type == JR_OBJ && field(v, "recent") != NULL;
         c->has_renderer = v->type == JR_OBJ && field(v, "renderer") != NULL;
         c->has_link_gpu = v->type == JR_OBJ && field(v, "link_gpu_mb") != NULL; /* SIZE3 */
+        c->has_shell = v->type == JR_OBJ && field(v, "shell_mode") != NULL; /* SHELL1 */
         if (!u->in_mem && v->type != JR_OBJ) snprintf(u->note, sizeof u->note, "the settings are not a JSON object: the defaults");
         else if (!u->in_mem) u->note[0] = 0;
     } else if (c->text && c->n && !u->in_mem) /* settings.rs: broken JSON reads as the defaults */
@@ -479,6 +490,7 @@ int cc_settings_query(cc_session *s, Buf *out) {
     for (size_t k = 0; k < NFIELDS; k++) {
         if (k == 2) jw_key(&w, "link_gpu_mb"), jw_bool(&w, 1); /* SIZE3: the WebGL2 viewport's budget across links */
         if (k == 6) jw_key(&w, "renderer"), jw_bool(&w, 1);
+        if (k == 6) jw_key(&w, "shell_mode"), jw_bool(&w, 1); /* SHELL1: the renderers' walk over tiles */
         jw_key(&w, FIELDS[k]), jw_bool(&w, k == 1 ? webgpu : APPLIES[k] < 0 ? files : APPLIES[k]);
     }
     jw_obj_end(&w);
@@ -521,11 +533,13 @@ int cc_settings_text_query(cc_session *s, Buf *out) {
  * members kept (a text with no "recent" gets the session's list, as Rust writes it). */
 static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
     Buf vals[NFIELDS];
-    cc_settings_member m[NFIELDS + 2];
+    cc_settings_member m[NFIELDS + 3];
     size_t nm = 0;
     int rc = 0;
     char rj[16]; /* GPU1: "renderer"'s JSON */
     snprintf(rj, sizeof rj, "\"%s\"", v->renderer);
+    char sj[16]; /* SHELL1: "shell_mode"'s JSON */
+    snprintf(sj, sizeof sj, "\"%s\"", v->shell_mode);
     char gj[16]; /* SIZE3: "link_gpu_mb"'s JSON */
     snprintf(gj, sizeof gj, "%u", v->link_gpu_mb);
     for (size_t k = 0; k < NFIELDS; k++) {
@@ -533,6 +547,8 @@ static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
         if (k == 2 && (v->link_gpu_mb != CC_LINK_GPU_MB_DEFAULT || c->has_link_gpu)) m[nm++] = (cc_settings_member){"link_gpu_mb", gj, strlen(gj)};
         /* GPU1: the lab's renderer, once set or already in the text (sorted: after recent) */
         if (k == 6 && (strcmp(v->renderer, "auto") || c->has_renderer)) m[nm++] = (cc_settings_member){"renderer", rj, strlen(rj)};
+        /* SHELL1: the outside walk's mode, once set or already in the text (sorted: after renderer) */
+        if (k == 6 && (strcmp(v->shell_mode, "auto") || c->has_shell)) m[nm++] = (cc_settings_member){"shell_mode", sj, strlen(sj)};
         buf_init(&vals[k]);
         JsonW w;
         jw_init(&w, &vals[k], 0);

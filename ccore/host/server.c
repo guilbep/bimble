@@ -624,6 +624,13 @@ static void handle_one(Conn *c, int *again) {
             Buf tb;
             buf_init(&tb);
             if (tiles && percent_decode(tq, &tb) != 1) buf_clear(&tb);
+            Str shq; /* SHELL1: &tile=a,b,c&shell=1: the outside walk's content */
+            if (tiles && tb.len && tb.p[0] >= '0' && tb.p[0] <= '9' && query_param(query, "shell", &shq) && str_eq(shq, "1")) {
+                Buf t2;
+                buf_init(&t2);
+                buf_puts(&t2, "shell:"), buf_append(&t2, tb.p, tb.len);
+                buf_free(&tb), tb = t2;
+            }
             int st = tiles  ? cc_link_tiles(cfg->session, budget, np, nn, has_key, key, tb.p ? tb.p : "", tb.len, &mp, &mn)
                      : rows ? cc_link_rows_answer(cfg->session, budget, np, nn, has_key, key, &mp, &mn)
                             : cc_link_mesh(cfg->session, budget, np, nn, has_key, key, &mp, &mn);
@@ -652,6 +659,10 @@ static void handle_one(Conn *c, int *again) {
                 q.leaf_bytes = query_param(query, "leaf_bytes", &x) && str_eq(x, "1");
                 q.occlusion = query_param(query, "occ", &x) && str_eq(x, "1");
                 q.lod = !(query_param(query, "lod", &x) && str_eq(x, "0"));
+                if (query_param(query, "shell", &x)) q.shell = str_eq(x, "outside") || str_eq(x, "1") ? 1 : str_eq(x, "auto") ? 2 : 0; /* SHELL1 */
+                q.shell_margin = 2000;
+                if (query_param(query, "margin", &x)) ok &= parse_nums(x, &q.shell_margin, 1);
+                q.truth = query_param(query, "truth", &x) && str_eq(x, "1");
                 double th = fov * 3.141592653589793 / 360.0; /* tan by its series: no libm here */
                 q.tan_half = th + th * th * th / 3 + 2 * th * th * th * th * th / 15 + 17 * th * th * th * th * th * th * th / 315;
                 Buf fb;

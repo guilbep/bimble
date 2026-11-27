@@ -5,6 +5,7 @@
 
 #include "guid.h"
 #include "hlod.h"
+#include "shell.h"
 #include "tiles.h"
 #include "ifc_psets.h"
 #include "inflate.h"
@@ -333,6 +334,12 @@ static void report_tail(Buf *b, const cc_link_job *j, uint64_t cache_bytes, cons
         buf_u64(b, j->tiles_proxy_tris), buf_puts(b, " proxy triangles, "), buf_u64(b, j->tiles_bytes), buf_puts(b, " bytes, built in ");
         buf_u64(b, (uint64_t)(j->tiles_ms + 0.5)), buf_puts(b, " ms");
     } else buf_puts(b, j->tiles_why[0] ? j->tiles_why : "none");
+    buf_puts(b, "\nexterior shell (in TILE, for views from outside): "); /* SHELL1 */
+    if (j->shell_elements) {
+        buf_u64(b, j->shell_ext), buf_puts(b, " of "), buf_u64(b, j->shell_elements), buf_puts(b, " elements, ");
+        buf_u64(b, j->shell_ext_tris), buf_puts(b, " of "), buf_u64(b, j->shell_detail), buf_puts(b, " triangles, ");
+        buf_u64(b, j->shell_bytes), buf_puts(b, " bytes, built in "), buf_u64(b, (uint64_t)(j->shell_ms + 0.5)), buf_puts(b, " ms");
+    } else buf_puts(b, j->shell_why[0] ? j->shell_why : "none");
     buf_puts(b, "\ncache sections (bytes):");
     static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ", "TILE"};
     for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) {
@@ -426,6 +433,43 @@ static void bake_hlod(cc_link_job *j, Buf *vb) {
     j->hlod_ms = pf->now_ms(pf->ctx) - t0;
 }
 
+/* SHELL1 (ADR 0078 amendment 7, src/shell.h): the exterior shell of the pyramid just built (`sec`), classified from the
+ * cache's bytes read in place (a run of leaves decoded at a time; the views' buffers bounded), in steps (cancellable),
+ * then applied to the section (`out`: flags, the exterior proxies, the table). A failure leaves the pyramid without it
+ * (the outside walk is then the full walk), said in the report. */
+static void bake_shell(cc_link_job *j, const cc_tiles_src *src, const cc_tiles_opts *o, const Buf *sec, Buf *out) {
+    const cc_platform *pf = j->pf;
+    double t0 = pf->now_ms(pf->ctx);
+    cc_error e;
+    cc_tiles_toc toc;
+    cc_shell *s = NULL;
+    cc_shell_opts so = {o->shell_views, o->shell_res, o->shell_tol, 0};
+    int rc = cc_tiles_check((const uint8_t *)sec->p, sec->len, 1, (uint32_t)cc_tiles_src_count(src), &toc, &e);
+    if (!rc) rc = cc_shell_start(&s, src, &toc, &so, &e);
+    while (rc == 0 && !cc_atomic_load(&j->pg.cancel)) {
+        int st = cc_shell_step(s, 4000000, &e);
+        if (st < 0) rc = -1;
+        if (st != 0) break;
+    }
+    if (rc == 0 && cc_atomic_load(&j->pg.cancel)) snprintf(j->shell_why, sizeof j->shell_why, "none (cancelled)"), rc = 1;
+    j->shell_classify_ms = pf->now_ms(pf->ctx) - t0;
+    cc_tiles_shell_info info;
+    if (rc == 0 && cc_tiles_shell_apply((const uint8_t *)sec->p, sec->len, src, o, cc_shell_exterior(s), &j->pg.cancel, out, &info, &e)) rc = -1;
+    if (rc == 0) {
+        cc_shell_stats st;
+        cc_shell_get_stats(s, &st);
+        cc_tile r;
+        cc_tiles_get(&toc, 0, &r);
+        j->shell_ext = info.exterior, j->shell_elements = info.elements, j->shell_ext_tris = info.ext_tris, j->shell_detail = r.detail;
+        j->shell_bytes = info.added, j->shell_peak = st.peak_bytes, j->shell_mixed = info.mixed;
+    } else {
+        buf_clear(out);
+        if (rc < 0) snprintf(j->shell_why, sizeof j->shell_why, "none (%s)", e.msg);
+    }
+    cc_shell_free(s);
+    j->shell_ms = pf->now_ms(pf->ctx) - t0;
+}
+
 /* TILE1 (ADR 0078 amendment 6): the tile pyramid, from the cache's bytes read in place (nothing decoded but one mesh
  * at a time: tiles.h), built in steps (cancellable between them), appended as a section TILE. A failure leaves the
  * cache without (the page draws as before), said in the report. */
@@ -449,12 +493,18 @@ static void bake_tiles(cc_link_job *j, Buf *vb) {
         if (st != 0) break;
     }
     if (rc == 0 && t.work) snprintf(j->tiles_why, sizeof j->tiles_why, "none (cancelled)"), rc = 1;
-    cc_viewfile_free(&vf); /* before vb grows (it reads vb's bytes) */
-    if (rc == 0 && cc_viewfile_append_tiles(vb, t.out.p, t.out.len) == 0) {
-        j->tiles_count = t.ntiles, j->tiles_levels = t.levels, j->tiles_proxy_tris = t.proxy_tris, j->tiles_bytes = t.out.len;
-    } else if (rc < 0) snprintf(j->tiles_why, sizeof j->tiles_why, "none (%s)", e.msg);
-    cc_tiles_free(&t);
     j->tiles_ms = pf->now_ms(pf->ctx) - t0;
+    Buf sh; /* SHELL1: the section with its exterior shell */
+    buf_init(&sh);
+    if (rc == 0 && o.shell_views) bake_shell(j, &src, &o, &t.out, &sh);
+    else if (rc == 0) snprintf(j->shell_why, sizeof j->shell_why, "none (shell=0)");
+    const Buf *sec = sh.len ? &sh : &t.out;
+    cc_viewfile_free(&vf); /* before vb grows (it reads vb's bytes) */
+    if (rc == 0 && cc_viewfile_append_tiles(vb, sec->p, sec->len) == 0) {
+        j->tiles_count = t.ntiles, j->tiles_levels = t.levels, j->tiles_proxy_tris = t.proxy_tris, j->tiles_bytes = sec->len;
+    } else if (rc < 0) snprintf(j->tiles_why, sizeof j->tiles_why, "none (%s)", e.msg);
+    buf_free(&sh);
+    cc_tiles_free(&t);
 }
 
 /* ---- SIZE3 (E): the proxies baked after the link is ready ----
@@ -681,6 +731,7 @@ static void run(cc_link_job *j) {
     cc_ifc_scene_free(s), free(s); /* LNK3D: the IFC's scene goes before the proxies are built (its peak) */
     /* SIZE3 (E): the proxies are baked after the link is ready (index_run), not here: the link draws sooner */
     snprintf(j->hlod_why, sizeof j->hlod_why, "none yet (baked after the link is ready: see below)");
+    snprintf(j->shell_why, sizeof j->shell_why, "none yet (baked with the pyramid: see below)"); /* SHELL1 */
     if (!wr && psb.len) { /* M1LINKS: last, read lazily; SIZE2: packed (each set once, in gzip blocks) */
         Buf pk;
         buf_init(&pk);

@@ -21,6 +21,7 @@ void cc_tiles_default(cc_tiles_opts *o) {
     o->root_tris = CC_TILES_ROOT_TRIS;
     o->res = CC_TILES_RES;
     o->occ = CC_TILES_OCC;
+    o->shell_views = CC_TILES_SHELL_VIEWS, o->shell_res = CC_TILES_SHELL_RES, o->shell_tol = CC_TILES_SHELL_TOL;
 }
 
 void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n) {
@@ -28,6 +29,8 @@ void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n) {
     buf_init(&b);
     buf_puts(&b, "leaf="), buf_u64(&b, o->leaf_tris), buf_puts(&b, " proxy="), buf_u64(&b, o->proxy_tris);
     buf_puts(&b, " root="), buf_u64(&b, o->root_tris), buf_puts(&b, " res="), buf_u64(&b, o->res), buf_puts(&b, " occ="), buf_u64(&b, o->occ);
+    buf_puts(&b, " shell="), buf_u64(&b, o->shell_views); /* SHELL1 */
+    if (o->shell_views) buf_putc(&b, 'x'), buf_u64(&b, o->shell_res), buf_puts(&b, " shell_d="), buf_u64(&b, o->shell_tol);
     size_t k = b.oom || !b.p ? 0 : (b.len < n ? b.len : n - 1);
     if (n) memcpy(out, b.p ? b.p : "", k), out[k] = 0;
     buf_free(&b);
@@ -35,7 +38,7 @@ void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n) {
 
 void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t) {
     cc_tiles_default(o);
-    static const struct { const char *k; uint32_t lo, hi; } K[] = {{"leaf", 1000, 10000000}, {"proxy", 64, 1000000}, {"root", 16, 1000000}, {"res", 4, 1024}, {"occ", 0, CC_TILES_OCC_MAX}};
+    static const struct { const char *k; uint32_t lo, hi; } K[] = {{"leaf", 1000, 10000000}, {"proxy", 64, 1000000}, {"root", 16, 1000000}, {"res", 4, 1024}, {"occ", 0, CC_TILES_OCC_MAX}, {"shell", 0, 0}, {"shell_d", 0, 100000}};
     for (const char *p = t; p && *p;) {
         while (*p == ' ') p++;
         for (size_t i = 0; i < sizeof K / sizeof *K; i++) {
@@ -45,9 +48,21 @@ void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t) {
             const char *q = p + kl + 1;
             int d = 0;
             while (*q >= '0' && *q <= '9' && d < 10) v = v * 10 + (uint64_t)(*q++ - '0'), d++;
+            if (i == 5 && d && v <= CC_SHELL_MAX_VIEWS_T) { /* SHELL1: shell=<views>x<res> (0: none) */
+                uint64_t r = 0;
+                int dr = 0;
+                if (*q == 'x') {
+                    q++;
+                    while (*q >= '0' && *q <= '9' && dr < 10) r = r * 10 + (uint64_t)(*q++ - '0'), dr++;
+                }
+                if (!v) o->shell_views = 0;
+                else if (dr && r >= 16 && r <= CC_SHELL_MAX_RES_T) o->shell_views = (uint32_t)v, o->shell_res = (uint32_t)r;
+                else if (!dr) o->shell_views = (uint32_t)v;
+                continue;
+            }
             if (d && v >= K[i].lo && v <= K[i].hi) {
                 uint32_t x = (uint32_t)v;
-                if (i == 0) o->leaf_tris = x; else if (i == 1) o->proxy_tris = x; else if (i == 2) o->root_tris = x; else if (i == 3) o->res = x; else o->occ = x;
+                if (i == 0) o->leaf_tris = x; else if (i == 1) o->proxy_tris = x; else if (i == 2) o->root_tris = x; else if (i == 3) o->res = x; else if (i == 4) o->occ = x; else o->shell_tol = x;
             }
         }
         while (*p && *p != ' ') p++;
@@ -157,6 +172,20 @@ static int src_box(const cc_tiles_src *s, size_t k, float b[6], Arena *scratch) 
     return 0;
 }
 
+/* ---- the source for other bakers (shell.c) ---- */
+size_t cc_tiles_src_count(const cc_tiles_src *s) { return src_n(s); }
+size_t cc_tiles_src_nblocks(const cc_tiles_src *s) { return src_nshapes(s) + src_n(s); }
+size_t cc_tiles_src_el_block(const cc_tiles_src *s, size_t k) {
+    int sh = src_shape(s, k);
+    if (sh >= 0 && (size_t)sh >= src_nshapes(s)) return SIZE_MAX; /* a damaged shape index */
+    return el_block(s, k);
+}
+int cc_tiles_src_block(const cc_tiles_src *s, size_t b, Arena *a, cc_mesh *m) {
+    return b < cc_tiles_src_nblocks(s) ? src_block(s, b, a, m) : -1;
+}
+const cc_placement32 *cc_tiles_src_place(const cc_tiles_src *s, size_t k) { return src_shape(s, k) >= 0 ? src_pl(s, k) : NULL; }
+int cc_tiles_src_box(const cc_tiles_src *s, size_t k, float b[6], Arena *scratch) { return src_box(s, k, b, scratch); }
+
 static int opaque(const cc_tiles_src *s, size_t k) {
     if (src_cat(s, k) == CC_CAT_GLASS) return 0;
     cc_str c = src_class(s, k);
@@ -235,6 +264,8 @@ struct cc_tiles_work {
     Buf blobs;
     LW *lw;                   /* per worker (cc_jobs): the leaves being read */
     size_t nlw;
+    const uint8_t *mask;      /* SHELL1: per scene element, 0: left out of the proxies (a shell build) */
+    int force_chain;          /* SHELL1: the chain's length to build (-1: until the root is small) */
 };
 
 #define CC_TILES_SAMPLES 4096u /* points kept per tile to measure its parent's error */
@@ -345,7 +376,7 @@ int cc_tiles_start(cc_tiles *t, const cc_tiles_src *src, const cc_tiles_opts *o,
     cc_tiles_work *w = calloc(1, sizeof *w);
     if (!w) return fail(err, "out of memory");
     t->work = w;
-    w->src = *src, w->o = *o;
+    w->src = *src, w->o = *o, w->force_chain = -1;
     if (!w->o.leaf_tris) w->o.leaf_tris = 1;
     if (!w->o.proxy_tris) w->o.proxy_tris = 1;
     if (!w->o.res) w->o.res = 1;
@@ -1336,8 +1367,12 @@ static int chain(cc_tiles_work *w) {
         Node *x = &w->nodes[top];
         Clusters *cl = &w->cl[top];
         uint64_t cur = (x->flags & CC_TILE_PROXY) ? x->tris : x->detail;
-        if (cur <= w->o.root_tris && (x->flags & CC_TILE_PROXY)) break;
-        if (x->flags & CC_TILE_LEAF && x->detail <= w->o.root_tris) break; /* a tiny link: the leaf is the root */
+        if (w->force_chain >= 0) { /* SHELL1: the full build's chain, level for level */
+            if (guard >= w->force_chain) break;
+        } else {
+            if (cur <= w->o.root_tris && (x->flags & CC_TILE_PROXY)) break;
+            if (x->flags & CC_TILE_LEAF && x->detail <= w->o.root_tris) break; /* a tiny link: the leaf is the root */
+        }
         if (!cl->built) break;
         uint64_t cap = cur / 4;
         if (cap < w->o.root_tris && cur > w->o.root_tris) cap = w->o.root_tris;
@@ -1370,7 +1405,7 @@ static int chain(cc_tiles_work *w) {
         cc_hg_clusters_free(cl);
         w->cl[q] = out;
         top = q;
-        if (y->tris <= w->o.root_tris) break;
+        if (w->force_chain < 0 && y->tris <= w->o.root_tris) break;
     }
     w->root = top;
     return 0;
@@ -1456,7 +1491,8 @@ static int leaf_run(cc_tiles_work *w, LW *L, uint32_t n) {
     L->nlsmp = 0, L->lcount = 0, L->lstride = 2 * x->detail / CC_TILES_SAMPLES + 1;
     arena_reset(&L->dec);
     int rc = 0;
-    for (uint32_t j = 0; j < x->nel && !rc; j++) rc = leaf_element(w, L, x, w->els[x->el0 + j]);
+    for (uint32_t j = 0; j < x->nel && !rc; j++)
+        if (!w->mask || w->mask[w->els[x->el0 + j]]) rc = leaf_element(w, L, x, w->els[x->el0 + j]);
     for (uint32_t i = 0; i < L->ntouched; i++) L->shapes[L->touched[i]].nv = UINT32_MAX;
     L->ntouched = 0;
     arena_reset(&L->dec);
@@ -1465,7 +1501,13 @@ static int leaf_run(cc_tiles_work *w, LW *L, uint32_t n) {
     memset(&cl, 0, sizeof cl);
     if (cc_hg_grid_fit(&L->g, w->o.proxy_tris, 1) || cc_hg_grid_finish(&L->g, &cl)) return cc_hg_clusters_free(&cl), cc_hg_grid_free(&L->g), -1;
     w->cl[n] = cl;
-    x->tris = (uint32_t)(x->detail > 0xFFFFFFFFull ? 0xFFFFFFFFu : x->detail);
+    uint64_t dt = x->detail;
+    if (w->mask) { /* SHELL1: a shell build's leaf stands for its exterior elements */
+        dt = 0;
+        for (uint32_t j = 0; j < x->nel; j++)
+            if (w->mask[w->els[x->el0 + j]]) dt += w->tris[w->els[x->el0 + j]];
+    }
+    x->tris = (uint32_t)(dt > 0xFFFFFFFFull ? 0xFFFFFFFFu : dt);
     x->verts = (uint32_t)(L->leaf_verts > 0xFFFFFFFFull ? 0xFFFFFFFFu : L->leaf_verts);
     /* its occluders, sorted (occ_store, without the shared arena: a worker allocates its own) */
     qsort(L->occ, L->nocc, sizeof *L->occ, occ_cmp);
@@ -1641,6 +1683,13 @@ int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelement
         cc_tiles_get(toc, 0, &r);
         if (r.el0 != 0 || r.nel != nl) return fail(err, "tiles: the root's elements");
     }
+    if (with_blobs && (toc->bake & CC_TILES_BAKE_SHELL)) { /* SHELL1: the shell table, found by the trailer at the end */
+        const uint8_t *tr = p + n - 16;
+        uint64_t tl = blobs >= 16 ? rd32(tr + 4) : 0, to = blobs >= 16 ? ((uint64_t)rd32(tr + 8) | (uint64_t)rd32(tr + 12) << 32) : 0;
+        if (blobs < 16 || memcmp(tr, "TSHT", 4) || to > blobs - 16 || tl > blobs - 16 - to || (to & 7))
+            return fail(err, "tiles: the shell's trailer");
+        if (cc_tiles_shell_check(p + tp + to, (size_t)tl, toc, err)) return -1;
+    }
     if (with_blobs) {
         const uint8_t *bl = p + tp;
         if (tp > UINT32_MAX) return fail(err, "tiles: section size");
@@ -1709,6 +1758,11 @@ int cc_tiles_proxy_mesh(const uint8_t *p, size_t n, const float box[6], Arena *a
 /* ---- the leaf answer ---- */
 
 int cc_tiles_leaf_answer(const cc_tiles_src *src, const cc_tiles_toc *toc, uint32_t id, Buf *out, cc_error *err) {
+    return cc_tiles_leaf_answer_ex(src, toc, id, 0, out, err);
+}
+
+int cc_tiles_leaf_answer_ex(const cc_tiles_src *src, const cc_tiles_toc *toc, uint32_t id, unsigned flags, Buf *out, cc_error *err) {
+    int only = (flags & CC_TILES_ANS_SHELL) && (toc->bake & CC_TILES_BAKE_SHELL); /* SHELL1: its exterior elements only */
     if (id >= toc->ntiles) return fail(err, "tiles: no such tile");
     cc_tile t;
     cc_tiles_get(toc, id, &t);
@@ -1720,10 +1774,13 @@ int cc_tiles_leaf_answer(const cc_tiles_src *src, const cc_tiles_toc *toc, uint3
     memset(blk, 0, (ns + 1) * sizeof *blk);
     uint32_t nb = 0;
     size_t head = out->len;
+    uint32_t nel = 0;
+    for (uint32_t i = 0; i < t.nel; i++) nel += !only || (cc_tiles_el_flags(toc, t.el0 + i) & CC_TILES_EL_EXTERIOR);
     buf_append(out, "TLF1", 4);
-    put32(out, id), put32(out, t.nel), put32(out, 0);
+    put32(out, id), put32(out, nel), put32(out, 0);
     static const float ID[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
     for (uint32_t i = 0; i < t.nel; i++) {
+        if (only && !(cc_tiles_el_flags(toc, t.el0 + i) & CC_TILES_EL_EXTERIOR)) continue;
         uint32_t el = cc_tiles_list(toc, t.el0 + i);
         if (el >= ne) return free(blk), free(order), fail(err, "tiles: an element");
         int sh = src_shape(src, el);
@@ -1907,9 +1964,23 @@ static int sel_cmp(const void *x, const void *y) {
     return a->id < b->id ? -1 : a->id > b->id;
 }
 
+/* SHELL1: a tile as the outside walk sees it: no exterior element: not in view; a leaf: its exterior triangles; a proxy: the
+ * shell table's (its exterior proxy), or none (descend) when the table says so */
+static void sel_get(const cc_tiles_toc *toc, uint32_t i, int shell, cc_tile *t) {
+    cc_tiles_get(toc, i, t);
+    if (!shell || !toc->shell) return;
+    cc_tile_shell r;
+    cc_tiles_shell_get(toc, i, &r);
+    if (t->flags & CC_TILE_LEAF) t->tris = r.ext;
+    else if (r.flags & CC_TILE_SHELL_PROXY) t->tris = r.tris, t->error = r.error;
+    else if (t->flags & CC_TILE_PROXY) t->flags &= ~(uint32_t)CC_TILE_PROXY, t->error = 1.0f / 0.0f, t->tris = 0;
+}
+
 uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double error_px, uint64_t budget, unsigned flags,
                          const uint8_t *descend, uint32_t *out, uint32_t cap, uint64_t *tris) {
     int leaves = (flags & CC_TILES_SEL_LEAVES) != 0; /* levels of detail off */
+    int shell = (flags & CC_TILES_SEL_SHELL) && (toc->bake & CC_TILES_BAKE_SHELL); /* SHELL1: the outside walk */
+#define IN_VIEW(T) (in_view(v, (T).box) && (!shell || ((T).flags & CC_TILE_EXTERIOR)))
     *tris = 0;
     if (!toc->ntiles) return 0;
     HeapE *h = malloc((size_t)toc->ntiles * sizeof *h), *fin = malloc((size_t)toc->ntiles * sizeof *fin);
@@ -1917,26 +1988,26 @@ uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double
     uint32_t nh = 0, nf = 0;
     uint64_t total = 0;
     cc_tile t;
-    cc_tiles_get(toc, 0, &t);
+    sel_get(toc, 0, shell, &t);
 #define PRI(T, I, D)                                                                                                                   \
     (((T).flags & CC_TILE_LEAF) ? 0.0                                                                                                  \
      : (leaves || !((T).flags & CC_TILE_PROXY) || (descend && descend[I])) ? 1e300                                                              \
      : v->px_per_mm > 0 ? (double)(T).error * v->px_per_mm : (D) > 1.0 ? (double)(T).error * v->k / (D) : 1e299)
-    if (in_view(v, t.box)) {
+    if (IN_VIEW(t)) {
         double d = box_dist(v->eye, t.box);
         heap_push(h, &nh, (HeapE){PRI(t, 0, d), d, 0});
         total = t.tris;
     }
     while (nh) {
         HeapE e = h[0];
-        cc_tiles_get(toc, e.id, &t);
+        sel_get(toc, e.id, shell, &t);
         int forced = e.pri >= 1e300;
         if ((t.flags & CC_TILE_LEAF) || (!forced && e.pri <= error_px)) break;
         uint64_t add = 0;
         for (uint32_t c = e.id + 1, q = 0; q < t.nchildren; q++) {
             cc_tile u;
-            cc_tiles_get(toc, c, &u);
-            if (in_view(v, u.box)) add += u.tris;
+            sel_get(toc, c, shell, &u);
+            if (IN_VIEW(u)) add += u.tris;
             c += u.skip;
         }
         if (!forced && total - t.tris + add > budget) break;
@@ -1944,10 +2015,10 @@ uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double
         total = total - t.tris + add;
         for (uint32_t c = e.id + 1, q = 0; q < t.nchildren; q++) {
             cc_tile u;
-            cc_tiles_get(toc, c, &u);
+            sel_get(toc, c, shell, &u);
             uint32_t me = c;
             c += u.skip;
-            if (!in_view(v, u.box)) continue;
+            if (!IN_VIEW(u)) continue;
             double d = box_dist(v->eye, u.box);
             heap_push(h, &nh, (HeapE){PRI(u, me, d), d, me});
         }
@@ -1955,7 +2026,7 @@ uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double
 #undef PRI
     for (uint32_t i = 0; i < nh; i++) {
         cc_tile u;
-        cc_tiles_get(toc, h[i].id, &u);
+        sel_get(toc, h[i].id, shell, &u);
         if (!(u.flags & (CC_TILE_LEAF | CC_TILE_PROXY))) continue; /* cannot stand (never left when refined) */
         fin[nf++] = h[i];
     }
@@ -1963,12 +2034,13 @@ uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double
     uint32_t n = 0;
     for (uint32_t i = 0; i < nf; i++) {
         cc_tile u;
-        cc_tiles_get(toc, fin[i].id, &u);
+        sel_get(toc, fin[i].id, shell, &u);
         *tris += u.tris;
         if (n < cap) out[n++] = fin[i].id;
     }
     free(h), free(fin);
     return n;
+#undef IN_VIEW
 }
 
 /* ---- the reference occlusion (tiles.h) ---- */
@@ -2068,4 +2140,180 @@ int cc_tiles_occ_hidden(const cc_tiles_occ *z, const float box[6], double c, dou
             for (int k = 0; k < 4; k++)
                 if (!(z->depth[(size_t)(cy + (k >> 1)) * (z->w + 1) + cx + (k & 1)] < dmin)) return 0;
     return 1;
+}
+
+/* ---- SHELL1: the exterior shell in the section (tiles.h) ---- */
+
+void cc_tiles_shell_get(const cc_tiles_toc *toc, uint32_t i, cc_tile_shell *o) {
+    memset(o, 0, sizeof *o);
+    if (!toc->shell || i >= toc->ntiles) return;
+    const uint8_t *r = toc->shell + CC_TILES_SHELL_HEAD + (size_t)CC_TILES_SHELL_REC * i;
+    o->ext = rd32(r), o->flags = rd32(r + 4), o->off = (uint64_t)rd32(r + 8) | (uint64_t)rd32(r + 12) << 32;
+    o->len = rd32(r + 16), o->tris = rd32(r + 20), o->verts = rd32(r + 24), o->error = rdf(r + 28);
+}
+
+int cc_tiles_shell_check(const uint8_t *p, size_t n, cc_tiles_toc *toc, cc_error *err) {
+    toc->shell = NULL, toc->shell_n = 0;
+    if (!(toc->bake & CC_TILES_BAKE_SHELL)) return fail(err, "tiles: no shell baked");
+    if (n < CC_TILES_SHELL_HEAD || memcmp(p, "TSH1", 4) || rd32(p + 4) != 1 || rd32(p + 8) != toc->ntiles ||
+        n != CC_TILES_SHELL_HEAD + (uint64_t)CC_TILES_SHELL_REC * toc->ntiles)
+        return fail(err, "tiles: the shell table");
+    int blobs = toc->n >= (uint64_t)toc->blob_at + toc->blobs; /* the proxies are there to check */
+    const uint8_t *bl = toc->p + toc->blob_at;
+    uint64_t ext_el = 0;
+    for (uint32_t i = 0; i < toc->nlist; i++) ext_el += (toc->eflags[i] & CC_TILES_EL_EXTERIOR) != 0;
+    if (rd32(p + 24) != ext_el) return fail(err, "tiles: the shell's elements");
+    toc->shell = p, toc->shell_n = (uint32_t)n;
+    for (uint32_t i = 0; i < toc->ntiles; i++) {
+        cc_tile t;
+        cc_tile_shell r;
+        cc_tiles_get(toc, i, &t);
+        cc_tiles_shell_get(toc, i, &r);
+        int bad = (r.flags & ~(uint32_t)CC_TILE_SHELL_PROXY) || (r.ext > t.detail) || (!r.ext != !(t.flags & CC_TILE_EXTERIOR));
+        if (t.flags & CC_TILE_LEAF) bad |= r.flags != 0 || r.error != 0.0f || r.len || r.tris != r.ext;
+        else if (r.flags & CC_TILE_SHELL_PROXY) {
+            bad |= !(t.flags & CC_TILE_PROXY) || !r.ext || !(r.error >= 0.0f && r.error < 3.0e38f) || r.len < 16 || (r.off & 3) || r.off + r.len > toc->blobs;
+            if (!bad && blobs) {
+                if (cc_tiles_proxy_check(bl + r.off, r.len, err)) return toc->shell = NULL, toc->shell_n = 0, -1;
+                bad |= rd32(bl + r.off + 4) != r.verts || rd32(bl + r.off + 8) != 3ull * r.tris;
+            }
+        } else bad |= !(r.error > 3.0e38f) || r.len || r.tris;
+        if (bad) return toc->shell = NULL, toc->shell_n = 0, fail(err, "tiles: a tile's shell");
+        if (t.flags & CC_TILE_LEAF) { /* a leaf has exterior elements exactly when one is flagged */
+            int any = 0;
+            for (uint32_t k = 0; k < t.nel && !any; k++) any = (toc->eflags[t.el0 + k] & CC_TILES_EL_EXTERIOR) != 0;
+            if (any != !!r.ext) return toc->shell = NULL, toc->shell_n = 0, fail(err, "tiles: a leaf's shell");
+        }
+    }
+    return 0;
+}
+
+static void set32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v, p[1] = (uint8_t)(v >> 8), p[2] = (uint8_t)(v >> 16), p[3] = (uint8_t)(v >> 24); }
+
+int cc_tiles_shell_apply(const uint8_t *sec, size_t n, const cc_tiles_src *src, const cc_tiles_opts *o, const uint8_t *ext,
+                         const int *cancel, Buf *out, cc_tiles_shell_info *info, cc_error *err) {
+    cc_tiles_toc toc;
+    if (info) memset(info, 0, sizeof *info);
+    if (cc_tiles_check(sec, n, 1, (uint32_t)src_n(src), &toc, err)) return -1;
+    if (toc.bake & CC_TILES_BAKE_SHELL) return fail(err, "tiles: the shell is there already");
+    uint32_t nt = toc.ntiles, nl = toc.nlist;
+    uint64_t *pa = calloc((size_t)nl + 1, sizeof *pa), *pe = calloc((size_t)nl + 1, sizeof *pe); /* prefix sums: all, exterior */
+    uint8_t *mask = calloc(src_n(src) + 1, 1);
+    if (!pa || !pe || !mask) return free(pa), free(pe), free(mask), fail(err, "out of memory");
+    uint32_t next = 0;
+    for (uint32_t i = 0; i < nl; i++) {
+        uint32_t e = cc_tiles_list(&toc, i);
+        const cc_mesh *c = src_counts(src, e);
+        uint64_t tr = c ? c->ni / 3 : 0;
+        int x = ext[e] != 0;
+        mask[e] = (uint8_t)x, next += (uint32_t)x;
+        pa[i + 1] = pa[i] + tr, pe[i + 1] = pe[i] + (x ? tr : 0);
+    }
+    /* the tiles with both kinds of elements get a proxy of their exterior ones: a build of the same tree with the others left out */
+    uint32_t chain = 0, mixed = 0;
+    for (uint32_t i = 0; i < nt; i++) {
+        cc_tile t;
+        cc_tiles_get(&toc, i, &t);
+        if (i == chain && t.nchildren == 1) chain++;
+        uint64_t a = pa[t.el0 + t.nel] - pa[t.el0], x = pe[t.el0 + t.nel] - pe[t.el0];
+        if ((t.flags & CC_TILE_PROXY) && x && x < a) mixed++;
+    }
+    cc_tiles m;
+    cc_tiles_toc mt;
+    int have_m = 0;
+    memset(&m, 0, sizeof m);
+    buf_init(&m.out);
+    if (mixed) {
+        cc_tiles_opts mo = *o;
+        mo.occ = 0;
+        int rc = cc_tiles_start(&m, src, &mo, err);
+        if (!rc && m.work) m.work->mask = mask, m.work->force_chain = (int)chain;
+        while (!rc) {
+            if (cancel && cc_atomic_load(cancel)) {
+                cc_tiles_free(&m), free(pa), free(pe), free(mask);
+                return fail(err, "cancelled");
+            }
+            int st = cc_tiles_step(&m, 1000000, err);
+            if (st < 0) rc = -1;
+            if (st != 0) break;
+        }
+        if (rc) return cc_tiles_free(&m), free(pa), free(pe), free(mask), -1;
+        have_m = !cc_tiles_check((const uint8_t *)m.out.p, m.out.len, 1, (uint32_t)src_n(src), &mt, NULL) && mt.ntiles == nt;
+        for (uint32_t i = 0; have_m && i < nt; i++) { /* the same tree, tile for tile */
+            cc_tile a, b;
+            cc_tiles_get(&toc, i, &a), cc_tiles_get(&mt, i, &b);
+            if (a.parent != b.parent || a.nchildren != b.nchildren || a.el0 != b.el0 || a.nel != b.nel ||
+                (a.flags & 7u) != (b.flags & 7u))
+                have_m = 0;
+        }
+        if (info) info->shell_build_ok = have_m;
+    }
+    /* the new section: the old one patched, the blobs grown by the mixed tiles' proxies, the table and its trailer */
+    buf_clear(out);
+    if (buf_reserve(out, n + 64 + (size_t)CC_TILES_SHELL_REC * nt + (have_m ? m.out.len : 0))) {
+        cc_tiles_free(&m), free(pa), free(pe), free(mask);
+        return fail(err, "out of memory");
+    }
+    buf_append(out, sec, n);
+    uint8_t *q = (uint8_t *)out->p;
+    set32(q + 44, toc.bake | CC_TILES_BAKE_SHELL);
+    for (uint32_t i = 0; i < nl; i++)
+        if (mask[cc_tiles_list(&toc, i)]) q[(size_t)(toc.eflags - toc.p) + i] |= CC_TILES_EL_EXTERIOR;
+    Buf tab;
+    buf_init(&tab);
+    buf_append(&tab, "TSH1", 4);
+    put32(&tab, 1), put32(&tab, nt), put32(&tab, o->shell_views), put32(&tab, o->shell_res), put32(&tab, o->shell_tol), put32(&tab, next), put32(&tab, 0);
+    const uint8_t *mbl = have_m ? (const uint8_t *)m.out.p + mt.blob_at : NULL;
+    uint64_t ext_tris = 0, shell_proxy_tris = 0, added = 0;
+    for (uint32_t i = 0; i < nt; i++) {
+        cc_tile t;
+        cc_tiles_get(&toc, i, &t);
+        uint64_t a = pa[t.el0 + t.nel] - pa[t.el0], x = pe[t.el0 + t.nel] - pe[t.el0];
+        uint32_t x32 = x > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)x;
+        if (x32 > t.detail) x32 = t.detail; /* both saturate */
+        if (x) q[CC_TILES_HEAD + (size_t)CC_TILES_REC * i + 11] |= CC_TILE_EXTERIOR;
+        if (i == 0) ext_tris = x;
+        uint32_t fl = 0, len = 0, tr = 0, vs = 0;
+        uint64_t off = 0;
+        float er = (t.flags & CC_TILE_LEAF) ? 0.0f : 1.0f / 0.0f;
+        if ((t.flags & CC_TILE_LEAF)) tr = x32;
+        else if ((t.flags & CC_TILE_PROXY) && x && x == a) /* all exterior: its own proxy */
+            fl = CC_TILE_SHELL_PROXY, off = t.off, len = t.len, tr = t.tris, vs = t.verts, er = t.error;
+        else if ((t.flags & CC_TILE_PROXY) && x && have_m) { /* both kinds: the shell build's */
+            cc_tile u;
+            cc_tiles_get(&mt, i, &u);
+            if (u.flags & CC_TILE_PROXY) {
+                while ((out->len - (n - toc.blobs)) % 4) buf_putc(out, 0);
+                off = out->len - (n - toc.blobs), len = u.len, tr = u.tris, vs = u.verts, er = u.error, fl = CC_TILE_SHELL_PROXY;
+                buf_append(out, mbl + u.off, u.len);
+                added += u.len, shell_proxy_tris += u.tris;
+                q = (uint8_t *)out->p;
+            }
+        }
+        put32(&tab, x32), put32(&tab, fl), put32(&tab, (uint32_t)off), put32(&tab, (uint32_t)(off >> 32));
+        put32(&tab, len), put32(&tab, tr), put32(&tab, vs), putf(&tab, er);
+    }
+    while ((out->len - (n - toc.blobs)) % 8) buf_putc(out, 0);
+    uint64_t toff = out->len - (n - toc.blobs);
+    buf_append(out, tab.p, tab.len);
+    buf_append(out, "TSHT", 4), put32(out, (uint32_t)tab.len), put32(out, (uint32_t)toff), put32(out, (uint32_t)(toff >> 32));
+    uint64_t nb = out->len - (n - toc.blobs);
+    if (!out->oom) set32((uint8_t *)out->p + 32, (uint32_t)nb), set32((uint8_t *)out->p + 36, (uint32_t)(nb >> 32));
+    int bad = out->oom || tab.oom;
+    buf_free(&tab), cc_tiles_free(&m), free(pa), free(pe), free(mask);
+    if (bad) return fail(err, "out of memory");
+    if (info) info->exterior = next, info->elements = nl, info->ext_tris = ext_tris, info->added = out->len - n, info->shell_proxy_tris = shell_proxy_tris, info->mixed = mixed;
+    (void)added;
+    cc_tiles_toc chk; /* what we wrote reads */
+    if (cc_tiles_check((const uint8_t *)out->p, out->len, 1, (uint32_t)src_n(src), &chk, err)) return -1;
+    return 0;
+}
+
+int cc_tiles_shell_outside(const cc_tiles_toc *toc, const double eye[3], double margin) {
+    if (!(toc->bake & CC_TILES_BAKE_SHELL) || !toc->ntiles) return 0;
+    cc_tile r;
+    cc_tiles_get(toc, 0, &r);
+    for (int k = 0; k < 3; k++)
+        if (eye[k] < (double)r.box[k] - margin || eye[k] > (double)r.box[3 + k] + margin) return 1;
+    return 0;
 }

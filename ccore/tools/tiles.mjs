@@ -23,10 +23,14 @@ const T = await import(pathToFileURL(join(CCORE, "../web-ui/src/gl/tiles.ts")).h
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const args = process.argv.slice(2);
 const opt = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
-const SETS = (opt("--sets") ?? "synth17,heavy,large,buildings").split(",");
+const SHELL = args.includes("--shell"); // SHELL1: the exterior shell's numbers (scripted outside paths, the truth renders)
+const SETS = (opt("--sets") ?? (SHELL ? "synth17,buildings" : "synth17,heavy,large,buildings")).split(",");
+const COMPARE = (opt("--shell-compare") ?? "").split(",").filter(Boolean).map(Number); // e.g. 64,256,1024: views against the last
+const SHELL_RES = Number(opt("--shell-res") ?? 1024);
+const TRUTH = !args.includes("--no-truth");
 const FOLDER = opt("--folder"), CACHE_DIR = opt("--cache-dir"), PROJECT = opt("--project"), PNG = opt("--png");
 const WORK = join(CCORE, "out/tiles");
-const OUT = opt("--out") ?? join(WORK, FOLDER ? "local.md" : "tiles.md");
+const OUT = opt("--out") ?? join(WORK, (SHELL ? "shell1-" : "") + (FOLDER ? "local.md" : "tiles.md"));
 const TOKEN = "tiles-tool";
 mkdirSync(WORK, { recursive: true });
 const log = (...a) => console.error("tiles:", ...a);
@@ -214,6 +218,104 @@ open(sys.argv[2],'wb').write(b'\\x89PNG\\r\\n\\x1a\\n'+ch(b'IHDR',struct.pack('>
   return drawn;
 }
 
+// ---- SHELL1: the exterior shell ----
+/** The shell table of a pyramid (tiles=shell): per tile its exterior triangles and its shell proxy. */
+function parseShell(b, ntiles) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (b.length < 32 || String.fromCharCode(...b.subarray(0, 4)) !== "TSH1" || dv.getUint32(8, true) !== ntiles) throw new Error("shell table");
+  const ext = new Uint32Array(ntiles), flags = new Uint32Array(ntiles), tris = new Uint32Array(ntiles), len = new Uint32Array(ntiles);
+  for (let i = 0; i < ntiles; i++) { const o = 32 + 32 * i; ext[i] = dv.getUint32(o, true), flags[i] = dv.getUint32(o + 4, true), len[i] = dv.getUint32(o + 16, true), tris[i] = dv.getUint32(o + 20, true); }
+  return { views: dv.getUint32(12, true), res: dv.getUint32(16, true), tol: dv.getUint32(20, true), exterior: dv.getUint32(24, true), ext, flags, tris, len };
+}
+
+/** The scripted outside paths of a world box: orbits at three distances (8 azimuths, 25 deg up) and an approach down to a
+ *  face of the box (from the site distance to 2 m outside it, at eye height), and one inside camera (the shell must not apply). */
+function shellCameras(b) {
+  const c = [0, 1, 2].map((k) => (b[k] + b[3 + k]) / 2), r = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
+  const site = r / Math.tan(Math.PI / 6) * 1.1, cams = [];
+  for (const [nm, d] of [["orbit1", site], ["orbit1/2", site / 2], ["orbit1/4", Math.max(site / 4, r * 1.05)]])
+    for (let a = 0; a < 8; a++) {
+      const az = a * Math.PI / 4 + 0.3, el = 25 * Math.PI / 180;
+      cams.push({ name: `${nm}@${a * 45}`, path: nm, eye: [c[0] + d * Math.cos(el) * Math.cos(az), c[1] + d * Math.cos(el) * Math.sin(az), c[2] + d * Math.sin(el)], at: c });
+    }
+  const z = b[2] + Math.min(1700, (b[5] - b[2]) / 4);
+  for (const d of [site, site / 3, site / 10, 20000, 5000, 2000])
+    cams.push({ name: `approach ${Math.round(d / 1000)} m`, path: "approach", eye: [c[0], b[1] - d, z], at: [c[0], b[1] + (b[4] - b[1]) / 2, z] });
+  cams.push({ name: "inside", path: "inside", eye: [b[0] + (b[3] - b[0]) / 3, b[1] + (b[4] - b[1]) / 3, z], at: [c[0], c[1], z] });
+  return cams;
+}
+
+async function shellReport(H, pys, bounds) {
+  const per = [];
+  for (const p of pys) { // per pyramid: the share marked exterior
+    const g = await H.get(`${p.who}tiles=shell`);
+    let sh = null;
+    if (g.status === 200) sh = parseShell(g.bytes, p.toc.ntiles);
+    let extEl = 0;
+    for (let i = 0; i < p.toc.nlist; i++) extEl += (p.toc.elFlags[i] & 4) ? 1 : 0;
+    per.push({ name: p.name, elements: p.toc.nlist, exterior: extEl, detail: p.toc.detail[0], extTris: sh ? sh.ext[0] : 0, baked: !!(p.toc.bake & 1),
+      tiles: p.toc.ntiles, extTiles: [...Array(p.toc.ntiles).keys()].filter((i) => p.toc.flags[i] & 16).length, shellProxyBytes: sh ? sh.len.reduce((a, x, i) => a + (sh.flags[i] & 1 && x && p.toc.len[i] !== x ? x : 0), 0) : 0 });
+  }
+  const rows = [];
+  for (const cam of shellCameras(bounds)) {
+    const base = `tiles_frame=1&eye=${cam.eye.join(",")}&at=${cam.at.join(",")}&fov=60&w=1920&h=1080&err=1&leaf_bytes=1`;
+    const r = { name: cam.name, path: cam.path };
+    for (const [k, q] of [["off", "shell=off&occ=0"], ["offOcc", "shell=off&occ=1"], ["on", "shell=auto&occ=0"], ["onOcc", `shell=auto&occ=1${TRUTH ? "&truth=1" : ""}`]]) {
+      const t0 = performance.now(), g = await H.get(`${base}&${q}`), ms = performance.now() - t0;
+      if (g.status !== 200) throw new Error(`tiles_frame ${q}: ${g.status}`);
+      const j = json(g.bytes);
+      r[k] = { triangles: j.triangles, bytes: j.bytes, hidden: j.hidden_triangles, shellLinks: j.shell_links, ms };
+      if (k === "onOcc" && TRUTH) Object.assign(r, { seen: j.seen, missing: j.missing, missingOcc: j.missing_occ, missingTris: j.missing_triangles, missingList: j.missing_list });
+    }
+    log(`${cam.name}: off ${fmt(r.off.triangles)}, off+occ ${fmt(r.offOcc.triangles)}, shell ${fmt(r.on.triangles)} (${r.on.shellLinks} links), shell+occ ${fmt(r.onOcc.triangles)}${TRUTH ? `; seen ${fmt(r.seen)}, missing ${r.missing} (with occ ${r.missingOcc}) [${r.onOcc.ms.toFixed(0)} ms]` : ""}`);
+    rows.push(r);
+  }
+  return { per, rows };
+}
+
+/** Each link indexed again with shell=<views>x<res> for each count asked, its exterior elements against the largest count's. */
+async function shellCompare(label, files, cache, place) {
+  const out = [], sets = [];
+  for (const v of COMPARE) {
+    const dir = `${cache}-shell${v}`;
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    const conv = convert(files, dir, { BIMBLE_TILES: `shell=${v}x${SHELL_RES}` });
+    const H = await startHost(`tiles_tool_${label}_cmp${v}`, { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_CACHE_DIR: dir, BIMBLE_TILES: `shell=${v}x${SHELL_RES}` });
+    await H.call("action", "new");
+    await H.call("action", "link_model", { paths: files });
+    for (let i = 0; i < 24000; i++) {
+      const r = JSON.parse((await H.call("query", "links_panel", {})).text).models;
+      if (r.length >= files.length && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed" || m.state === "refused")) break;
+      await sleep(100);
+    }
+    const ext = [];
+    for (let k = 0; k < files.length; k++) {
+      const g = await H.get(`link=${k}&tiles=toc`);
+      const set = new Set();
+      if (g.status === 200) { const toc = T.parseToc(g.bytes); for (let i = 0; i < toc.nlist; i++) if (toc.elFlags[i] & 4) set.add(toc.list[i]); }
+      ext.push(set);
+    }
+    H.kill();
+    sets.push(ext);
+    out.push({ views: v, ms: conv.reduce((n, c) => n + (c.shell?.ms ?? 0), 0), classifyMs: conv.reduce((n, c) => n + (c.shell?.classifyMs ?? 0), 0), exterior: ext.reduce((n, x) => n + x.size, 0), peak: Math.max(...conv.map((c) => c.shell?.peak ?? 0)) });
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const ref = sets[sets.length - 1];
+  for (let i = 0; i < out.length; i++) {
+    let missed = 0, extra = 0;
+    const perLink = [];
+    for (let k = 0; k < ref.length; k++) {
+      let m = 0;
+      for (const e of ref[k]) if (!sets[i][k].has(e)) m++;
+      for (const e of sets[i][k]) if (!ref[k].has(e)) extra++;
+      missed += m, perLink.push(m);
+    }
+    Object.assign(out[i], { missed, extra, perLink });
+  }
+  return out;
+}
+
 // ---- the sets ----
 async function setSynth17() {
   const dir = join(WORK, "synth17"), cache = join(WORK, "synth17-cache");
@@ -227,17 +329,19 @@ async function setSynth17() {
 }
 
 /** link-convert --index of each file (one process each, timed; peak resident memory). */
-function convert(files, cache) {
+function convert(files, cache, env = {}) {
   const rows = [];
   for (const f of files) {
     const t0 = Date.now();
-    const o = execFileSync(BIN, ["link-convert", "--cache-dir", cache, "--index", f], { encoding: "utf8", maxBuffer: 1 << 24 });
+    const o = execFileSync(BIN, ["link-convert", "--cache-dir", cache, "--index", f], { encoding: "utf8", maxBuffer: 1 << 24, env: { ...process.env, ...env } });
+    const sh = /shell ms (\d+) classify_ms (\d+) exterior (\d+) elements (\d+) ext_tris (\d+) detail (\d+) bytes (\d+) peak (\d+) mixed (\d+)/.exec(o);
     const m = /indexed ok ms (\d+) hlod_ms (\d+) tiles (\d+) levels (\d+) proxy_tris (\d+) tiles_bytes (\d+) tiles_ms (\d+) cache_bytes (\d+) peak_rss_kB (\d+)/.exec(o);
     const c = /bytes (\d+) ms (\d+) elements (\d+) shapes (\d+) triangles (\d+)/.exec(o);
     const pk = Number(/peak_rss_kB (\d+)\n?$/m.exec(o)?.[1] ?? 0);
     rows.push({ file: f, ms: Date.now() - t0, convertMs: Number(c?.[2] ?? 0), elements: Number(c?.[3] ?? 0), triangles: Number(c?.[5] ?? 0), ifcBytes: Number(c?.[1] ?? 0),
       indexMs: Number(m?.[1] ?? 0), hlodMs: Number(m?.[2] ?? 0), tiles: Number(m?.[3] ?? 0), levels: Number(m?.[4] ?? 0), tilesBytes: Number(m?.[6] ?? 0), tilesMs: Number(m?.[7] ?? 0),
-      cacheBytes: Number(m?.[8] ?? 0), indexPeak: Number(m?.[9] ?? 0) * 1024, peak: pk * 1024 });
+      cacheBytes: Number(m?.[8] ?? 0), indexPeak: Number(m?.[9] ?? 0) * 1024, peak: pk * 1024,
+      shell: sh ? { ms: +sh[1], classifyMs: +sh[2], exterior: +sh[3], elements: +sh[4], extTris: +sh[5], detail: +sh[6], bytes: +sh[7], peak: +sh[8], mixed: +sh[9] } : null });
     log(`${f.split("/").pop()}: ${o.trim().split("\n").slice(-2).join(" | ")}`);
   }
   return rows;
@@ -245,6 +349,7 @@ function convert(files, cache) {
 
 async function linkedSet(label, files, cache, place, project) {
   const conv = convert(files, cache);
+  if (SHELL && COMPARE.length) conv.compare = await shellCompare(label, files, cache, place);
   const H = await startHost(`tiles_tool_${label}`, { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_CACHE_DIR: cache }, project ? [project] : []);
   if (!project) {
     await H.call("action", "new");
@@ -297,7 +402,9 @@ async function report(label, H, nlinks, open, conv, buildMs) {
   const bounds = [0, 1, 2].map((k) => Math.min(...main.map((b) => b[k]))).concat([0, 1, 2].map((k) => Math.max(...main.map((b) => b[3 + k]))));
   const outliers = boxes.length - main.length;
   log(`${label}: cameras on ${main.length} of ${boxes.length} pyramids (${outliers} far away), box ${bounds.map((x) => Math.round(x / 1000)).join(",")} m`);
-  const fr = await frames(H, bounds);
+  const fr = SHELL ? {} : await frames(H, bounds);
+  const shellRes = SHELL ? await shellReport(H, pys, bounds) : null;
+  if (SHELL) { const pk = H.rss(); H.kill(); return { label, conv, shell: shellRes, hostPeak: pk, outliers, box: bounds.map((x) => Math.round(x / 1000)), buildMs }; }
   const formats = [];
   for (const p of pys) formats.push(await leafFormats(H, p));
   const sum = (f) => formats.reduce((n, x) => n + x[f], 0);
@@ -354,6 +461,38 @@ function md(rs) {
   return L.join("\n");
 }
 
+function mdShell(rs) {
+  const L = ["# The exterior shell (SHELL1)", "", `\`node ccore/tools/tiles.mjs --shell\`, ${new Date().toISOString().slice(0, 10)}, native host (${BIN.split("/").slice(-2).join("/")}). Cameras 1920 x 1080, 60 deg, 1 px of error; orbits at the site distance, a half and a quarter of it (8 azimuths, 25 deg up), an approach down to 2 m from the box's -y face at eye height, one inside camera. Triangles selected: shell off / on (auto: links whose box the eye is outside, 2 m margin) x occluders off / on. Missing: elements seen in a full-detail software render (glazing not occluding) that the shell walk does not depict (occ: or that the occluders hide).`, ""];
+  for (const r of rs) {
+    const per = r.shell.per;
+    L.push(`## ${r.label}`, "", "| pyramid | elements | exterior | % | detail tris | exterior tris | % | tiles with exterior | shell proxies bytes |", "|---|---|---|---|---|---|---|---|---|");
+    for (const p of per) L.push(`| ${p.name} | ${fmt(p.elements)} | ${fmt(p.exterior)} | ${(100 * p.exterior / Math.max(1, p.elements)).toFixed(1)} | ${fmt(p.detail)} | ${fmt(p.extTris)} | ${(100 * p.extTris / Math.max(1, p.detail)).toFixed(1)} | ${p.extTiles} / ${p.tiles} | ${fmt(p.shellProxyBytes)} |`);
+    const te = per.reduce((n, p) => n + p.exterior, 0), tl = per.reduce((n, p) => n + p.elements, 0), tt = per.reduce((n, p) => n + p.extTris, 0), td = per.reduce((n, p) => n + p.detail, 0);
+    L.push(`| all | ${fmt(tl)} | ${fmt(te)} | ${(100 * te / Math.max(1, tl)).toFixed(1)} | ${fmt(td)} | ${fmt(tt)} | ${(100 * tt / Math.max(1, td)).toFixed(1)} | | |`, "");
+    if (r.conv) {
+      const sh = r.conv.filter((c) => c.shell);
+      L.push(`bake: shell ${fmt(sh.reduce((n, c) => n + c.shell.ms, 0))} ms in all (classification ${fmt(sh.reduce((n, c) => n + c.shell.classifyMs, 0))} ms), the largest link ${fmt(Math.max(0, ...sh.map((c) => c.shell.ms)))} ms; buffers at most ${MB(Math.max(0, ...sh.map((c) => c.shell.peak)))}; indexing peak ${MB(Math.max(...r.conv.map((c) => c.indexPeak)))}; bytes added to TILE ${MB(sh.reduce((n, c) => n + c.shell.bytes, 0))} (caches ${MB(r.conv.reduce((n, c) => n + c.cacheBytes, 0))})`, "");
+      L.push("| link | elements | exterior | exterior tris / detail | shell ms | peak (process) |", "|---|---|---|---|---|---|");
+      r.conv.forEach((c, i) => c.shell && L.push(`| #${i + 1} | ${fmt(c.shell.elements)} | ${fmt(c.shell.exterior)} | ${fmt(c.shell.extTris)} / ${fmt(c.shell.detail)} | ${fmt(c.shell.ms)} | ${MB(c.indexPeak)} |`));
+      L.push("");
+      if (r.conv.compare) {
+        L.push("| views | exterior elements | missed against the last | extra | classification ms | buffers |", "|---|---|---|---|---|---|");
+        for (const c of r.conv.compare) L.push(`| ${c.views} | ${fmt(c.exterior)} | ${fmt(c.missed)} | ${fmt(c.extra)} | ${fmt(c.classifyMs)} | ${MB(c.peak)} |`);
+        L.push("");
+      }
+    }
+    L.push("| camera | off | off + occ | shell | shell + occ | bytes off / shell | links shelled | seen | missing (shell) | missing (shell + occ) |", "|---|---|---|---|---|---|---|---|---|---|");
+    for (const x of r.shell.rows) L.push(`| ${x.name} | ${fmt(x.off.triangles)} | ${fmt(x.offOcc.triangles)} | ${fmt(x.on.triangles)} | ${fmt(x.onOcc.triangles)} | ${MB(x.off.bytes)} / ${MB(x.on.bytes)} | ${x.on.shellLinks} | ${x.seen !== undefined ? fmt(x.seen) : "-"} | ${x.missing ?? "-"} | ${x.missingOcc ?? "-"} |`);
+    const ml = r.shell.rows.flatMap((x) => (x.missingList ?? []).map((m) => ({ ...m, cam: x.name })));
+    if (ml.length) {
+      L.push("", "Largest missing elements (shell): " + ml.sort((a, b) => b.size_mm - a.size_mm).slice(0, 20).map((m) => `${m.class} ${fmt(m.size_mm)} mm ${m.triangles} tris (link ${m.link + 1}, ${m.cam})`).join("; "));
+    }
+    L.push("");
+  }
+  L.push("```json", JSON.stringify(rs.map((r) => ({ label: r.label, per: r.shell.per, rows: r.shell.rows, compare: r.conv?.compare })), null, 0), "```", "");
+  return L.join("\n");
+}
+
 const results = [];
 if (FOLDER) {
   if (!CACHE_DIR) throw new Error("--folder needs --cache-dir (nothing is written beside the files)");
@@ -377,6 +516,6 @@ if (FOLDER) {
     }
   }
 }
-writeFileSync(OUT, md(results));
+writeFileSync(OUT, SHELL ? mdShell(results) : md(results));
 log(`wrote ${OUT}`);
 process.exit(0);

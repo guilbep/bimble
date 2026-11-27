@@ -151,6 +151,54 @@ check("levels of detail off (lod=0, a setting's off value): every leaf even from
 check("the walker's frame: far, the coarsest tile alone; close, every leaf", g.status === 200 && far.tiles === 1 && far.links[0].proxies + far.links[0].leaves === 1 &&
   close.triangles === close.detail && close.leaf_bytes > 0, `bounds ${bounds.map(Math.round)}; far ${far.triangles} tris ${far.bytes} B; close ${close.triangles} tris ${close.bytes} B`);
 
+// ---- SHELL1 (ADR 0078 amendment 7): the exterior shell baked after the pyramid ----
+{
+  check("SHELL1: the shell baked (header flag 1), its elements flagged 4, its tiles 16", toc && (toc.bake & 1) === 1 && [...toc.elFlags].some((f) => f & 4) &&
+    [...toc.flags].some((f) => f & 16), `bake ${toc?.bake}`);
+  g = await A.get("link=0&name=a.ifc&tiles=shell");
+  const dv = new DataView(g.bytes.buffer, g.bytes.byteOffset, g.bytes.byteLength);
+  const extEl = toc ? [...toc.elFlags].filter((f) => f & 4).length : -1;
+  const okTab = g.status === 200 && text(g.bytes.subarray(0, 4)) === "TSH1" && dv.getUint32(8, true) === toc.ntiles && g.bytes.length === 32 + 32 * toc.ntiles &&
+    dv.getUint32(12, true) === 64 && dv.getUint32(16, true) === 1024 && dv.getUint32(24, true) === extEl;
+  check("SHELL1: the shell table (tiles=shell): a record a tile, 64 views at 1024, its exterior elements counted", okTab, `${g.status} ${g.bytes.length} bytes, ${extEl} exterior`);
+  const ids = [...Array(toc.ntiles).keys()].join(",");
+  const rs = await A.get(`link=0&name=a.ifc&tile=${ids}&shell=1`), rf = await A.get(`link=0&name=a.ifc&tile=${ids}`);
+  let okLeaves = rs.status === 200 && rf.status === 200, nExt = 0;
+  const extRows = new Set();
+  for (let i = 0; i < toc.nlist; i++) if (toc.elFlags[i] & 4) extRows.add(toc.list[i]);
+  for (const a of T.parseTils(rs.bytes)) {
+    if (!(toc.flags[a.id] & 16) && a.kind !== 0) okLeaves = false;
+    if (a.kind === 1) for (const row of T.decodeLeaf(a.bytes).rows) extRows.has(row) ? nExt++ : (okLeaves = false);
+    if (a.kind === 2 && dv.getUint32(32 + 32 * a.id + 4, true) !== 1) okLeaves = false;
+  }
+  check("SHELL1: tile=...&shell=1: leaves hold their exterior elements only (all of them), tiles without exterior none", okLeaves && nExt === extRows.size, `${nExt} of ${extRows.size}`);
+  const at = (d) => `eye=${c[0] - d * size},${c[1] - d * size},${c[2] + d * size / 2}&at=${c.join(",")}&fov=60&w=1600&h=1000&err=1`;
+  const fr = async (q) => JSON.parse(text((await A.get(`tiles_frame=1&${q}`)).bytes));
+  const ins = `eye=${c.join(",")}&at=${c[0] + 1000},${c[1]},${c[2]}&fov=60&w=1600&h=1000&err=1`; // inside the link's box
+  const off = await fr(`${at(0.7)}&shell=off`), on = await fr(`${at(0.7)}&shell=auto`), forced = await fr(`${ins}&shell=outside`), inside = await fr(`${ins}&shell=auto`);
+  check("SHELL1: the walker's modes: off the full walk; auto outside the box the outside walk (its exterior triangles); auto inside the full walk; outside forced",
+    !off.links[0].shell && on.links[0].shell && on.triangles <= off.triangles && on.shell_links === 1 && !inside.links[0].shell && inside.triangles > 0 && inside.triangles === (await fr(`${ins}&shell=off`)).triangles && forced.links[0].shell,
+    `off ${off.triangles}, auto ${on.triangles}, inside ${inside.triangles}`);
+  const truth = await fr(`${at(0.7)}&shell=auto&truth=1`);
+  check("SHELL1: the truth render: elements seen, none missing from the outside walk", truth.seen > 0 && truth.missing === 0, `${truth.seen} seen, ${truth.missing} missing`);
+  // invalidation: a section box cutting the link, a hidden exterior element
+  await A.call("tool", "box_set", JSON.stringify({ min: [bounds[0], bounds[1], bounds[2]], max: [c[0], c[1], bounds[5]], on: true }));
+  const cut = await fr(`${at(0.7)}&shell=auto`);
+  await A.call("tool", "box_set", JSON.stringify({ min: [bounds[0], bounds[1], bounds[2]], max: [c[0], c[1], bounds[5]], on: false }));
+  const uncut = await fr(`${at(0.7)}&shell=auto`);
+  check("SHELL1: a section box through the link makes its shell invalid (the full walk); switched off, the shell again", !cut.links[0].shell && cut.links[0].shell_invalid && uncut.links[0].shell,
+    `cut ${cut.triangles}, uncut ${uncut.triangles}`);
+  // the frame's columns stand at its edges: exterior; hiding the class (a view rule) hides exterior elements
+  await A.call("action", "view_rule", JSON.stringify({ op: "hide", class: "IfcColumn" }));
+  const hid = await fr(`${at(0.7)}&shell=auto`);
+  await A.call("action", "show_all");
+  const shown = await fr(`${at(0.7)}&shell=auto`);
+  check("SHELL1: hiding exterior elements (the columns) makes the shell invalid; shown again, valid", !hid.links[0].shell && hid.links[0].shell_invalid && shown.links[0].shell,
+    `hidden: ${hid.triangles}, shown: ${shown.triangles}`);
+  const rep = readFileSync(join(tmp, "a.ifc.log.txt"), "utf8");
+  check("SHELL1: the report says the shell", /exterior shell \(in TILE, for views from outside\): \d+ of 72 elements/.test(rep), rep.match(/exterior shell[^\n]*/)?.[0]);
+}
+
 // ---- a format 6 cache: re-indexed, not read again ----
 A.h.kill("SIGKILL");
 const c6 = Buffer.from(readFileSync(cacheOf("a.ifc")));
@@ -168,9 +216,9 @@ g = await B.get("link=0&tiles=toc");
 check("then re-indexed: format 7, complete, its TILE served", c7.includes("bimble-link-cache 7") && /"complete":true/.test(c7) && g.status === 200);
 
 // ---- the bake settings (BIMBLE_TILES): recorded in SRCE; a cache baked otherwise is indexed again, not converted ----
-check("its source record names the bake settings", /"tiles":"leaf=40000 proxy=16384 root=512 res=64 occ=64"/.test(c7), c7.match(/"tiles":"[^"]*"/)?.[0] ?? "none");
+check("its source record names the bake settings", /"tiles":"leaf=40000 proxy=16384 root=512 res=64 occ=64 shell=64x1024 shell_d=100"/.test(c7), c7.match(/"tiles":"[^"]*"/)?.[0] ?? "none");
 B.h.kill("SIGKILL");
-const D = await startHost("link_tiles_test_4", { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_TILES: "leaf=20000 occ=0" });
+const D = await startHost("link_tiles_test_4", { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_TILES: "leaf=20000 occ=0 shell=0" });
 await D.call("action", "new");
 await D.call("action", "link_model", JSON.stringify({ path: join(tmp, "a.ifc") }));
 r = await until(async () => { const m = await D.row("a.ifc"); return m?.state === "ready" ? m : null; });
@@ -181,7 +229,8 @@ let dt = null;
 try { dt = T.parseToc(g.bytes, 72); } catch { /* below */ }
 const c8 = text(readFileSync(cacheOf("a.ifc")));
 check("other bake settings: the cache indexed again from itself (not converted), occluders off, recorded", reidx && dt && dt.nocc === 0 && dt.leafTarget === 20000 &&
-  /"tiles":"leaf=20000 proxy=16384 root=512 res=64 occ=0"/.test(c8), `${dt?.nocc} occluders, leaf target ${dt?.leafTarget}`);
+  /"tiles":"leaf=20000 proxy=16384 root=512 res=64 occ=0 shell=0"/.test(c8), `${dt?.nocc} occluders, leaf target ${dt?.leafTarget}`);
+check("SHELL1: shell=0 (the setting's off value): no shell baked (bake flag 0, no table: 204)", dt && dt.bake === 0 && (await D.get("link=0&tiles=shell")).status === 204);
 D.h.kill("SIGKILL");
 
 // ---- a small link read as it is (no cache): its pyramid built at once ----

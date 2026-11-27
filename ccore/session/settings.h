@@ -53,6 +53,10 @@ typedef struct {
      * (64..=65536, 768). Not Rust's (its viewer had no budget across links): as `renderer`, written to the
      * file only once set, listed in query settings' `values`. */
     unsigned link_gpu_mb;
+    /* SHELL1 (ADR 0078 amendment 7): the outside walk over the links' baked exterior shell (tiles.h CC_TILES_SEL_SHELL),
+     * "off" | "outside" (wherever baked) | "auto" (where the eye is outside a link's box, no section cuts it, none of its
+     * exterior elements hidden) ("auto"). Not Rust's: as `renderer`, written once set. */
+    char shell_mode[8];
 } cc_settings;
 #define CC_LINK_GPU_MB_DEFAULT 768u
 

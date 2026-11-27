@@ -82,13 +82,21 @@ void cc_mesh_tiles_free(cc_session *s);
  * eye and frustum moved into the link's frame by its placement): tiles, triangles, proxy bytes and (leaf_bytes) the
  * leaves' answers' bytes, the tables' bytes; or (bounds_only) the world box of every link's root. JSON into `out`.
  * The native host serves it as GET /mesh?tiles_frame=1&eye=x,y,z&at=x,y,z&fov=deg&w=&h=&err=px&budget=&leaf_bytes=1&occ=1&lod=0
- * (every input a renderer's setting: err 1, budget none, lod 1, occ 0 by default; tiles_frame=bounds: the box; occ=1: tiles hidden by the drawn tiles' occluders left out, counted apart). Tools and tests (ccore/tools/tiles.mjs). */
+ * (every input a renderer's setting: err 1, budget none, lod 1, occ 0 by default; tiles_frame=bounds: the box; occ=1: tiles hidden by the drawn tiles' occluders left out, counted apart).
+ * SHELL1: &shell=off|outside|auto (default off here; the renderers' shell_mode defaults to auto), &margin=mm, &truth=1.
+ * Tools and tests (ccore/tools/tiles.mjs). The answers of cc_link_tiles: req "shell" the shell table (204 none),
+ * "shell:a,b,c" the outside walk's content (GET ...&tile=a,b,c&shell=1). */
 typedef struct {
     double eye[3], at[3], tan_half, w, h, error_px;
     uint64_t budget;
     int leaf_bytes, bounds_only;
     int occlusion; /* the drawn tiles' occluders in one depth buffer (tiles.h cc_tiles_occ): tiles hidden left out */
     int lod;       /* levels of detail: 1 on (the default), 0 off: every leaf in the frustum */
+    int shell;     /* SHELL1: 0 off, 1 outside (the outside walk wherever baked), 2 auto (where the eye is outside the link's
+                    * box grown by shell_margin mm) */
+    double shell_margin;
+    int truth;     /* SHELL1: a full-detail software render of every link at w x h (glazing not occluding): per link the
+                    * elements seen and those the selection does not depict (missing), with the largest missing listed */
 } cc_tiles_frame_q;
 int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out);
 #endif
