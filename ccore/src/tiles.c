@@ -38,7 +38,7 @@ void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n) {
 
 void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t) {
     cc_tiles_default(o);
-    static const struct { const char *k; uint32_t lo, hi; } K[] = {{"leaf", 1000, 10000000}, {"proxy", 64, 1000000}, {"root", 16, 1000000}, {"res", 4, 1024}, {"occ", 0, CC_TILES_OCC_MAX}, {"shell", 0, 0}, {"shell_d", 0, 100000}, {"cross", 0, 1}};
+    static const struct { const char *k; uint32_t lo, hi; } K[] = {{"leaf", 1000, 10000000}, {"proxy", 64, 1000000}, {"root", 16, 1000000}, {"res", 4, 1024}, {"occ", 0, CC_TILES_OCC_MAX}, {"shell", 0, 0}, {"shell_d", 0, 100000}, {"cross", 0, 1}, {"cross_d", 0, 100000}, {"cross_touch", 0, 1}};
     for (const char *p = t; p && *p;) {
         while (*p == ' ') p++;
         for (size_t i = 0; i < sizeof K / sizeof *K; i++) {
@@ -70,7 +70,7 @@ void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t) {
             }
             if (d && v >= K[i].lo && v <= K[i].hi) {
                 uint32_t x = (uint32_t)v;
-                if (i == 0) o->leaf_tris = x; else if (i == 1) o->proxy_tris = x; else if (i == 2) o->root_tris = x; else if (i == 3) o->res = x; else if (i == 4) o->occ = x; else if (i == 5) {} else if (i == 6) o->shell_tol = x; else o->shell_cross = x;
+                if (i == 0) o->leaf_tris = x; else if (i == 1) o->proxy_tris = x; else if (i == 2) o->root_tris = x; else if (i == 3) o->res = x; else if (i == 4) o->occ = x; else if (i == 5) {} else if (i == 6) o->shell_tol = x; else if (i == 7) o->shell_cross = x; else if (i == 8) o->cross_d = x; else o->cross_touch = x;
             }
         }
         while (*p && *p != ' ') p++;

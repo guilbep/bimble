@@ -128,6 +128,7 @@ typedef struct {
     uint32_t shell_cross; /* SHELL1: the cross-link pass (session/xshell.h) on (1, the default) or off; a run-time setting, not
                            * in the text below (a link's cache does not depend on it): "cross=0", "cross=1", "cross=<views>x<res>" */
     uint32_t cross_views, cross_res; /* its views and resolution (0: the shell's) */
+    uint32_t cross_d, cross_touch;   /* its depth tolerance (mm; 0: the shell's) and the touch safeguard (shell.h; 0 off) */
 } cc_tiles_opts;
 #define CC_TILES_SHELL_VIEWS 64u
 #define CC_TILES_SHELL_RES 1024u

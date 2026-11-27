@@ -222,7 +222,7 @@ static uint32_t inputs(cc_session *s, const cc_shell_opts *o, XIn **out, char ke
     Buf kb;
     buf_init(&kb);
     char t[256];
-    snprintf(t, sizeof t, "xshell 2 %u %u %u;", o->views, o->res, o->tol_mm); /* 2: by overlapping groups */
+    snprintf(t, sizeof t, "xshell 2 %u %u %u %u;", o->views, o->res, o->tol_mm, o->touch); /* 2: by overlapping groups */
     buf_puts(&kb, t);
     for (size_t i = 0; i < s->nlinks; i++) {
         cc_link *l = &s->links[i];
@@ -313,7 +313,8 @@ int cc_xshell_poll(cc_session *s) {
         job_orphan(x->job), x->job = NULL, marks_free(x), x->state = 0, x->key[0] = 0;
         return 0;
     }
-    cc_shell_opts so = {to.cross_views ? to.cross_views : to.shell_views, to.cross_res ? to.cross_res : to.shell_res, to.shell_tol, 0};
+    cc_shell_opts so = {to.cross_views ? to.cross_views : to.shell_views, to.cross_res ? to.cross_res : to.shell_res, to.cross_d ? to.cross_d : to.shell_tol,
+                        to.cross_touch};
     XIn *in;
     char key[65];
     uint32_t n = inputs(s, &so, &in, key);
