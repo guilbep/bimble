@@ -67,6 +67,7 @@ void theme_set(App *a, int which) {
         c[ImGuiCol_TitleBg] = col4(C_SHEET), c[ImGuiCol_TitleBgActive] = col4(C_SHEET), c[ImGuiCol_TitleBgCollapsed] = col4(C_SHEET);
         c[ImGuiCol_ResizeGrip] = col4(C_SUNK), c[ImGuiCol_ResizeGripHovered] = col4(C_LINE), c[ImGuiCol_ResizeGripActive] = col4(C_STONE);
         c[ImGuiCol_ScrollbarBg] = col4(C_CREAM), c[ImGuiCol_ScrollbarGrab] = col4(C_LINE), c[ImGuiCol_TextSelectedBg] = col4(C_PINK);
+        c[ImGuiCol_SliderGrab] = col4(C_INK), c[ImGuiCol_SliderGrabActive] = col4(C_CLAY);
         c[ImGuiCol_PlotHistogram] = col4(C_MOSS), c[ImGuiCol_NavCursor] = col4(C_INK), c[ImGuiCol_ModalWindowDimBg] = V4(0.08f, 0.08f, 0.08f, 0.35f);
     }
 }
