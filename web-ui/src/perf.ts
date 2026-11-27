@@ -75,7 +75,9 @@ export function chooseRenderer(a: "webgl2" | "webgpu"): string | null {
   return err;
 }
 /** The toggle's other side: WebGPU when WebGL2 was asked (or automatic), else WebGL2. */
-export const toggleRenderer = (): string | null => chooseRenderer(renderer.asked === "webgpu" ? "webgl2" : "webgpu");
+export const toggleRenderer = (): string | null => chooseRenderer(gpuSide() ? "webgl2" : "webgpu");
+/** The toggle's side: WebGPU asked, or automatic and WebGPU drawing. */
+export const gpuSide = (): boolean => renderer.asked === "webgpu" || (renderer.asked === "auto" && renderer.using === "WebGPU");
 /** Why WebGPU is not drawing, in plain words (an i18n key and its value), from the switch's reason. */
 export type WhyKey = "perf.why.starting" | "perf.why.noWebgpu" | "perf.why.noAdapter" | "perf.why.software" | "perf.why.lost" | "perf.why.feature" | "perf.why.failed" | "perf.why.notAsked";
 export const FEATURE_REASON = "not drawn by WebGPU yet: ";
@@ -88,7 +90,7 @@ export function whyPlain(reason: string | null): { key: WhyKey; what?: string } 
   if (/no adapter/.test(reason)) return { key: "perf.why.noAdapter" };
   if (/fallback|software|CPU\)/.test(reason)) return { key: "perf.why.software" };
   if (/lost/.test(reason)) return { key: "perf.why.lost" };
-  if (/WebGL2 asked|automatic is WebGL2/.test(reason)) return { key: "perf.why.notAsked" };
+  if (/WebGL2 asked|automatic is WebGL2|^automatic: /.test(reason)) return { key: "perf.why.notAsked" };
   return { key: "perf.why.failed" };
 }
 /** What the user can do when WebGPU has no adapter or no API, per platform (the orchestrator's note: on Linux

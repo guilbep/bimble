@@ -124,6 +124,11 @@ export interface GpuRenderer {
 }
 
 export type Asked = "auto" | "webgl2" | "webgpu";
+/** GPU2 (ADR 0083 amended, decided from the real-GPU numbers): "automatic" draws with WebGPU when the adapter check
+ *  passes with a hardware adapter (never a fallback or software one, never flags the user did not set: no adapter,
+ *  no WebGPU), else WebGL2. */
+export const AUTO_WEBGPU = false;
+const wantsGpu = (a: Asked | null) => a === "webgpu" || (a === "auto" && AUTO_WEBGPU);
 const asked = (): Asked => {
   const c = chosenRenderer();
   if (c) return c;
@@ -149,7 +154,7 @@ export function gpuSwitch(canvas: HTMLCanvasElement, stats: object, set: (r: Gpu
       try { await r.handBack(view()); } catch (e) { console.warn("webgpu: hand back:", e); view().models?.recover(); }
       perfRenderer.progress = null;
     }
-    if (cur !== r || want === "webgpu") return; // (WebGPU asked again meanwhile: it stays, taking WebGL2's buffers over again)
+    if (cur !== r || wantsGpu(want)) return; // (WebGPU asked again meanwhile: it stays, taking WebGL2's buffers over again)
     cur = null, set(null);
     r.destroy(true);
     if (g === gen) perfRenderer.using = "WebGL2";
@@ -161,8 +166,8 @@ export function gpuSwitch(canvas: HTMLCanvasElement, stats: object, set: (r: Gpu
     if (a === want) return;
     want = a;
     const g = ++gen;
-    if (a !== "webgpu") {
-      perfRenderer.reason = a === "webgl2" ? "WebGL2 asked" : "automatic is WebGL2 for now (ADR 0083)";
+    if (!wantsGpu(a)) {
+      perfRenderer.reason = a === "webgl2" ? "WebGL2 asked" : "automatic is WebGL2 (ADR 0083)";
       await off(g);
       if (g === gen) perfRenderer.using = "WebGL2", perfRenderer.adapter = null;
       return;
@@ -185,7 +190,11 @@ export function gpuSwitch(canvas: HTMLCanvasElement, stats: object, set: (r: Gpu
       const d = await kept;
       if ("reason" in d) kept = null;
       if (g !== gen) return;
-      if ("reason" in d) { perfRenderer.reason = d.reason; console.info("webgpu:", d.reason, "- WebGL2 draws"); return; } // (said in the performance panel)
+      if ("reason" in d) { perfRenderer.reason = a === "auto" ? `automatic: ${d.reason}` : d.reason; console.info("webgpu:", d.reason, "- WebGL2 draws"); return; } // (said in the performance panel)
+      if (a === "auto" && d.adapter.software) { // GPU2: automatic never takes a software adapter (a fallback, a CPU's name, a CPU's fill rate)
+        perfRenderer.reason = `automatic: the adapter is a software one (${d.adapter.evidence ?? "software"}): WebGL2`;
+        return;
+      }
       const { createRenderer } = await import("./render");
       if (g !== gen) return;
       const r = createRenderer(canvas, d, stats), frame = r.frame.bind(r);

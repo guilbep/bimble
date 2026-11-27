@@ -12,7 +12,7 @@ import { onMounted, onUnmounted, shallowRef } from "vue";
 import { state } from "../bimble";
 import { t } from "../i18n";
 import { currentPanel } from ".";
-import { adapterNames, chooseRenderer, howToWebgpu, perfCompare, perfComparing, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
+import { adapterNames, chooseRenderer, gpuSide, howToWebgpu, perfCompare, perfComparing, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
 import { linkGpu } from "../gl/linkmem"; // SIZE3 (C)
 
 const snap = shallowRef<PerfSnapshot>(perfSnapshot());
@@ -73,8 +73,8 @@ function record() {
     </div>
     <!-- GPU2: the switch where he measures: live, remembered; what draws now, the adapter, and why WebGPU does not draw when asked -->
     <div class="sw" role="group" :aria-label="t('perf.switch')" data-bb="perf-switch">
-      <button v-for="r in (['webgl2', 'webgpu'] as const)" :key="r" type="button" :class="{ on: (renderer.asked === 'webgpu') === (r === 'webgpu') }"
-        :aria-pressed="(renderer.asked === 'webgpu') === (r === 'webgpu')" :data-bb="`perf-switch-${r}`" @click="choose(r)">{{ r === 'webgpu' ? 'WebGPU' : 'WebGL2' }}</button>
+      <button v-for="r in (['webgl2', 'webgpu'] as const)" :key="r" type="button" :class="{ on: gpuSide() === (r === 'webgpu') }"
+        :aria-pressed="gpuSide() === (r === 'webgpu')" :data-bb="`perf-switch-${r}`" @click="choose(r)">{{ r === 'webgpu' ? 'WebGPU' : 'WebGL2' }}</button>
     </div>
     <div class="note" data-bb="perf-drawing">{{ t('perf.drawing', { what: renderer.using }) }}<template v-if="renderer.switchMs !== null && renderer.switchMs !== undefined"> · {{ t('perf.switched', { ms: ms(renderer.switchMs) }) }}</template></div>
     <div class="note mono" data-bb="perf-adapter-line">{{ liveAdapter() }}</div>
