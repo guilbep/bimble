@@ -757,6 +757,8 @@ interface GlStats {
   /** VIS1 (a bench hook): the merged ranges nearest first (off: Apple's GPUs remove hidden surfaces per tile, so the order
    *  gains nothing there, and with culling it changed which of two coplanar faces won: edges found on screen moved). */
   frontToBack?: boolean;
+  /** VIS1 (a bench hook): a visibility change's feedback drawn as a whole frame whatever the model's size. */
+  wholeFeedback?: boolean;
   /** VIS1 (a bench hook): the budget's cut by bisection (budgetCut) whatever the number of batches. */
   exactCut?: boolean;
   /** VIS1: per model whether its draws skip the state texel (u_plain). */
@@ -1549,6 +1551,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const opt = () => { const v = userSettings.value?.values; return { edge_mode: v?.edge_mode ?? "screen", cull_back: v?.cull_back ?? false, still_px: v?.still_px ?? 0, refill_offscreen: v?.refill_offscreen ?? true }; };
   stats.frameRecs = ftime.log, stats.gpuTimer = ftime.timer;
   const motionWin = () => Math.max(MOTION_MS, 2 * lastFrameMs);
+  /** VIS1: a hide, an isolate, a link shown or hidden: when a whole frame is estimated over FEEDBACK_MS, the next frame
+   *  is drawn as a moving one (the largest first, within the budget: the input's feedback) and the picture is completed
+   *  after it (the fill, offscreen); a small model's whole frame stays the feedback. */
+  const FEEDBACK_MS = 60;
+  const feedbackFrame = () => {
+    const rate = trisPerMs || wholeRate;
+    if (rate > 0 && lastAllTris / rate > FEEDBACK_MS && stats.wholeFeedback !== true) lastCamChangeAt = performance.now(), feedbackPending = true;
+  };
+  let feedbackPending = false, wholeNext = false, wholeAt = 0; // (after such a frame the next one is the whole picture)
   const inputNow = () => { lastInputAt = performance.now(); };
   canvas.addEventListener("pointermove", (ev) => { if (ev.buttons) inputNow(); }, { capture: true, passive: true });
   canvas.addEventListener("wheel", inputNow, { capture: true, passive: true });
@@ -2397,6 +2408,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
    *  none is skipped, the budget counts the shown ones) and the state texture (colours() next, by selKey).
    *  A linked element is hidden by its GlobalId as the core hid it (M1LINKS: the sets hold its id). */
   const applyVisibility = () => {
+    feedbackFrame(); // VIS1: the input's own feedback a cheap frame on a large model (ADR 0074), the complete one after
     const m = mesh;
     if (!m) return;
     const t0 = performance.now();
@@ -3128,7 +3140,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       trisPerMs = trisPerMs ? 0.5 * trisPerMs + 0.5 * r : r;
     }
     lastFrameAt = tNow, lastFrameTris = fTris, lastBudgeted = movingNow || slice;
-    if (movingNow) stillDue = first ? tNow : tNow + Math.max(STILL_MS, motionWin()); // 3D2: after a first frame, the fill at once (VIS1: after the motion's window)
+    if (movingNow) stillDue = first ? tNow : tNow + Math.max(STILL_MS, motionWin());
+    if (feedbackPending && movingNow) wholeNext = true, wholeAt = tNow + 50; // the complete picture 50 ms later (no gesture goes on): the feedback is on screen first
+    feedbackPending = false; // 3D2: after a first frame, the fill at once (VIS1: after the motion's window)
     if (slice) {
       if (fillEdges) fillEdges = false;
       else if (cutT === 0) fill = null, fillEdges = !scrEdges; // (VIS1: edges found on screen need no last pass of lines)
@@ -4539,6 +4553,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // frame; anything else that redraws (a move, a selection) abandons the fill
     let fillStep = false;
     pollFence(); // VIS1 (P0-a)
+    if (wholeNext && !dirty && performance.now() >= wholeAt) wholeNext = false, lastCamChangeAt = -Infinity, stillDue = 0, fill = null, fillEdges = false, dirty = true; // VIS1: after a feedback frame
     hiz?.poll(); // VIS1: the last picture's pyramid, when the GPU has it
     if (!dirty && stillDue && !drag && performance.now() >= stillDue && performance.now() - lastInputAt >= motionWin()) {
       stillDue = 0;
