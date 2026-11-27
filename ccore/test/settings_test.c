@@ -510,6 +510,49 @@ int main(void) {
         cc_session_free(s);
         reset_dir();
     }
+    /* TESS1 (ADR 0085): link_detail, the reader's detail for the links' conversions: standard by
+     * default, written only once set, in its sorted place; exact, standard or light. Fails on the
+     * code before TESS1: an unknown field. */
+    {
+        reset_dir();
+        cc_session *s = session_on_file();
+        free(ask(s, "action", "set_settings", "{\"moving_fps\":60}", &st));
+        size_t n = 0;
+        char *f = read_all(FILE_, &n);
+        check_true("link_detail: a file written before it is set has none", st == CC_OK && f && !strstr(f, "link_detail"));
+        free(f);
+        cc_ifc_read_opts lo;
+        cc_settings_link_opts(s, &lo);
+        check_true("link_detail: standard by default (2 mm, 18 degrees for custom)", lo.detail == CC_IFC_DETAIL_STANDARD && lo.chord_mm == 2.0 && lo.max_deg == 18.0);
+        char *q = ask(s, "query", "settings", "", &st);
+        check_true("link_detail: listed, applies", strstr(q, "\"link_detail\":\"standard\"") && strstr(q, "\"link_detail\":true") != NULL);
+        free(q);
+        free(ask(s, "action", "set_settings", "{\"link_detail\":\"light\"}", &st));
+        f = read_all(FILE_, &n);
+        check_true("link_detail: set to light, written in its sorted place",
+                   st == CC_OK && f && strstr(f, "\"gpu_cull\":false,\"link_detail\":\"light\",\"memory_share\":"));
+        free(f);
+        cc_settings_link_opts(s, &lo);
+        check_true("link_detail: light read back", lo.detail == CC_IFC_DETAIL_LIGHT);
+        free(ask(s, "action", "set_settings", "{\"link_detail\":\"custom\",\"link_chord_mm\":5,\"link_max_deg\":22.5}", &st));
+        cc_settings_link_opts(s, &lo);
+        check_true("link_detail: custom 5 mm, 22.5 degrees read back", st == CC_OK && lo.detail == CC_IFC_DETAIL_CUSTOM && lo.chord_mm == 5.0 && lo.max_deg == 22.5);
+        f = read_all(FILE_, &n);
+        check_true("link_detail: custom written in the sorted place",
+                   f && strstr(f, "\"gpu_cull\":false,\"link_chord_mm\":5.0,\"link_detail\":\"custom\",\"link_max_deg\":22.5,\"memory_share\":"));
+        free(f);
+        char *e2 = ask(s, "action", "set_settings", "{\"link_max_deg\":120}", &st);
+        check_true("link_max_deg: over 90 refused", st != CC_OK && strstr(e2, "`link_max_deg`: degrees from 1 to 90"));
+        free(e2);
+        e2 = ask(s, "action", "set_settings", "{\"link_chord_mm\":0}", &st);
+        check_true("link_chord_mm: 0 refused", st != CC_OK && strstr(e2, "`link_chord_mm`: millimetres from 0.01 to 1000"));
+        free(e2);
+        char *e = ask(s, "action", "set_settings", "{\"link_detail\":\"fine\"}", &st);
+        check_true("link_detail: another name refused", st != CC_OK && strstr(e, "`link_detail`: exact, standard, light or custom"));
+        free(e);
+        cc_session_free(s);
+        reset_dir();
+    }
 
     /* ---- the actions, the capabilities, query about ---- */
     {

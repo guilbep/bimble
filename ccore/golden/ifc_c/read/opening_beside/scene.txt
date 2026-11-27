@@ -1,0 +1,9 @@
+schema "IFC4"
+origin 40a3880000000000 40a4500000000000 4095e00000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cTess1Op00000000004" "Level 0"
+grids 0
+elements 2 triangles 44 meshes yes
+000 2T2cTess1Op00000000010 IfcWall 0 Concrete v=8 i=12 e=12 n=12 name="Wall, opening beside" storey="Level 0" material="C30/37"
+001 2T2cTess1Op00000000020 IfcWall 7 Other v=16 i=32 e=24 n=24 name="Wall with window" storey="Level 0" material=""

@@ -84,6 +84,10 @@ struct cc_link {
     double rotation_deg;  /* the manual rotation about Z, degrees */
     int pinned;           /* 1: not moved by accident (default) */
     int colour;           /* -1: its own colours; else a palette index 0..11, flat */
+    /* TESS1 (ADR 0085): its own reader detail, named at a Reload (manage_links reload {detail, chord_mm,
+     * max_deg}); detail_own 0: the settings' link_detail. Kept across reloads, not saved in the .bimble. */
+    int detail_own;
+    cc_ifc_read_opts detail;
     /* where the file says it is (set when it became ready; cc_link_placement) */
     int geo_map;          /* it has a map conversion (IfcMapConversion, a georeference) */
     double geo_e, geo_n, geo_h, geo_rot; /* m, m, m, degrees */

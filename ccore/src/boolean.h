@@ -70,4 +70,13 @@ int cc_boolean_apply(cc_bool_op op, cc_tri_set a, const cc_tri_set *b, size_t nb
 int cc_boolean_snap(cc_tri_set t, double tol, double (**out)[9], size_t *nout);
 
 #define CC_SEW_MM 0.1
+
+/* TESS1 (ADR 0085): a kernel result made of fewer triangles. Coplanar neighbours (every point of a
+ * triangle within tol mm of the plane of the region's largest triangle, facing its way) merged into
+ * one polygon with its holes and triangulated again by earcut, keeping every boundary point (so a
+ * closed solid stays closed and no point moves). A region is kept as given when its boundary
+ * pinches, earcut would drop a point, the area would change or nothing is saved. Only for a closed
+ * 2-manifold soup (every edge once each way, as the kernel gives): else 1 and nothing. 0 with *out
+ * (malloc, *nout triangles, the caller frees it); 1 nothing saved (*out NULL); -1 out of memory. */
+int cc_boolean_merge_coplanar(const double (*t)[9], size_t n, double tol, double (**out)[9], size_t *nout);
 #endif

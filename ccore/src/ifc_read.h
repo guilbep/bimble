@@ -101,6 +101,32 @@ typedef struct {
     int cancel;
 } cc_ifc_progress;
 int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg);
+/* TESS1 (ADR 0085): how finely curves become triangles, and how boolean results are kept. EXACT:
+ * Rust's reader (arcs within 0.5 mm, 15 degrees per chord; boolean results as the kernel gives
+ * them): the goldens of Rust. STANDARD (the default of cc_ifc_read, cc_ifc_read_progress and opts
+ * NULL): arcs within 2 mm, 18 degrees per chord (20 per circle: no crease line along a cylinder);
+ * a boolean or an opening that takes nothing away leaves its operand as given; a kernel result's
+ * repeated-point triangles dropped, its coplanar triangles merged and triangulated again. LIGHT:
+ * arcs within 10 mm, 30 degrees per chord, booleans as standard. Given meshes (faceted breps,
+ * face sets) are kept as the file gives them at every level. */
+typedef enum {
+    CC_IFC_DETAIL_EXACT = 0,
+    CC_IFC_DETAIL_STANDARD = 1,
+    CC_IFC_DETAIL_LIGHT = 2,
+    CC_IFC_DETAIL_CUSTOM = 3 /* chord_mm and max_deg below; booleans as standard */
+} cc_ifc_detail;
+#define CC_IFC_CHORD_MM_MIN 0.01
+#define CC_IFC_CHORD_MM_MAX 1000.0
+#define CC_IFC_MAX_DEG_MIN 1.0
+#define CC_IFC_MAX_DEG_MAX 90.0
+typedef struct {
+    cc_ifc_detail detail;
+    double chord_mm, max_deg; /* CUSTOM only: the largest chord distance (mm) and angle per chord */
+} cc_ifc_read_opts;
+/* cc_ifc_read_progress with options (NULL: the defaults); an unknown detail, or a custom one out of
+ * [CC_IFC_CHORD_MM_MIN, MAX] and [CC_IFC_MAX_DEG_MIN, MAX], reads as STANDARD. */
+int cc_ifc_read_with(const char *text, size_t n, const cc_ifc_read_opts *opts, cc_ifc_scene *out, cc_error *err,
+                     cc_ifc_progress *pg);
 void cc_ifc_scene_free(cc_ifc_scene *s);
 
 /* serde_json of the Georef ("{}" when default), appended. */

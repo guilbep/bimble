@@ -28,6 +28,7 @@
 #include "buf.h"
 #include "json_r.h"
 #include "json_w.h"
+#include "ifc_read.h" /* TESS1: cc_ifc_read_opts */
 
 typedef struct cc_session cc_session;
 
@@ -53,8 +54,19 @@ typedef struct {
      * (64..=65536, 768). Not Rust's (its viewer had no budget across links): as `renderer`, written to the
      * file only once set, listed in query settings' `values`. */
     unsigned link_gpu_mb;
+    /* TESS1 (ADR 0085): the detail a link's IFC is converted at (ifc_read.h cc_ifc_detail): "exact" (as
+     * Rust read it: chords within 0.5 mm, no boolean shortcut), "standard" (the default: 2 mm, 18
+     * degrees), "light" (10 mm, 30 degrees), "custom" (link_chord_mm, 0.01..1000, 2; link_max_deg,
+     * 1..90, 18). Not Rust's: as `renderer`, each written to the file only once set, listed in query
+     * settings' `values`; a link whose cache has another detail is converted again on its next load or
+     * Reload (link_cache.h, the SRCE's "detail"). A link's Reload may name its own (manage_links). */
+    char link_detail[10];
+    double link_chord_mm, link_max_deg;
 } cc_settings;
 #define CC_LINK_GPU_MB_DEFAULT 768u
+
+/* TESS1: the links' detail of the settings now (the file's, else memory's). */
+void cc_settings_link_opts(cc_session *s, cc_ifc_read_opts *o);
 
 /* Settings::default(). */
 void cc_settings_default(cc_settings *s);

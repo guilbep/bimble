@@ -1003,6 +1003,11 @@ export interface SettingsValues {
   renderer?: "auto" | "webgl2" | "webgpu";
   /** SIZE3 (ADR 0078 amendment 5): the GPU memory the links' detail may take, MB (not Rust's; absent from an older core: 768). */
   link_gpu_mb?: number;
+  /** TESS1 (ADR 0085): the detail linked IFC files are converted at (not Rust's; absent from an older core: standard). */
+  link_detail?: "exact" | "standard" | "light" | "custom";
+  /** TESS1: custom's chord distance (mm, 0.01..1000, 2) and angle per chord (degrees, 1..90, 18). */
+  link_chord_mm?: number;
+  link_max_deg?: number;
 }
 /** `query settings`. */
 export interface UserSettings {

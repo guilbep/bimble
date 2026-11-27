@@ -735,6 +735,27 @@ static void link_cache_source(void) {
         check_true("TILE1: re-indexed, it says complete in format 7", cc_link_cache_mark_complete(six, strlen(six), up, sizeof up) == 0 &&
                                                                       cc_link_cache_complete(up, strlen(up)) && strstr(up, CC_LINK_CACHE_FORMAT));
     }
+    /* TESS1: the reader's detail in the source; a cache read at another detail does not match */
+    {
+        char lsrc[512], csrc[512];
+        const cc_ifc_read_opts ex = {CC_IFC_DETAIL_EXACT, 0, 0}, st = {CC_IFC_DETAIL_STANDARD, 0, 0}, li = {CC_IFC_DETAIL_LIGHT, 0, 0};
+        const cc_ifc_read_opts cu = {CC_IFC_DETAIL_CUSTOM, 5.0, 22.5}, cu2 = {CC_IFC_DETAIL_CUSTOM, 5.0, 20.0};
+        check_true("TESS1: a new source names the standard detail", strstr(src, "\"detail\":\"standard\"") != NULL);
+        check_true("TESS1: a light source", cc_link_cache_source_at(68059, 1795696594, head, sizeof head - 1, tail, sizeof tail - 1, NULL,
+                                                                     &li, lsrc, sizeof lsrc) == 0 &&
+                                                strstr(lsrc, "\"detail\":\"light\"") != NULL);
+        check_true("TESS1: standard matches standard", cc_link_cache_matches_at(src, strlen(src), 68059, 1795696594, "", 0, &st));
+        check_true("TESS1: light asked of a standard cache: no", !cc_link_cache_matches_at(src, strlen(src), 68059, 1795696594, "", 0, &li));
+        check_true("TESS1: exact asked of a light cache: no", !cc_link_cache_matches_at(lsrc, strlen(lsrc), 68059, 1795696594, "", 0, &ex));
+        check_true("TESS1: light matches light", cc_link_cache_matches_at(lsrc, strlen(lsrc), 68059, 1795696594, "", 0, &li));
+        check_true("TESS1: a custom source names its numbers",
+                   cc_link_cache_source_at(68059, 1795696594, head, sizeof head - 1, tail, sizeof tail - 1, NULL, &cu, csrc, sizeof csrc) == 0 &&
+                       strstr(csrc, "\"chord_mm\":5.0") && strstr(csrc, "\"max_deg\":22.5") && strstr(csrc, "\"detail\":\"custom\""));
+        check_true("TESS1: custom matches the same numbers", cc_link_cache_matches_at(csrc, strlen(csrc), 68059, 1795696594, "", 0, &cu));
+        check_true("TESS1: custom with another angle: no", !cc_link_cache_matches_at(csrc, strlen(csrc), 68059, 1795696594, "", 0, &cu2));
+        static const char odd[] = "{\"bytes\":1,\"detail\":7,\"ends\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"format\":\"" CC_LINK_CACHE_FORMAT "\",\"mtime_s\":1}";
+        check_true("TESS1: a detail that is not a name: no", !cc_link_cache_matches_at(odd, sizeof odd - 1, 1, 1, "", 0, &st));
+    }
     static const char other[] = "{\"bytes\":1,\"ends\":\"\",\"format\":\"x\",\"mtime_s\":1}";
     check_true("another format: no", !cc_link_cache_matches(other, sizeof other - 1, 1, 1, "", 0));
     /* hostile SRCE sections */

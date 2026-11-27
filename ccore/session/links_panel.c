@@ -35,6 +35,14 @@ int cc_links_panel_json(struct cc_session *s, Buf *out) {
         jw_key(&w, "cache"), k->cache ? jw_str(&w, k->cache) : jw_null(&w);
         jw_key(&w, "cache_mtime_s"), jw_i64(&w, k->cache ? k->cache_mtime_s : 0);
         jw_key(&w, "colour"), k->colour >= 0 ? jw_u64(&w, (uint64_t)k->colour) : jw_null(&w);
+        if (k->detail_own) { /* TESS1: its own reader detail (named at a Reload); absent: the settings' */
+            static const char *const D[] = {"exact", "standard", "light", "custom"};
+            jw_key(&w, "detail"), jw_obj_begin(&w);
+            if (k->detail.detail == CC_IFC_DETAIL_CUSTOM)
+                jw_key(&w, "chord_mm"), jw_f64(&w, k->detail.chord_mm), jw_key(&w, "max_deg"), jw_f64(&w, k->detail.max_deg);
+            jw_key(&w, "name"), jw_str(&w, D[(int)k->detail.detail & 3]);
+            jw_obj_end(&w);
+        }
         jw_key(&w, "elements"), jw_u64(&w, sc->nelements);
         jw_key(&w, "from_cache"), jw_bool(&w, k->from_cache);
         jw_key(&w, "indexing"), jw_bool(&w, k->indexing != 0); /* SIZE3 (E): ready, its proxies being baked */

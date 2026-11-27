@@ -233,6 +233,19 @@ try {
   const after = (await mesh()).bytes;
   check("reload: 200, counter + 1, same /mesh bytes, same order", r.status === 200 && (await change()).links === g0 + 1 &&
     after.equals(before) && (await q("links"))[0].name === "mapped_item.ifc", r.text);
+  // TESS1 (ADR 0085): a Reload may name the link's own reader detail; the panel says it; null: the settings' again.
+  const panelOf = async (n) => (await q("links_panel")).models.find((m) => m.name === n);
+  r = await call("action", "manage_links", JSON.stringify({ op: "reload", name: "mapped_item.ifc", detail: "light" }));
+  check("TESS1: reload at light: 200, the panel names it", r.status === 200 && (await panelOf("mapped_item.ifc")).detail?.name === "light", r.text);
+  r = await call("action", "manage_links", JSON.stringify({ op: "reload", name: "mapped_item.ifc", detail: "custom", chord_mm: 5, max_deg: 22.5 }));
+  const cd = (await panelOf("mapped_item.ifc")).detail;
+  check("TESS1: reload at custom 5 mm, 22.5 degrees", r.status === 200 && cd?.name === "custom" && cd.chord_mm === 5 && cd.max_deg === 22.5, r.text);
+  r = await call("action", "manage_links", JSON.stringify({ op: "reload", name: "mapped_item.ifc", detail: "custom" }));
+  check("TESS1: custom without its numbers -> 400", r.status === 400 && /detail: exact, standard, light, custom/.test(r.text), r.text);
+  r = await call("action", "manage_links", JSON.stringify({ op: "reload", name: "mapped_item.ifc", detail: "fine" }));
+  check("TESS1: an unknown detail -> 400, the link's own kept", r.status === 400 && (await panelOf("mapped_item.ifc")).detail?.name === "custom", r.text);
+  r = await call("action", "manage_links", JSON.stringify({ op: "reload", name: "mapped_item.ifc", detail: null }));
+  check("TESS1: detail null: the settings' again (no detail in the panel)", r.status === 200 && !("detail" in (await panelOf("mapped_item.ifc"))), r.text);
   r = await call("action", "link_model", JSON.stringify({ path: IFC }));
   check("the same file linked again replaces it (still two links)", r.status === 200 && (await q("links")).length === 2);
   rmSync(VIEW);
