@@ -625,6 +625,26 @@ int main(void) {
         cc_settings_to_json(&d, NULL, 0, &b);
         buf_append(&b, "", 1);
         check_true("draw_visible: not in Rust's to_json", b.p && !strstr(b.p, "draw_visible"));
+        check_true("VIS2: session_log not in Rust's to_json", b.p && !strstr(b.p, "session_log"));
+        {
+            char *q3 = ask(s, "query", "settings", "", &st);
+            check_true("VIS2: session_log true by default, applies with files", q3 && strstr(q3, "\"session_log\":true") && strstr(q3, "\"renderer\":\"auto\",\"session_log\":true,\"shell_mode\""));
+            free(q3);
+            char *f3 = read_all(FILE_, &n);
+            check_true("VIS2: session_log not written while it is its default", f3 && !strstr(f3, "session_log"));
+            free(f3);
+            free(ask(s, "action", "set_settings", "{\"session_log\":false}", &st));
+            f3 = read_all(FILE_, &n);
+            check_true("VIS2: session_log set off, written", st == CC_OK && f3 && strstr(f3, "\"session_log\":false"));
+            free(f3);
+            char *e3 = ask(s, "action", "set_settings", "{\"session_log\":\"no\"}", &st);
+            check_true("VIS2: session_log not a boolean refused", st != CC_OK && e3 && strstr(e3, "`session_log`: true or false"));
+            free(e3);
+            free(ask(s, "action", "set_settings", "{\"session_log\":true}", &st));
+            f3 = read_all(FILE_, &n);
+            check_true("VIS2: session_log on again, written (the file had it)", st == CC_OK && f3 && strstr(f3, "\"session_log\":true"));
+            free(f3);
+        }
         /* the other optimisations of the 3D view (the owner: each a setting, a good default and an exact value) */
         check_true("VIS1: edge_mode, cull_back, still_px, refill_offscreen not in Rust's to_json",
                    b.p && !strstr(b.p, "edge_mode") && !strstr(b.p, "cull_back") && !strstr(b.p, "still_px") && !strstr(b.p, "refill_offscreen"));

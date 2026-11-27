@@ -20,6 +20,7 @@ void cc_settings_default(cc_settings *s) { /* settings.rs:43-58 */
     s->draw_visible = 1; /* VIS2: on, exact on a real project of links since the render origin (ADR 0078 amendment 9) */
     strcpy(s->edge_mode, "screen"), s->cull_back = 0, s->still_px = 0, s->refill_offscreen = 1; /* VIS1 */
     strcpy(s->shell_mode, "priority"); /* SHELL1 */
+    s->session_log = 1; /* VIS2 */
     strcpy(s->theme, "grey");    /* ui_theme::THEMES[0] */
     strcpy(s->ui_font, "roboto"); /* UiFont::Roboto */
     s->text_size = 12.0f;
@@ -246,6 +247,7 @@ void cc_settings_of(const JrVal *v, cc_settings *s) { /* settings.rs:70-125 from
     if ((f = field(v, "link_max_deg")) && f->type == JR_NUM && f->num >= CC_IFC_MAX_DEG_MIN && f->num <= CC_IFC_MAX_DEG_MAX)
         s->link_max_deg = f->num;
     if ((f = field(v, "open_app")) && f->type == JR_BOOL) s->open_app = f->b; /* GPU2 */
+    if ((f = field(v, "session_log")) && f->type == JR_BOOL) s->session_log = f->b; /* VIS2 */
 }
 
 int cc_settings_parse(const char *text, size_t n, cc_settings *s) {
@@ -298,10 +300,10 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
             unsigned long long u;
             if (as_u64(v, &u) || u > 240) buf_puts(why, "`moving_fps`: a whole number from 0 to 240 (0: draw everything)");
             else t.moving_fps = (unsigned)u;
-        } else if (jr_key_is(m, "moving_proxies") || jr_key_is(m, "gpu_cull") || jr_key_is(m, "draw_visible") || jr_key_is(m, "cull_back") || jr_key_is(m, "refill_offscreen")) {
+        } else if (jr_key_is(m, "moving_proxies") || jr_key_is(m, "gpu_cull") || jr_key_is(m, "draw_visible") || jr_key_is(m, "cull_back") || jr_key_is(m, "refill_offscreen") || jr_key_is(m, "session_log")) {
             if (v->type != JR_BOOL) say(why, "`%s`: true or false", m->key);
             else *(jr_key_is(m, "gpu_cull") ? &t.gpu_cull : jr_key_is(m, "draw_visible") ? &t.draw_visible : jr_key_is(m, "cull_back") ? &t.cull_back
-                   : jr_key_is(m, "refill_offscreen") ? &t.refill_offscreen : &t.moving_proxies) = v->b;
+                   : jr_key_is(m, "refill_offscreen") ? &t.refill_offscreen : jr_key_is(m, "session_log") ? &t.session_log : &t.moving_proxies) = v->b;
         } else if (jr_key_is(m, "edge_mode")) { /* VIS1 */
             int k = known(EDGE_MODES, NEDGE_MODES, v);
             if (k < 0) buf_puts(why, "`edge_mode`: screen, lines or none");
@@ -357,7 +359,7 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
         else {
             buf_puts(why, "unknown field `");
             buf_append(why, m->key, m->key_n < 64 ? m->key_n : 64);
-            buf_puts(why, "`, expected one of `coordinates`, `cull_back`, `draw_visible`, `edge_mode`, `gpu_cull`, `link_chord_mm`, `link_detail`, `link_gpu_mb`, `link_max_deg`, `memory_share`, `moving_fps`, `moving_proxies`, `open_app`, `refill_offscreen`, `renderer`, `shell_mode`, `still_px`, `text_size`, "
+            buf_puts(why, "`, expected one of `coordinates`, `cull_back`, `draw_visible`, `edge_mode`, `gpu_cull`, `link_chord_mm`, `link_detail`, `link_gpu_mb`, `link_max_deg`, `memory_share`, `moving_fps`, `moving_proxies`, `open_app`, `refill_offscreen`, `renderer`, `session_log`, `shell_mode`, `still_px`, `text_size`, "
                           "`theme`, `ui_font`, `user_email`, `user_name`");
         }
     }
@@ -399,6 +401,7 @@ static void values(JsonW *w, const cc_settings *s, char *const *recent, size_t n
         if (k == 2 && with_renderer) jw_key(w, "link_max_deg"), jw_f64(w, s->link_max_deg); /* TESS1 */
         if (k == 5 && with_renderer) jw_key(w, "open_app"), jw_bool(w, s->open_app); /* GPU2: sorted between moving_proxies and recent */
         if (k == 6 && with_renderer) jw_key(w, "renderer"), jw_str(w, s->renderer); /* GPU1: sorted between recent and text_size */
+        if (k == 6 && with_renderer) jw_key(w, "session_log"), jw_bool(w, s->session_log); /* VIS2: after renderer */
         if (k == 6 && with_renderer) jw_key(w, "shell_mode"), jw_str(w, s->shell_mode); /* SHELL1: after renderer */
         if (k == 6 && with_renderer) jw_key(w, "still_px"), jw_f64(w, s->still_px); /* VIS1: after renderer */
         jw_key(w, FIELDS[k]);
@@ -456,6 +459,7 @@ typedef struct {
     int has_link_detail; /* TESS1: the text has a "link_detail" member */
     int has_link_chord, has_link_deg; /* TESS1: "link_chord_mm", "link_max_deg" */
     int has_open_app; /* GPU2: the text has an "open_app" member */
+    int has_session_log; /* VIS2: the text has a "session_log" member */
     char *text;
     size_t n;
 } Now;
@@ -496,6 +500,7 @@ static int now_read(cc_session *s, Now *c) {
         c->has_link_chord = v->type == JR_OBJ && field(v, "link_chord_mm") != NULL;
         c->has_link_deg = v->type == JR_OBJ && field(v, "link_max_deg") != NULL;
         c->has_open_app = v->type == JR_OBJ && field(v, "open_app") != NULL;
+        c->has_session_log = v->type == JR_OBJ && field(v, "session_log") != NULL; /* VIS2 */
         if (!u->in_mem && v->type != JR_OBJ) snprintf(u->note, sizeof u->note, "the settings are not a JSON object: the defaults");
         else if (!u->in_mem) u->note[0] = 0;
     } else if (c->text && c->n && !u->in_mem) /* settings.rs: broken JSON reads as the defaults */
@@ -561,7 +566,7 @@ int cc_settings_query(cc_session *s, Buf *out) {
         if (k == 2) jw_key(&w, "link_max_deg"), jw_bool(&w, 1); /* TESS1 */
         if (k == 5) jw_key(&w, "open_app"), jw_bool(&w, files); /* GPU2: the native host's `open` reads it */
         if (k == 6) jw_key(&w, "refill_offscreen"), jw_bool(&w, 1);
-        if (k == 6) jw_key(&w, "renderer"), jw_bool(&w, 1), jw_key(&w, "shell_mode"), jw_bool(&w, 1), jw_key(&w, "still_px"), jw_bool(&w, 1); /* SHELL1 */
+        if (k == 6) jw_key(&w, "renderer"), jw_bool(&w, 1), jw_key(&w, "session_log"), jw_bool(&w, files), jw_key(&w, "shell_mode"), jw_bool(&w, 1), jw_key(&w, "still_px"), jw_bool(&w, 1); /* SHELL1; VIS2: the log with a host */
         jw_key(&w, FIELDS[k]), jw_bool(&w, k == 1 ? webgpu : APPLIES[k] < 0 ? files : APPLIES[k]);
     }
     jw_obj_end(&w);
@@ -599,6 +604,14 @@ void cc_settings_link_opts(cc_session *s, cc_ifc_read_opts *o) { /* TESS1 */
         if (!strcmp(c.v.link_detail, LINK_DETAILS[i])) o->detail = (cc_ifc_detail)i;
     o->chord_mm = c.v.link_chord_mm, o->max_deg = c.v.link_max_deg;
     now_free(&c);
+}
+
+int cc_settings_session_log(cc_session *s) { /* VIS2 */
+    Now c;
+    if (now_read(s, &c)) return 1;
+    int on = c.v.session_log;
+    now_free(&c);
+    return on;
 }
 
 int cc_settings_text_query(cc_session *s, Buf *out) {
@@ -652,6 +665,8 @@ static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
         if (k == 6 && (!v->refill_offscreen || c->has_vis1[3])) m[nm++] = (cc_settings_member){"refill_offscreen", v->refill_offscreen ? "true" : "false", v->refill_offscreen ? 4u : 5u};
         /* GPU1: the lab's renderer, once set or already in the text (sorted: after recent) */
         if (k == 6 && (strcmp(v->renderer, "auto") || c->has_renderer)) m[nm++] = (cc_settings_member){"renderer", rj, strlen(rj)};
+        /* VIS2: session_log, once set off or already in the text (sorted: after renderer) */
+        if (k == 6 && (!v->session_log || c->has_session_log)) m[nm++] = (cc_settings_member){"session_log", v->session_log ? "true" : "false", v->session_log ? 4u : 5u};
         if (k == 6 && (strcmp(v->shell_mode, "priority") || c->has_shell)) m[nm++] = (cc_settings_member){"shell_mode", shj, strlen(shj)}; /* SHELL1 */
         if (k == 6 && (v->still_px != 0 || c->has_vis1[2])) m[nm++] = (cc_settings_member){"still_px", sj, strlen(sj)};
         buf_init(&vals[k]);
@@ -746,6 +761,7 @@ int cc_settings_action(cc_session *s, const char *name, const char *body, size_t
 }
 void cc_settings_user_json(cc_session *s, JsonW *w) { (void)s, jw_null(w); }
 void cc_settings_free(cc_session *s) { (void)s; }
+int cc_settings_session_log(cc_session *s) { return (void)s, 0; } /* VIS2: no host, no log */
 void cc_settings_link_opts(cc_session *s, cc_ifc_read_opts *o) { /* TESS1: standard */
     (void)s, o->detail = CC_IFC_DETAIL_STANDARD, o->chord_mm = 2.0, o->max_deg = 18.0;
 }

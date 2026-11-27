@@ -81,12 +81,18 @@ typedef struct {
      * outside fetched and drawn first, tiles.h CC_TILES_SEL_PRIORITY) | "off" (plain order) | "filter" (EXPERIMENTAL: the outside
      * walk leaves out what the shell says is inside; can hide visible elements, measured 0 to 1.2 % of the seen elements per
      * frame on a real project). Not Rust's: as `renderer`, written once set. */
-    char shell_mode[8];
+    char shell_mode[12]; /* (VIS2: 12, "priority" and its NUL are 9 bytes: the NUL once landed in the next field) */
+    /* VIS2: the web page's session log with the native host (host/server.c POST /session_log: the page's frames, inputs,
+     * errors and report under $XDG_STATE_HOME/bimble/web-sessions/<UTC>-<pid>/), true by default; false: nothing written.
+     * Not Rust's: as `renderer`, written once set off. */
+    int session_log;
 } cc_settings;
 #define CC_LINK_GPU_MB_DEFAULT 768u
 
 /* TESS1: the links' detail of the settings now (the file's, else memory's). */
 void cc_settings_link_opts(cc_session *s, cc_ifc_read_opts *o);
+/* VIS2: the setting session_log now (the file's, else memory's): the native host's web session log. */
+int cc_settings_session_log(cc_session *s);
 
 /* Settings::default(). */
 void cc_settings_default(cc_settings *s);
