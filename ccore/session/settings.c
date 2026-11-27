@@ -23,6 +23,8 @@ void cc_settings_default(cc_settings *s) { /* settings.rs:43-58 */
     strcpy(s->coordinates, "survey");
     strcpy(s->renderer, "auto"); /* GPU1 */
     s->link_gpu_mb = CC_LINK_GPU_MB_DEFAULT; /* SIZE3 */
+    strcpy(s->link_detail, "standard"); /* TESS1 */
+    s->link_chord_mm = 2.0, s->link_max_deg = 18.0;
 }
 
 #ifndef CC_VIEW_ONLY /* the viewer-only wasm has no settings (the 400 KB budget): the stubs at the end */
@@ -34,6 +36,8 @@ static const char *const RENDERERS[] = {"auto", "webgl2", "webgpu"}; /* GPU1: th
 #define NTHEMES (sizeof THEMES / sizeof THEMES[0])
 #define NFONTS (sizeof FONTS / sizeof FONTS[0])
 #define NRENDERERS (sizeof RENDERERS / sizeof RENDERERS[0])
+static const char *const LINK_DETAILS[] = {"exact", "standard", "light", "custom"}; /* TESS1: cc_ifc_detail's order */
+#define NLINK_DETAILS (sizeof LINK_DETAILS / sizeof LINK_DETAILS[0])
 #define TEXT_MIN 10.0f /* ui_theme.rs TEXT_SIZES */
 #define TEXT_MAX 16.0f
 
@@ -222,6 +226,11 @@ void cc_settings_of(const JrVal *v, cc_settings *s) { /* settings.rs:70-125 from
     else if ((f = field(v, "wgs84")) && f->type == JR_BOOL && f->b) strcpy(s->coordinates, "wgs84"); /* 0.14's setting */
     if ((k = known(RENDERERS, NRENDERERS, field(v, "renderer"))) >= 0) strcpy(s->renderer, RENDERERS[k]); /* GPU1 */
     if (!as_u64(field(v, "link_gpu_mb"), &u)) s->link_gpu_mb = u < 64 ? 64 : u > 65536 ? 65536 : (unsigned)u; /* SIZE3 */
+    if ((k = known(LINK_DETAILS, NLINK_DETAILS, field(v, "link_detail"))) >= 0) strcpy(s->link_detail, LINK_DETAILS[k]); /* TESS1 */
+    if ((f = field(v, "link_chord_mm")) && f->type == JR_NUM && f->num >= CC_IFC_CHORD_MM_MIN && f->num <= CC_IFC_CHORD_MM_MAX)
+        s->link_chord_mm = f->num;
+    if ((f = field(v, "link_max_deg")) && f->type == JR_NUM && f->num >= CC_IFC_MAX_DEG_MIN && f->num <= CC_IFC_MAX_DEG_MAX)
+        s->link_max_deg = f->num;
 }
 
 int cc_settings_parse(const char *text, size_t n, cc_settings *s) {
@@ -298,6 +307,18 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
             int k = known(RENDERERS, NRENDERERS, v);
             if (k < 0) buf_puts(why, "`renderer`: auto, webgl2 or webgpu");
             else strcpy(t.renderer, RENDERERS[k]);
+        } else if (jr_key_is(m, "link_detail")) { /* TESS1 */
+            int k = known(LINK_DETAILS, NLINK_DETAILS, v);
+            if (k < 0) buf_puts(why, "`link_detail`: exact, standard, light or custom");
+            else strcpy(t.link_detail, LINK_DETAILS[k]);
+        } else if (jr_key_is(m, "link_chord_mm")) { /* TESS1 */
+            if (v->type != JR_NUM || !(v->num >= CC_IFC_CHORD_MM_MIN && v->num <= CC_IFC_CHORD_MM_MAX))
+                buf_puts(why, "`link_chord_mm`: millimetres from 0.01 to 1000");
+            else t.link_chord_mm = v->num;
+        } else if (jr_key_is(m, "link_max_deg")) { /* TESS1 */
+            if (v->type != JR_NUM || !(v->num >= CC_IFC_MAX_DEG_MIN && v->num <= CC_IFC_MAX_DEG_MAX))
+                buf_puts(why, "`link_max_deg`: degrees from 1 to 90");
+            else t.link_max_deg = v->num;
         } else if (jr_key_is(m, "link_gpu_mb")) { /* SIZE3 */
             unsigned long long u;
             if (as_u64(v, &u) || u < 64 || u > 65536) buf_puts(why, "`link_gpu_mb`: a whole number of MB from 64 to 65536");
@@ -306,7 +327,7 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
         else {
             buf_puts(why, "unknown field `");
             buf_append(why, m->key, m->key_n < 64 ? m->key_n : 64);
-            buf_puts(why, "`, expected one of `coordinates`, `gpu_cull`, `link_gpu_mb`, `memory_share`, `moving_fps`, `moving_proxies`, `renderer`, `text_size`, "
+            buf_puts(why, "`, expected one of `coordinates`, `gpu_cull`, `link_chord_mm`, `link_detail`, `link_gpu_mb`, `link_max_deg`, `memory_share`, `moving_fps`, `moving_proxies`, `renderer`, `text_size`, "
                           "`theme`, `ui_font`, `user_email`, `user_name`");
         }
     }
@@ -336,7 +357,10 @@ static void field_value(JsonW *w, const cc_settings *s, size_t k) {
 static void values(JsonW *w, const cc_settings *s, char *const *recent, size_t nrecent, int with_renderer) {
     jw_obj_begin(w);
     for (size_t k = 0; k < NFIELDS; k++) {
+        if (k == 2 && with_renderer) jw_key(w, "link_chord_mm"), jw_f64(w, s->link_chord_mm); /* TESS1 */
+        if (k == 2 && with_renderer) jw_key(w, "link_detail"), jw_str(w, s->link_detail); /* TESS1: before link_gpu_mb */
         if (k == 2 && with_renderer) jw_key(w, "link_gpu_mb"), jw_u64(w, s->link_gpu_mb); /* SIZE3: sorted between gpu_cull and memory_share */
+        if (k == 2 && with_renderer) jw_key(w, "link_max_deg"), jw_f64(w, s->link_max_deg); /* TESS1 */
         if (k == 6 && with_renderer) jw_key(w, "renderer"), jw_str(w, s->renderer); /* GPU1: sorted between recent and text_size */
         jw_key(w, FIELDS[k]);
         if (k != 5) {
@@ -387,6 +411,8 @@ typedef struct {
     int has_recent; /* the text has a "recent" member */
     int has_renderer; /* GPU1: the text has a "renderer" member */
     int has_link_gpu; /* SIZE3: the text has a "link_gpu_mb" member */
+    int has_link_detail; /* TESS1: the text has a "link_detail" member */
+    int has_link_chord, has_link_deg; /* TESS1: "link_chord_mm", "link_max_deg" */
     char *text;
     size_t n;
 } Now;
@@ -419,6 +445,9 @@ static int now_read(cc_session *s, Now *c) {
         c->has_recent = v->type == JR_OBJ && field(v, "recent") != NULL;
         c->has_renderer = v->type == JR_OBJ && field(v, "renderer") != NULL;
         c->has_link_gpu = v->type == JR_OBJ && field(v, "link_gpu_mb") != NULL; /* SIZE3 */
+        c->has_link_detail = v->type == JR_OBJ && field(v, "link_detail") != NULL; /* TESS1 */
+        c->has_link_chord = v->type == JR_OBJ && field(v, "link_chord_mm") != NULL;
+        c->has_link_deg = v->type == JR_OBJ && field(v, "link_max_deg") != NULL;
         if (!u->in_mem && v->type != JR_OBJ) snprintf(u->note, sizeof u->note, "the settings are not a JSON object: the defaults");
         else if (!u->in_mem) u->note[0] = 0;
     } else if (c->text && c->n && !u->in_mem) /* settings.rs: broken JSON reads as the defaults */
@@ -477,7 +506,10 @@ int cc_settings_query(cc_session *s, Buf *out) {
     int webgpu = !strcmp(c.v.renderer, "webgpu");
     jw_key(&w, "applies"), jw_obj_begin(&w);
     for (size_t k = 0; k < NFIELDS; k++) {
+        if (k == 2) jw_key(&w, "link_chord_mm"), jw_bool(&w, 1); /* TESS1: the links' conversion */
+        if (k == 2) jw_key(&w, "link_detail"), jw_bool(&w, 1);
         if (k == 2) jw_key(&w, "link_gpu_mb"), jw_bool(&w, 1); /* SIZE3: the WebGL2 viewport's budget across links */
+        if (k == 2) jw_key(&w, "link_max_deg"), jw_bool(&w, 1); /* TESS1 */
         if (k == 6) jw_key(&w, "renderer"), jw_bool(&w, 1);
         jw_key(&w, FIELDS[k]), jw_bool(&w, k == 1 ? webgpu : APPLIES[k] < 0 ? files : APPLIES[k]);
     }
@@ -508,6 +540,16 @@ int cc_settings_query(cc_session *s, Buf *out) {
     return jw_finish(&w) == JW_OK ? 0 : (out->oom = 1, -1);
 }
 
+void cc_settings_link_opts(cc_session *s, cc_ifc_read_opts *o) { /* TESS1 */
+    o->detail = CC_IFC_DETAIL_STANDARD, o->chord_mm = 2.0, o->max_deg = 18.0;
+    Now c;
+    if (now_read(s, &c)) return;
+    for (size_t i = 0; i < NLINK_DETAILS; i++)
+        if (!strcmp(c.v.link_detail, LINK_DETAILS[i])) o->detail = (cc_ifc_detail)i;
+    o->chord_mm = c.v.link_chord_mm, o->max_deg = c.v.link_max_deg;
+    now_free(&c);
+}
+
 int cc_settings_text_query(cc_session *s, Buf *out) {
     Now c;
     if (now_read(s, &c)) return out->oom = 1, -1;
@@ -521,16 +563,29 @@ int cc_settings_text_query(cc_session *s, Buf *out) {
  * members kept (a text with no "recent" gets the session's list, as Rust writes it). */
 static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
     Buf vals[NFIELDS];
-    cc_settings_member m[NFIELDS + 2];
+    cc_settings_member m[NFIELDS + 5];
     size_t nm = 0;
     int rc = 0;
     char rj[16]; /* GPU1: "renderer"'s JSON */
     snprintf(rj, sizeof rj, "\"%s\"", v->renderer);
     char gj[16]; /* SIZE3: "link_gpu_mb"'s JSON */
+    char dj[16]; /* TESS1: "link_detail"'s JSON, "link_chord_mm" and "link_max_deg" */
+    snprintf(dj, sizeof dj, "\"%s\"", v->link_detail);
+    Buf cjb, mjb;
+    buf_init(&cjb), buf_init(&mjb);
+    {
+        JsonW jw;
+        jw_init(&jw, &cjb, 0), jw_f64(&jw, v->link_chord_mm), jw_finish(&jw);
+        jw_init(&jw, &mjb, 0), jw_f64(&jw, v->link_max_deg), jw_finish(&jw);
+    }
     snprintf(gj, sizeof gj, "%u", v->link_gpu_mb);
     for (size_t k = 0; k < NFIELDS; k++) {
         /* SIZE3: the links' GPU budget, once set or already in the text (sorted: after gpu_cull) */
+        /* TESS1: the links' detail, once set or already in the text (sorted: before link_gpu_mb) */
+        if (k == 2 && (v->link_chord_mm != 2.0 || c->has_link_chord)) m[nm++] = (cc_settings_member){"link_chord_mm", cjb.p, cjb.len};
+        if (k == 2 && (strcmp(v->link_detail, "standard") || c->has_link_detail)) m[nm++] = (cc_settings_member){"link_detail", dj, strlen(dj)};
         if (k == 2 && (v->link_gpu_mb != CC_LINK_GPU_MB_DEFAULT || c->has_link_gpu)) m[nm++] = (cc_settings_member){"link_gpu_mb", gj, strlen(gj)};
+        if (k == 2 && (v->link_max_deg != 18.0 || c->has_link_deg)) m[nm++] = (cc_settings_member){"link_max_deg", mjb.p, mjb.len};
         /* GPU1: the lab's renderer, once set or already in the text (sorted: after recent) */
         if (k == 6 && (strcmp(v->renderer, "auto") || c->has_renderer)) m[nm++] = (cc_settings_member){"renderer", rj, strlen(rj)};
         buf_init(&vals[k]);
@@ -563,6 +618,7 @@ static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
         buf_free(&b);
     }
     for (size_t k = 0; k < NFIELDS; k++) buf_free(&vals[k]);
+    buf_free(&cjb), buf_free(&mjb); /* TESS1 */
     return rc;
 }
 
@@ -624,6 +680,9 @@ int cc_settings_action(cc_session *s, const char *name, const char *body, size_t
 }
 void cc_settings_user_json(cc_session *s, JsonW *w) { (void)s, jw_null(w); }
 void cc_settings_free(cc_session *s) { (void)s; }
+void cc_settings_link_opts(cc_session *s, cc_ifc_read_opts *o) { /* TESS1: standard */
+    (void)s, o->detail = CC_IFC_DETAIL_STANDARD, o->chord_mm = 2.0, o->max_deg = 18.0;
+}
 #endif
 
 /* ---- query about (lib.rs:4081 about_ui): in both builds ---- */

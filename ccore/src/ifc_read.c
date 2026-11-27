@@ -713,8 +713,16 @@ static void pg_set(cc_ifc_progress *pg, size_t v) {
 }
 static int pg_cancelled(cc_ifc_progress *pg) { return pg && cc_atomic_load(&pg->cancel); }
 
-static int read_parsed(cc_step_file *f, const char *text, size_t n, int detail, cc_ifc_scene *out, cc_error *err,
-                       cc_ifc_progress *pg) {
+/* The chords of a read: a preset, or CUSTOM's numbers (TESS1). */
+static Tess tess_of(int detail, double chord_mm, double max_deg, double scale) {
+    if (detail != CC_IFC_DETAIL_CUSTOM) return tess_for(detail, scale);
+    Tess t = {chord_mm / scale, max_deg * 3.141592653589793 / 180.0, 0};
+    return t;
+}
+
+static int read_parsed(cc_step_file *f, const char *text, size_t n, const cc_ifc_read_opts *o, cc_ifc_scene *out,
+                       cc_error *err, cc_ifc_progress *pg) {
+    int detail = (int)o->detail;
     cc_scene *s = &out->scene;
     Arena *a = &s->arena;
     int rc = -1, oom = 0;
@@ -723,7 +731,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, int detail, 
     Ctx c;
     memset(&c, 0, sizeof c);
     c.f = f;
-    r_init(&r, f, tess_for(detail, 1.0), 1.0);
+    r_init(&r, f, tess_of(detail, o->chord_mm, o->max_deg, 1.0), 1.0);
     Conts cont = {0};
     ElMats em = {0};
     VoidPair *vp = NULL;
@@ -758,7 +766,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, int detail, 
         buf_free(&b);
     }
     double scale = length_scale_to_mm(&r);
-    r.arc_tol = tess_for(detail, scale); /* exact: ARC_TOLERANCE_MM / scale (TESS1: the detail) */
+    r.arc_tol = tess_of(detail, o->chord_mm, o->max_deg, scale); /* exact: ARC_TOLERANCE_MM / scale (TESS1) */
     r.angle_scale = plane_angle_to_radians(&r);
     c.scale = scale, c.arc_tol = r.arc_tol, c.angle_scale = r.angle_scale;
     containers(&r, &cont);
@@ -1132,8 +1140,13 @@ int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error
 
 int cc_ifc_read_with(const char *text, size_t n, const cc_ifc_read_opts *opts, cc_ifc_scene *out, cc_error *err,
                      cc_ifc_progress *pg) {
-    int detail = opts ? (int)opts->detail : CC_IFC_DETAIL_STANDARD;
-    if (detail < CC_IFC_DETAIL_EXACT || detail > CC_IFC_DETAIL_LIGHT) detail = CC_IFC_DETAIL_STANDARD;
+    cc_ifc_read_opts o = {CC_IFC_DETAIL_STANDARD, 2.0, 18.0};
+    if (opts) o = *opts;
+    int custom_ok = o.chord_mm >= CC_IFC_CHORD_MM_MIN && o.chord_mm <= CC_IFC_CHORD_MM_MAX &&
+                    o.max_deg >= CC_IFC_MAX_DEG_MIN && o.max_deg <= CC_IFC_MAX_DEG_MAX; /* NaN: not ok */
+    if ((int)o.detail < CC_IFC_DETAIL_EXACT || (int)o.detail > CC_IFC_DETAIL_CUSTOM ||
+        (o.detail == CC_IFC_DETAIL_CUSTOM && !custom_ok))
+        o.detail = CC_IFC_DETAIL_STANDARD;
     memset(out, 0, sizeof *out);
     arena_init(&out->scene.arena, 0);
     out->schema.p = "";
@@ -1182,7 +1195,7 @@ int cc_ifc_read_with(const char *text, size_t n, const cc_ifc_read_opts *opts, c
         cc_step_free(&f);
         return -1;
     }
-    int rc = pg_cancelled(pg) ? (set_err(err, "cancelled", ""), -1) : read_parsed(&f, text, n, detail, out, err, pg);
+    int rc = pg_cancelled(pg) ? (set_err(err, "cancelled", ""), -1) : read_parsed(&f, text, n, &o, out, err, pg);
     if (!rc) pg_set(pg, 950);
     PROF("geometry+scene total");
     cc_step_free(&f);

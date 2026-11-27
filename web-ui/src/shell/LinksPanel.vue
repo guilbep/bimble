@@ -6,13 +6,16 @@
 // are shell/links.ts's; errors show under the rows.
 import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { t } from "../i18n";
-import { state } from "../bimble";
+import { state, userSettings } from "../bimble";
+import { isNative } from "../files";
 import { linkDetail } from "../gl/linkmem"; // LNK3D (D): detail loaded / proxies only
 import { linkFar } from "../gl/farlinks"; // REAL1: a link thousands of km from the others
 import { send } from "./send";
-import { enabled, linkFolder, linkLog, linksTick, linkNew, linksBusy, linksError, linksPanel, modelOp, modelReload, modelSet, refOp, refReload, reloadAll, type PanelModel, type PanelReference } from "./links";
+import { enabled, linkFolder, linkLog, linksTick, linkNew, linksBusy, linksError, linksPanel, modelOp, modelReload, modelReloadDetail, modelSet, refOp, refReload, reloadAll, type PanelModel, type PanelReference } from "./links";
 
 const rows = computed(() => { void state.value; return linksPanel(); });
+// TESS1: a link's custom detail takes the settings' chord distance and angle.
+const customDetail = () => ({ chord_mm: userSettings.value?.values.link_chord_mm ?? 2, max_deg: userSettings.value?.values.link_max_deg ?? 18 });
 // The move and rotate fields of each reference, by id (filled from its placement).
 const edit = reactive<Record<string, { dx: number; dy: number; angle: number }>>({});
 watch(rows, (v) => {
@@ -88,6 +91,15 @@ const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready
       <template v-else>
         <button type="button" data-bb="link-reload" :title="t('links.reloadTip')" @click="modelReload(m)">{{ t('links.reload') }}</button>
         <button type="button" data-bb="link-reload-from" :title="t('links.reloadFromTip')" @click="modelReload(m, true)">…</button>
+        <!-- TESS1 (ADR 0085): Reload at a detail of its own (an IFC, natively) -->
+        <select v-if="isNative() && m.kind === 'ifc'" class="inp" data-bb="link-reload-detail" :title="t('links.reloadDetailTip')" :value="m.detail?.name ?? ''"
+                @change="modelReloadDetail(m, ($event.target as HTMLSelectElement).value as '' | 'exact' | 'standard' | 'light' | 'custom', customDetail())">
+          <option value="">{{ t('links.detailSettings') }}</option>
+          <option value="exact">{{ t('settings.linkDetail.exact') }}</option>
+          <option value="standard">{{ t('settings.linkDetail.standard') }}</option>
+          <option value="light">{{ t('settings.linkDetail.light') }}</option>
+          <option value="custom">{{ t('settings.linkDetail.custom') }}</option>
+        </select>
       </template>
       <button type="button" data-bb="link-remove" :title="t('links.remove')" @click="modelOp('remove', m.name)">×</button>
     </div>

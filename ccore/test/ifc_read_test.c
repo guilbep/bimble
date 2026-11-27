@@ -75,7 +75,7 @@ static int file_exists(const char *dir, const char *name) {
 
 /* TESS1 (ADR 0085): Rust's goldens are the exact detail; cc_ifc_read's default is standard. */
 static int read_at(const char *t, size_t n, cc_ifc_detail d, cc_ifc_scene *s, cc_error *err) {
-    cc_ifc_read_opts o = {d};
+    cc_ifc_read_opts o = {d, 0, 0};
     return cc_ifc_read_with(t, n, &o, s, err, NULL);
 }
 static int read_exact(const char *t, size_t n, cc_ifc_scene *s, cc_error *err) {
@@ -603,8 +603,45 @@ static void opening_beside(void) {
     free(t);
 }
 
+/* TESS1: CUSTOM with light's numbers is light, byte for byte; out of its bounds it is standard. */
+static void custom_detail(void) {
+    size_t tn;
+    char *t = slurp("golden/ifc/fixtures", "circle_column.ifc", &tn);
+    cc_ifc_read_opts o[4] = {{CC_IFC_DETAIL_LIGHT, 0, 0}, {CC_IFC_DETAIL_CUSTOM, 10.0, 30.0},
+                             {CC_IFC_DETAIL_STANDARD, 0, 0}, {CC_IFC_DETAIL_CUSTOM, 0.0, 18.0}};
+    Buf b[4];
+    for (int k = 0; k < 4; k++) {
+        cc_ifc_scene s;
+        cc_error err;
+        buf_init(&b[k]);
+        int rc = cc_ifc_read_with(t, tn, &o[k], &s, &err, NULL);
+        scene_text_all(&s, rc, &err, &b[k]);
+        cc_ifc_scene_free(&s);
+    }
+    check_true("custom 10 mm, 30 degrees: light's scene", b[0].len == b[1].len && !memcmp(b[0].p, b[1].p, b[0].len));
+    check_true("custom out of bounds (0 mm): standard's scene", b[2].len == b[3].len && !memcmp(b[2].p, b[3].p, b[2].len));
+    cc_ifc_read_opts nan = {CC_IFC_DETAIL_CUSTOM, 0.0 / 0.0, 18.0}, bad = {(cc_ifc_detail)9, 1, 1};
+    cc_ifc_scene s;
+    cc_error err;
+    Buf x;
+    buf_init(&x);
+    int rc = cc_ifc_read_with(t, tn, &nan, &s, &err, NULL);
+    scene_text_all(&s, rc, &err, &x);
+    cc_ifc_scene_free(&s);
+    check_true("custom NaN: standard's scene", x.len == b[2].len && !memcmp(x.p, b[2].p, x.len));
+    buf_clear(&x);
+    rc = cc_ifc_read_with(t, tn, &bad, &s, &err, NULL);
+    scene_text_all(&s, rc, &err, &x);
+    cc_ifc_scene_free(&s);
+    check_true("an unknown detail: standard's scene", x.len == b[2].len && !memcmp(x.p, b[2].p, x.len));
+    buf_free(&x);
+    for (int k = 0; k < 4; k++) buf_free(&b[k]);
+    free(t);
+}
+
 static void details(void) {
     opening_beside();
+    custom_detail();
     int write = getenv("CCORE_WRITE_GOLDEN") != NULL;
     size_t changed = 0, n = 0;
     for (size_t g = 0; g < sizeof G / sizeof *G; g++, n++) changed += detail_one(G[g].name, G[g].dir, G[g].file, write);

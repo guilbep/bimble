@@ -1470,6 +1470,18 @@ still the exact golden byte for byte (Rust's, or the C-own one of section 10). E
 copies, never more triangles, the box within 2 / 10 mm and the volume within 2 % / 5 % of exact.
 New fixture: `golden/ifc_c/fixtures/opening_beside.ifc`.
 
+**Settings (the last TESS1 commit, after TILE1).** A fourth detail, **custom**
+(`CC_IFC_DETAIL_CUSTOM`: `chord_mm` 0.01..1000, `max_deg` 1..90; out of bounds or NaN reads as
+standard; booleans as standard). User settings, not Rust's, written to the file only once set:
+`link_detail` (`exact` | `standard` | `light` | `custom`, default `standard`), `link_chord_mm`
+(default 2), `link_max_deg` (default 18); the Settings dialog shows them. A link's Reload may name
+its own (`manage_links` `reload` with `detail`, and `chord_mm`, `max_deg` for custom; `null`: the
+settings' again), kept for the session (not in the `.bimble`), listed in `query links_panel` as
+`detail` (absent: the settings'); the Links panel has a detail menu by Reload. The link cache's
+SRCE names the detail (and custom's numbers), format `bimble-link-cache 7`: a cache of another
+detail, or of format 6, is converted again. Tests: `settings_test.c`, `viewfile_test.c`
+(`link_cache_source`), `ifc_read_test.c` (`custom_detail`), `test/links_test.mjs`.
+
 **Where.** `ccore/src/ifc_geom.h` (`Tess`, `tess_for`, `arc_segments`, `same_solid`,
 `merge_tris`, `boolean_finish`), `ccore/src/ifc_read.c` (`cut`, `cc_ifc_read_with`),
 `ccore/src/boolean.c` (`cc_boolean_merge_coplanar`), `ccore/tools/ifc_dump.c` (`--detail`); tests

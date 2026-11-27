@@ -167,7 +167,7 @@ static void one_ifc(const char *name) {
     char *text = slurp(golden, path, &n);
     cc_ifc_scene s;
     cc_error err;
-    cc_ifc_read_opts exact = {CC_IFC_DETAIL_EXACT}; /* Rust's goldens: Rust's arcs (TESS1) */
+    cc_ifc_read_opts exact = {CC_IFC_DETAIL_EXACT, 0, 0}; /* Rust's goldens: Rust's arcs (TESS1) */
     if (cc_ifc_read_with(text, n, &exact, &s, &err, NULL)) {
         printf("FAIL %s: %s\n", path, err.msg);
         failed++;
@@ -192,7 +192,7 @@ static void ifc_detail_volumes(const char *name) {
     char *text = slurp(golden, path, &n);
     cc_ifc_scene s[2];
     cc_error err;
-    cc_ifc_read_opts o[2] = {{CC_IFC_DETAIL_EXACT}, {CC_IFC_DETAIL_STANDARD}};
+    cc_ifc_read_opts o[2] = {{CC_IFC_DETAIL_EXACT, 0, 0}, {CC_IFC_DETAIL_STANDARD, 0, 0}};
     int rc0 = cc_ifc_read_with(text, n, &o[0], &s[0], &err, NULL), rc1 = cc_ifc_read_with(text, n, &o[1], &s[1], &err, NULL);
     check_true("detail volumes: both read", !rc0 && !rc1 && s[0].scene.nelements == s[1].scene.nelements);
     for (size_t k = 0; !rc0 && !rc1 && k < s[0].scene.nelements; k++) {

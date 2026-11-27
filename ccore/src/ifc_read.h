@@ -109,11 +109,22 @@ int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error
  * repeated-point triangles dropped, its coplanar triangles merged and triangulated again. LIGHT:
  * arcs within 10 mm, 30 degrees per chord, booleans as standard. Given meshes (faceted breps,
  * face sets) are kept as the file gives them at every level. */
-typedef enum { CC_IFC_DETAIL_EXACT = 0, CC_IFC_DETAIL_STANDARD = 1, CC_IFC_DETAIL_LIGHT = 2 } cc_ifc_detail;
+typedef enum {
+    CC_IFC_DETAIL_EXACT = 0,
+    CC_IFC_DETAIL_STANDARD = 1,
+    CC_IFC_DETAIL_LIGHT = 2,
+    CC_IFC_DETAIL_CUSTOM = 3 /* chord_mm and max_deg below; booleans as standard */
+} cc_ifc_detail;
+#define CC_IFC_CHORD_MM_MIN 0.01
+#define CC_IFC_CHORD_MM_MAX 1000.0
+#define CC_IFC_MAX_DEG_MIN 1.0
+#define CC_IFC_MAX_DEG_MAX 90.0
 typedef struct {
     cc_ifc_detail detail;
+    double chord_mm, max_deg; /* CUSTOM only: the largest chord distance (mm) and angle per chord */
 } cc_ifc_read_opts;
-/* cc_ifc_read_progress with options (NULL: the defaults); an unknown detail reads as STANDARD. */
+/* cc_ifc_read_progress with options (NULL: the defaults); an unknown detail, or a custom one out of
+ * [CC_IFC_CHORD_MM_MIN, MAX] and [CC_IFC_MAX_DEG_MIN, MAX], reads as STANDARD. */
 int cc_ifc_read_with(const char *text, size_t n, const cc_ifc_read_opts *opts, cc_ifc_scene *out, cc_error *err,
                      cc_ifc_progress *pg);
 void cc_ifc_scene_free(cc_ifc_scene *s);

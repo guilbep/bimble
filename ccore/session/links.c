@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "links.h"
+#include "settings.h"
 #include "m1links.h"
 #include "link_cache.h" /* LINKF */
 #include "jobs.h"       /* LINKF: cc_atomic_load */
@@ -889,6 +890,7 @@ static char *dup_z(const char *p) {
 static void keep_settings(cc_link *k, const cc_link *old) {
     k->uid = old->uid, k->origin = old->origin, k->rotation_deg = old->rotation_deg, k->pinned = old->pinned;
     k->colour = old->colour;
+    k->detail_own = old->detail_own, k->detail = old->detail; /* TESS1 */
     memcpy(k->move_mm, old->move_mm, sizeof k->move_mm);
 }
 
@@ -991,6 +993,8 @@ static void start(cc_session *s, int i) {
         return;
     }
     j->cache_min = s->link_cache_min, j->no_beside = s->link_no_beside;
+    if (k->detail_own) j->detail = k->detail; /* TESS1: the link's own detail, else the settings'; a cache of another converts again */
+    else cc_settings_link_opts(s, &j->detail);
     k->state = CC_LS_CONVERTING, k->progress = 0;
     s->link_job = j, s->link_job_uid = k->uid;
     if (!s->pf->spawn || s->pf->spawn(s->pf->ctx, cc_link_job_run, j)) cc_link_job_run(j);
@@ -1116,6 +1120,8 @@ static int links_add_queued(cc_session *s, const char *path, int *at, cc_error *
         cc_link_job *j = cc_link_job_new(s->pf, path);
         if (!j) return snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
         j->cache_min = s->link_cache_min, j->no_beside = s->link_no_beside;
+        if (at && *at >= 0 && (size_t)*at < s->nlinks && s->links[*at].detail_own) j->detail = s->links[*at].detail; /* TESS1 */
+        else cc_settings_link_opts(s, &j->detail);
         cc_link_job_run(j);
         if (j->rc != CC_JOB_OK) {
             *err = j->err;
