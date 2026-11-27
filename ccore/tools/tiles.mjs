@@ -259,7 +259,7 @@ async function shellReport(H, pys, bounds) {
   }
   // the cross-link pass (session/xshell.h): started by the first frame asking the shell, waited for
   let xs = null;
-  const cams = shellCameras(bounds), q0 = `tiles_frame=1&eye=${cams[0].eye.join(",")}&at=${cams[0].at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=auto`;
+  const cams = shellCameras(bounds), q0 = `tiles_frame=1&eye=${cams[0].eye.join(",")}&at=${cams[0].at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=priority`;
   const t0x = performance.now();
   for (let i = 0; i < 36000; i++) {
     xs = json((await H.get(q0)).bytes).xshell;
@@ -271,15 +271,18 @@ async function shellReport(H, pys, bounds) {
   for (const cam of cams) {
     const base = `tiles_frame=1&eye=${cam.eye.join(",")}&at=${cam.at.join(",")}&fov=60&w=1920&h=1080&err=1&leaf_bytes=1`;
     const r = { name: cam.name, path: cam.path };
-    for (const [k, q] of [["off", "shell=off&occ=0"], ["offOcc", "shell=off&occ=1"], ["on", "shell=auto&occ=0&xshell=0"], ["onOcc", "shell=auto&occ=1&xshell=0"],
-      ["x", "shell=auto&occ=0"], ["xOcc", `shell=auto&occ=1${TRUTH ? "&truth=1" : ""}`]]) {
+    // priority (the default) selects what off selects, exterior first: its truth must miss nothing; the experimental filter
+    // (the links' own shells, then the cross-link marks) for the record
+    for (const [k, q] of [["off", "shell=off&occ=0"], ["offOcc", "shell=off&occ=1"], ["prio", `shell=priority&occ=0${TRUTH ? "&truth=1" : ""}`],
+      ["on", "shell=filter&occ=0&xshell=0"], ["onOcc", "shell=filter&occ=1&xshell=0"], ["x", "shell=filter&occ=0"], ["xOcc", `shell=filter&occ=1${TRUTH ? "&truth=1" : ""}`]]) {
       const t0 = performance.now(), g = await H.get(`${base}&${q}`), ms = performance.now() - t0;
       if (g.status !== 200) throw new Error(`tiles_frame ${q}: ${g.status}`);
       const j = json(g.bytes);
       r[k] = { triangles: j.triangles, bytes: j.bytes, hidden: j.hidden_triangles, shellLinks: j.shell_links, xLinks: j.links.filter((l) => l.xshell).length, ms };
       if (k === "xOcc" && TRUTH) Object.assign(r, { seen: j.seen, missing: j.missing, missingOcc: j.missing_occ, missingTris: j.missing_triangles, missingList: j.missing_list });
+      if (k === "prio" && TRUTH) Object.assign(r, { prioSeen: j.seen, prioMissing: j.missing, first: j.first_picture });
     }
-    log(`${cam.name}: off ${fmt(r.off.triangles)}, off+occ ${fmt(r.offOcc.triangles)}, own shells ${fmt(r.on.triangles)} (${r.on.shellLinks} links), +occ ${fmt(r.onOcc.triangles)}; cross ${fmt(r.x.triangles)} (${r.x.xLinks} links), +occ ${fmt(r.xOcc.triangles)}${TRUTH ? `; seen ${fmt(r.seen)}, missing ${r.missing} (with occ ${r.missingOcc}) [${r.xOcc.ms.toFixed(0)} ms]` : ""}`);
+    log(`${cam.name}: off ${fmt(r.off.triangles)}, off+occ ${fmt(r.offOcc.triangles)}, own shells ${fmt(r.on.triangles)} (${r.on.shellLinks} links), +occ ${fmt(r.onOcc.triangles)}; cross ${fmt(r.x.triangles)} (${r.x.xLinks} links), +occ ${fmt(r.xOcc.triangles)}${TRUTH ? `; seen ${fmt(r.seen)}, filter missing ${r.missing} (with occ ${r.missingOcc}); priority missing ${r.prioMissing}, first picture plain ${fmt(r.first?.plain ?? 0)} / priority ${fmt(r.first?.priority ?? 0)} of ${fmt(r.prio.triangles)} [${r.xOcc.ms.toFixed(0)} ms]` : ""}`);
     rows.push(r);
   }
   return { per, rows, xshell: xs };
@@ -347,14 +350,14 @@ async function crossCompare(label, nlinks, bounds) {
       await H.call("action", "manage_links", { op: "unpin", name: nm });
       await H.call("action", "manage_links", { op: "place", name: nm, move_mm: CUR.place(k) });
     }
-    const q0 = `tiles_frame=1&eye=${cams[0].eye.join(",")}&at=${cams[0].at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=auto`;
+    const q0 = `tiles_frame=1&eye=${cams[0].eye.join(",")}&at=${cams[0].at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=priority`;
     let xs = null;
     const t0 = performance.now();
     for (let i = 0; i < 72000; i++) { xs = json((await H.get(q0)).bytes).xshell; if (!xs || xs.state !== 1) break; await sleep(100); }
     const marks = [];
     for (let k = 0; k < nlinks; k++) { const g = await H.get(`link=${k}&tiles=xshell`); marks.push(g.status === 200 ? g.bytes : null); }
     const tris = {};
-    for (const c of cams) tris[c.name] = json((await H.get(`tiles_frame=1&eye=${c.eye.join(",")}&at=${c.at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=auto`)).bytes).triangles;
+    for (const c of cams) tris[c.name] = json((await H.get(`tiles_frame=1&eye=${c.eye.join(",")}&at=${c.at.join(",")}&fov=60&w=1920&h=1080&err=1&shell=filter`)).bytes).triangles;
     log(`cross ${v}x${SHELL_RES}: state ${xs?.state}, ${fmt(xs?.exterior ?? 0)} of ${fmt(xs?.elements ?? 0)} exterior, ${fmt(xs?.ms ?? 0)} ms (waited ${fmt(performance.now() - t0)}), triangles ${JSON.stringify(tris)}`);
     out.push({ views: v, state: xs?.state, ms: xs?.ms, exterior: xs?.exterior, elements: xs?.elements, peak: xs?.peak, tris });
     sets.push(marks);
@@ -549,8 +552,8 @@ function mdShell(rs) {
     }
     const xs = r.shell.xshell;
     if (xs) L.push(`cross-link pass: state ${xs.state} (2 ready), ${xs.groups} groups of overlapping links, ${fmt(xs.exterior)} of ${fmt(xs.elements)} elements exterior, ${fmt(xs.ms)} ms, buffers ${MB(xs.peak)}`, "");
-    L.push("| camera | off | off + occ | own shells | own + occ | cross-link | cross + occ | bytes off / own / cross | links shelled (cross) | seen | missing (cross) | missing (cross + occ) |", "|---|---|---|---|---|---|---|---|---|---|---|---|");
-    for (const x of r.shell.rows) L.push(`| ${x.name} | ${fmt(x.off.triangles)} | ${fmt(x.offOcc.triangles)} | ${fmt(x.on.triangles)} | ${fmt(x.onOcc.triangles)} | ${fmt(x.x.triangles)} | ${fmt(x.xOcc.triangles)} | ${MB(x.off.bytes)} / ${MB(x.on.bytes)} / ${MB(x.x.bytes)} | ${x.on.shellLinks} (${x.x.xLinks}) | ${x.seen !== undefined ? fmt(x.seen) : "-"} | ${x.missing ?? "-"} | ${x.missingOcc ?? "-"} |`);
+    L.push("| camera | off (= priority) | off + occ | priority: missing; first picture plain / priority (tris) | filter, own shells (+ occ) | filter, cross-link (+ occ) | seen | filter missing (cross; + occ) |", "|---|---|---|---|---|---|---|---|");
+    for (const x of r.shell.rows) L.push(`| ${x.name} | ${fmt(x.off.triangles)} | ${fmt(x.offOcc.triangles)} | ${x.prioMissing ?? "-"}; ${x.first ? `${fmt(x.first.plain)} / ${fmt(x.first.priority)}` : "-"} | ${fmt(x.on.triangles)} (${fmt(x.onOcc.triangles)}) | ${fmt(x.x.triangles)} (${fmt(x.xOcc.triangles)}) | ${x.seen !== undefined ? fmt(x.seen) : "-"} | ${x.missing ?? "-"}; ${x.missingOcc ?? "-"} |`);
     const ml = r.shell.rows.flatMap((x) => (x.missingList ?? []).map((m) => ({ ...m, cam: x.name })));
     if (ml.length) {
       L.push("", "Largest missing elements (shell): " + ml.sort((a, b) => b.size_mm - a.size_mm).slice(0, 20).map((m) => `${m.class} ${fmt(m.size_mm)} mm ${m.triangles} tris (link ${m.link + 1}, ${m.cam})`).join("; "));

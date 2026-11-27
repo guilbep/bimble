@@ -212,7 +212,9 @@ int cc_tiles_proxy_mesh(const uint8_t *p, size_t n, const float box[6], Arena *a
 #define CC_TILES_SHELL_HEAD 32u
 #define CC_TILES_SHELL_REC 32u
 enum { CC_TILE_SHELL_PROXY = 1 };
-enum { CC_TILES_ANS_SHELL = 1 };
+/* leaf answers: CC_TILES_ANS_SHELL its exterior elements only (the first fetch, GET ...&tile=a,b&shell=1),
+ * CC_TILES_ANS_INTERIOR the others (what follows, &shell=2): the two together are the leaf */
+enum { CC_TILES_ANS_SHELL = 1, CC_TILES_ANS_INTERIOR = 2 };
 typedef struct {
     uint32_t ext, flags;
     uint64_t off;
@@ -266,10 +268,15 @@ typedef struct {
 } cc_tiles_view;
 /* flags: CC_TILES_SEL_LEAVES: levels of detail off: every leaf in the frustum (error_px and budget ignored). The renderers'
  * settings: error_px (default 1 still), budget (default none), levels of detail (default on), occluders (cc_tiles_occ). */
-/* CC_TILES_SEL_SHELL (SHELL1): the outside walk, for an eye outside the link's box (cc_tiles_shell_outside) when no section
- * cuts the link and no exterior element of it is hidden or transparent: tiles without exterior elements skipped, leaves
- * counted by their exterior triangles, proxies by their shell proxy (the table when attached); ignored without the shell. */
-enum { CC_TILES_SEL_LEAVES = 1, CC_TILES_SEL_SHELL = 2 };
+/* SHELL1 (ADR 0078 amendment 7). CC_TILES_SEL_PRIORITY (the renderers' default, setting shell_mode "priority"): the same
+ * selection as without it, ORDERED exterior first: the tiles holding an exterior element (the cross-link marks when attached,
+ * else tile flag 16), front to back, then the others, front to back. The shell never removes anything: a renderer fetches
+ * and draws what is probably seen first; its run-time occlusion decides what is seen.
+ * CC_TILES_SEL_SHELL (EXPERIMENTAL, shell_mode "filter", off by default: it CAN HIDE VISIBLE ELEMENTS, measured 0 to 1.2 % of
+ * the elements seen per frame on a real project of 17 links): the outside walk, for an eye outside the link's box
+ * (cc_tiles_shell_outside) when no section cuts the link and no exterior element of it is hidden: tiles without exterior
+ * elements skipped, leaves counted by their exterior triangles, proxies by their shell proxy; ignored without the shell. */
+enum { CC_TILES_SEL_LEAVES = 1, CC_TILES_SEL_SHELL = 2, CC_TILES_SEL_PRIORITY = 4 };
 /* SHELL1: 1 when the shell is baked and `eye` (link scene mm) is outside the root's box grown by `margin` mm: the outside
  * walk applies (the caller also checks sections and hidden elements). The settings' shell_mode: off, outside, auto. */
 int cc_tiles_shell_outside(const cc_tiles_toc *toc, const double eye[3], double margin);

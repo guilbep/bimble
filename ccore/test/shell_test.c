@@ -286,6 +286,27 @@ static void pyramid(void) {
     nc = cc_tiles_select(&b, &v, 1, UINT64_MAX, CC_TILES_SEL_SHELL, NULL, ic, b.ntiles, &tc);
     nb = cc_tiles_select(&b, &v, 1, UINT64_MAX, 0, NULL, ib, b.ntiles, &tb);
     check_true("pyramid: far outside walk, a few tiles", nc >= 1 && tc <= tb);
+    { /* priority: the same tiles as the plain walk, those with exterior elements first */
+        uint32_t *pa = malloc(b.ntiles * sizeof *pa), *pb = malloc(b.ntiles * sizeof *pb);
+        uint64_t qa, qb;
+        v.eye[0] = -60000, v.eye[1] = -50000, v.eye[2] = 30000;
+        uint32_t na2 = cc_tiles_select(&b, &v, 1, UINT64_MAX, CC_TILES_SEL_LEAVES, NULL, pa, b.ntiles, &qa);
+        uint32_t nb2 = cc_tiles_select(&b, &v, 1, UINT64_MAX, CC_TILES_SEL_LEAVES | CC_TILES_SEL_PRIORITY, NULL, pb, b.ntiles, &qb);
+        int same = na2 == nb2 && qa == qb, order = 1, seen_int = 0, ext_tiles = 0;
+        for (uint32_t i = 0; same && i < nb2; i++) {
+            int found = 0;
+            for (uint32_t k = 0; k < na2; k++) found |= pa[k] == pb[i];
+            same &= found;
+            cc_tile u;
+            cc_tiles_get(&b, pb[i], &u);
+            int ext = (u.flags & CC_TILE_EXTERIOR) != 0;
+            ext_tiles += ext;
+            if (!ext) seen_int = 1;
+            else if (seen_int) order = 0;
+        }
+        check_true("pyramid: priority selects the plain walk's tiles, exterior first", same && order && ext_tiles > 0);
+        free(pa), free(pb);
+    }
     /* the leaf answers: exterior only */
     cc_tiles_src src = {&s, NULL};
     int la = 1;

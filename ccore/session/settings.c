@@ -24,7 +24,7 @@ void cc_settings_default(cc_settings *s) { /* settings.rs:43-58 */
     strcpy(s->renderer, "auto"); /* GPU1 */
     s->link_gpu_mb = CC_LINK_GPU_MB_DEFAULT; /* SIZE3 */
     strcpy(s->link_detail, "standard"); /* TESS1 */
-    strcpy(s->shell_mode, "auto"); /* SHELL1 */
+    strcpy(s->shell_mode, "priority"); /* SHELL1 */
     s->link_chord_mm = 2.0, s->link_max_deg = 18.0;
 }
 
@@ -34,7 +34,7 @@ void cc_settings_default(cc_settings *s) { /* settings.rs:43-58 */
 static const char *const THEMES[] = {"grey", "dark", "light", "solarized-dark", "solarized-light", "high-contrast"};
 static const char *const FONTS[] = {"roboto", "ubuntu"};
 static const char *const RENDERERS[] = {"auto", "webgl2", "webgpu"}; /* GPU1: the lab's 3D renderer */
-static const char *const SHELL_MODES[] = {"off", "outside", "auto"}; /* SHELL1: the outside walk */
+static const char *const SHELL_MODES[] = {"off", "priority", "filter"}; /* SHELL1: exterior first; filter experimental */
 #define NSHELL_MODES (sizeof SHELL_MODES / sizeof SHELL_MODES[0])
 #define NTHEMES (sizeof THEMES / sizeof THEMES[0])
 #define NFONTS (sizeof FONTS / sizeof FONTS[0])
@@ -314,7 +314,7 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
             else strcpy(t.renderer, RENDERERS[k]);
         } else if (jr_key_is(m, "shell_mode")) { /* SHELL1 */
             int k = known(SHELL_MODES, NSHELL_MODES, v);
-            if (k < 0) buf_puts(why, "`shell_mode`: off, outside or auto");
+            if (k < 0) buf_puts(why, "`shell_mode`: off, priority or filter (experimental: can hide visible elements)");
             else strcpy(t.shell_mode, SHELL_MODES[k]);
         } else if (jr_key_is(m, "link_detail")) { /* TESS1 */
             int k = known(LINK_DETAILS, NLINK_DETAILS, v);
@@ -613,7 +613,7 @@ static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
         /* GPU1: the lab's renderer, once set or already in the text (sorted: after recent) */
         if (k == 6 && (strcmp(v->renderer, "auto") || c->has_renderer)) m[nm++] = (cc_settings_member){"renderer", rj, strlen(rj)};
         /* SHELL1: the outside walk's mode, once set or already in the text (sorted: after renderer) */
-        if (k == 6 && (strcmp(v->shell_mode, "auto") || c->has_shell)) m[nm++] = (cc_settings_member){"shell_mode", sj, strlen(sj)};
+        if (k == 6 && (strcmp(v->shell_mode, "priority") || c->has_shell)) m[nm++] = (cc_settings_member){"shell_mode", sj, strlen(sj)};
         buf_init(&vals[k]);
         JsonW w;
         jw_init(&w, &vals[k], 0);

@@ -554,8 +554,15 @@ static int tiles_answer(const cc_tiles_src *src, const uint8_t *sec, size_t n, u
         buf_append(out, toc.shell, toc.shell_n);
         return out->oom ? (buf_clear(out), out->oom = 0, buf_puts(out, "out of memory"), 500) : 200;
     }
-    int shell = 0; /* SHELL1: "shell:a,b,c": the outside walk's content (leaves: exterior elements; proxies: shell proxies) */
-    if (nreq >= 6 && !memcmp(req, "shell:", 6)) shell = toc.shell != NULL, req += 6, nreq -= 6;
+    /* SHELL1 (priority, the default): "first:a,b,c" the first fetch: a leaf's exterior elements (none: nothing yet), a proxy
+     * whole (the tile's own: every element); "rest:a,b,c" what follows: a leaf's other elements (a leaf without exterior
+     * elements: whole), nothing for a proxy. EXPERIMENTAL "filter:a,b,c": the outside walk's content (a leaf's exterior
+     * elements, a tile's shell proxy, nothing for a tile without exterior elements). Without the shell: the plain answer. */
+    int mode = 0;
+    if (nreq >= 6 && !memcmp(req, "first:", 6)) mode = 1, req += 6, nreq -= 6;
+    else if (nreq >= 5 && !memcmp(req, "rest:", 5)) mode = 2, req += 5, nreq -= 5;
+    else if (nreq >= 7 && !memcmp(req, "filter:", 7)) mode = 3, req += 7, nreq -= 7;
+    if (!toc.shell && !(toc.xmask && (toc.bake & CC_TILES_BAKE_SHELL))) mode = mode == 2 ? 4 : 0; /* no shell: all came first */
     uint32_t ids[TILES_MAX_ASKED], nid = 0;
     for (size_t i = 0; i < nreq;) {
         uint64_t v = 0;
@@ -578,19 +585,25 @@ static int tiles_answer(const cc_tiles_src *src, const uint8_t *sec, size_t n, u
         cc_tile_shell sr;
         cc_tiles_shell_get(&toc, ids[i], &sr);
         int has_ext = (t.flags & CC_TILE_EXTERIOR) != 0;
-        if (shell && toc.xmask) { /* the cross-link shell: its own marks */
+        if (toc.xmask) { /* the cross-link shell: its own marks */
             has_ext = 0;
             for (uint32_t k = 0; k < t.nel && !has_ext; k++) has_ext = toc.xmask[t.el0 + k] != 0;
         }
-        if (shell && !has_ext) kind = 0; /* nothing seen from outside */
-        else if (shell && kind == 2 && !(sr.flags & CC_TILE_SHELL_PROXY)) kind = 0;
+        unsigned af = 0;
+        if (mode == 4) kind = 0;
+        else if (mode == 1 && kind == 1) has_ext ? (af = CC_TILES_ANS_SHELL) : (kind = 0);
+        else if (mode == 2) kind == 2 ? (kind = 0) : (af = has_ext ? CC_TILES_ANS_INTERIOR : 0);
+        else if (mode == 3) {
+            if (!has_ext || (kind == 2 && !(sr.flags & CC_TILE_SHELL_PROXY))) kind = 0;
+            af = CC_TILES_ANS_SHELL;
+        }
         PUT32(ids[i]);
         PUT32(kind);
         size_t at = out->len;
         PUT32(0u);
-        if (kind == 2 && shell) buf_append(out, blobs + sr.off, sr.len);
+        if (kind == 2 && mode == 3) buf_append(out, blobs + sr.off, sr.len);
         else if (kind == 2) buf_append(out, blobs + t.off, t.len);
-        else if (kind == 1 && cc_tiles_leaf_answer_ex(src, &toc, ids[i], shell ? CC_TILES_ANS_SHELL : 0, out, &err)) {
+        else if (kind == 1 && cc_tiles_leaf_answer_ex(src, &toc, ids[i], af, out, &err)) {
             buf_clear(out), out->oom = 0, buf_puts(out, err.msg);
             return 500;
         }
@@ -809,6 +822,7 @@ typedef struct { /* one pyramid's part of a frame */
     uint8_t *xtile;         /* SHELL1: the cross-link shell attached: per tile, holds an exterior element */
     uint32_t *xtris;        /*         and their triangles */
     int xs;                 /* SHELL1: the cross-link marks used */
+    int prio;               /* SHELL1: ordered exterior first */
     uint8_t *seen, *drawn;  /* SHELL1 truth: per element, seen in the full render; depicted by the selection */
     uint64_t vis, miss, miss_tris, miss_occ;
 } FrameP;
@@ -887,14 +901,17 @@ static int frame_select(cc_session *s, FrameP *f, const cc_tiles_frame_q *q) {
     f->hid = calloc((size_t)f->toc.ntiles + 1, 1);
     if (!f->ids || !f->hid) return -1;
     double t0 = s->pf->now_ms(s->pf->ctx);
-    f->shell = q->shell == 1 ? (f->toc.bake & CC_TILES_BAKE_SHELL) != 0 : q->shell == 2 ? cc_tiles_shell_outside(&f->toc, v.eye, q->shell_margin) : 0;
-    if (f->shell && q->xshell && f->link) { /* SHELL1: the cross-link marks, when ready, in place of the link's own */
+    /* SHELL1: 3 priority (the same selection, exterior first), 2 filter (experimental: the outside walk) */
+    f->shell = q->shell == 2 ? cc_tiles_shell_outside(&f->toc, v.eye, q->shell_margin) : 0;
+    int prio = q->shell == 3 && (f->toc.bake & CC_TILES_BAKE_SHELL);
+    if ((f->shell || prio) && q->xshell && f->link) { /* SHELL1: the cross-link marks, when ready, in place of the link's own */
         uint32_t nx = 0;
         const uint8_t *xm = cc_xshell_marks(s, f->link, &nx);
         if (xm && nx == f->toc.nlist && attach_cross(f, xm) == 0) f->xs = 1;
     }
     if (f->shell && q->shell == 2 && !shell_valid(s, f, f->rows)) f->shell = 0, f->invalid = 1;
-    unsigned fl = (q->lod ? 0 : CC_TILES_SEL_LEAVES) | (f->shell ? CC_TILES_SEL_SHELL : 0);
+    unsigned fl = (q->lod ? 0 : CC_TILES_SEL_LEAVES) | (f->shell ? CC_TILES_SEL_SHELL : 0) | (prio ? CC_TILES_SEL_PRIORITY : 0);
+    f->prio = prio;
     f->n = cc_tiles_select(&f->toc, &v, q->error_px, q->budget, fl, NULL, f->ids, f->toc.ntiles, &f->tris);
     f->sel_ms = s->pf->now_ms(s->pf->ctx) - t0;
     return 0;
@@ -1044,6 +1061,90 @@ static void truth_job(void *ctx, size_t task, size_t worker) {
 /* every link's every leaf drawn at full detail (opaque classes into the depth, then every element tested at the pixel
  * centres), against what each pyramid's selection depicts (a leaf: its elements, the exterior ones in the outside walk;
  * a proxy: the elements of its range, the exterior ones in the outside walk; tiles hidden by occlusion: nothing) */
+static uint32_t el_tris(const FrameP *f, uint32_t e) {
+    if (e >= f->ne || cc_tiles_src_el_block(&f->src, e) == SIZE_MAX) return 0;
+    int sh = f->src.vf ? f->src.vf->elements[e].shape : f->src.scene->elements[e].shape;
+    const cc_mesh *cm = f->src.vf ? (sh >= 0 ? &f->src.vf->shapes[sh] : &f->src.vf->elements[e].mesh) : (sh >= 0 ? &f->src.scene->shapes[sh] : &f->src.scene->elements[e].mesh);
+    return cm->ni / 3;
+}
+
+typedef struct {
+    double d;
+    uint32_t f, k; /* pyramid, index in its selection */
+} Ord;
+static int ord_cmp(const void *x, const void *y) {
+    const Ord *a = x, *b = y;
+    return a->d != b->d ? (a->d < b->d ? -1 : 1) : a->f != b->f ? (a->f < b->f ? -1 : 1) : (a->k > b->k) - (a->k < b->k);
+}
+
+/* SHELL1: the triangles fetched and drawn, in order, until every element the truth render sees (and the selection draws) is
+ * drawn: plain (the selected tiles front to back, whole) and priority (the exterior parts of the tiles front to back first:
+ * a leaf's exterior elements, a proxy whole; then the rest front to back). out[0] plain, out[1] priority, out[2] the elements. */
+static int first_picture(FrameP *fp, size_t nf, const cc_tiles_frame_q *q, uint64_t out[3]) {
+    size_t n = 0;
+    for (size_t i = 0; i < nf; i++) n += fp[i].n;
+    Ord *o = malloc((n + 1) * sizeof *o);
+    uint8_t **got = calloc(nf + 1, sizeof *got);
+    if (!o || !got) return free(o), free(got), -1;
+    n = 0;
+    uint64_t target = 0;
+    for (size_t i = 0; i < nf; i++) {
+        FrameP *f = &fp[i];
+        got[i] = calloc((size_t)f->ne + 1, 1);
+        if (!got[i]) goto oom;
+        for (uint32_t e = 0; e < f->ne; e++) target += f->seen[e] && f->drawn[e] == 1;
+        for (uint32_t k = 0; k < f->n; k++) {
+            if (f->hid[k]) continue;
+            cc_tile t;
+            cc_tiles_get(&f->toc, f->ids[k], &t);
+            double lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300}, d2 = 0;
+            for (int c = 0; c < 8; c++) {
+                double p[3] = {c & 1 ? t.box[3] : t.box[0], c & 2 ? t.box[4] : t.box[1], c & 4 ? t.box[5] : t.box[2]};
+                double w3[3] = {f->c * p[0] - f->si * p[1] + f->o[0], f->si * p[0] + f->c * p[1] + f->o[1], p[2] + f->o[2]};
+                for (int j = 0; j < 3; j++) lo[j] = w3[j] < lo[j] ? w3[j] : lo[j], hi[j] = w3[j] > hi[j] ? w3[j] : hi[j];
+            }
+            for (int j = 0; j < 3; j++) {
+                double x = q->eye[j] < lo[j] ? lo[j] - q->eye[j] : q->eye[j] > hi[j] ? q->eye[j] - hi[j] : 0;
+                d2 += x * x;
+            }
+            o[n++] = (Ord){d2, (uint32_t)i, k};
+        }
+    }
+    out[2] = target;
+    qsort(o, n, sizeof *o, ord_cmp);
+    for (int prio = 0; prio < 2; prio++) {
+        for (size_t i = 0; i < nf; i++) memset(got[i], 0, (size_t)fp[i].ne + 1);
+        uint64_t tris = 0, have = 0;
+        out[prio] = 0;
+        for (int stage = 0; stage < 2 && have < target; stage++)
+            for (size_t m = 0; m < n && have < target; m++) {
+                FrameP *f = &fp[o[m].f];
+                cc_tile t;
+                cc_tiles_get(&f->toc, f->ids[o[m].k], &t);
+                int ordered = prio && f->prio; /* this pyramid's shell orders it */
+                for (uint32_t x = 0; x < t.nel; x++) {
+                    uint32_t e = cc_tiles_list(&f->toc, t.el0 + x);
+                    if (e >= f->ne) continue;
+                    int first = !ordered || (t.flags & CC_TILE_PROXY) || cc_tiles_el_exterior(&f->toc, t.el0 + x);
+                    if ((stage == 0) != first || got[o[m].f][e]) continue;
+                    got[o[m].f][e] = 1;
+                    if (t.flags & CC_TILE_LEAF) tris += el_tris(f, e);
+                    if (f->seen[e] && f->drawn[e] == 1) have++;
+                }
+                if ((t.flags & CC_TILE_PROXY) && stage == 0) tris += t.tris;
+                if (have >= target) out[prio] = tris;
+            }
+        if (have < target) out[prio] = tris;
+    }
+    for (size_t i = 0; i < nf; i++) free(got[i]);
+    free(got), free(o);
+    return 0;
+oom:
+    for (size_t i = 0; i < nf; i++) free(got[i]);
+    free(got), free(o);
+    return -1;
+}
+
 static int frame_truth(cc_session *s, FrameP *fp, size_t nf, const cc_tiles_frame_q *q, TruthMiss *miss, uint32_t *nmiss) {
     (void)s;
     cc_shell_cam cam;
@@ -1125,6 +1226,7 @@ static int frame_truth(cc_session *s, FrameP *fp, size_t nf, const cc_tiles_fram
             }
         }
     }
+    if (first_picture(fp, nf, q, s->truth_first)) goto out;
     rc = 0;
 out:
     for (size_t w = 0; T.zb && w < nw; w++) cc_shell_zb_free(&T.zb[w]);
@@ -1229,6 +1331,11 @@ int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
                 jw_obj_end(&w);
             }
             jw_arr_end(&w);
+            jw_key(&w, "first_picture"), jw_obj_begin(&w); /* SHELL1: triangles before every seen element is drawn */
+            jw_key(&w, "elements"), jw_u64(&w, s->truth_first[2]);
+            jw_key(&w, "plain"), jw_u64(&w, s->truth_first[0]);
+            jw_key(&w, "priority"), jw_u64(&w, s->truth_first[1]);
+            jw_obj_end(&w);
             jw_key(&w, "missing_occ"), jw_u64(&w, (uint64_t)tot[12]); /* not drawn by the walk or hidden by the occluders */
             jw_key(&w, "missing_triangles"), jw_u64(&w, (uint64_t)tot[10]);
         }

@@ -122,6 +122,7 @@ typedef struct cc_session {
     int link_tiles_none; /* the last cc_link_tiles' 204 meant "no tiles", not superseded */
     struct cc_shell *tiles_shell; /* SHELL1: the open scene's exterior shell, classified in steps after its pyramid */
     struct cc_xshell *xshell;     /* SHELL1: the links' cross-link shell (xshell.h) */
+    uint64_t truth_first[3];      /* SHELL1: the last truth frame's first picture (mesh.c): plain, priority, elements */
     cc_tiles_toc tiles_shell_toc;
     cc_tiles_opts tiles_opts; /* TILE1: the pyramids' bake settings (zero: the defaults; BIMBLE_TILES); a cache baked otherwise is indexed again */
     cc_persist *persist;

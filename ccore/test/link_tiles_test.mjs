@@ -162,37 +162,47 @@ check("the walker's frame: far, the coarsest tile alone; close, every leaf", g.s
     dv.getUint32(12, true) === 64 && dv.getUint32(16, true) === 1024 && dv.getUint32(24, true) === extEl;
   check("SHELL1: the shell table (tiles=shell): a record a tile, 64 views at 1024, its exterior elements counted", okTab, `${g.status} ${g.bytes.length} bytes, ${extEl} exterior`);
   const ids = [...Array(toc.ntiles).keys()].join(",");
-  const rs = await A.get(`link=0&name=a.ifc&tile=${ids}&shell=1`), rf = await A.get(`link=0&name=a.ifc&tile=${ids}`);
-  let okLeaves = rs.status === 200 && rf.status === 200, nExt = 0;
+  const rs = await A.get(`link=0&name=a.ifc&tile=${ids}&shell=1`), rr = await A.get(`link=0&name=a.ifc&tile=${ids}&shell=2`), rf = await A.get(`link=0&name=a.ifc&tile=${ids}`);
+  let okLeaves = rs.status === 200 && rr.status === 200 && rf.status === 200, nExt = 0;
   const extRows = new Set();
   for (let i = 0; i < toc.nlist; i++) if (toc.elFlags[i] & 4) extRows.add(toc.list[i]);
+  const whole = new Map(), parts = new Map();
+  for (const a of T.parseTils(rf.bytes)) if (a.kind === 1) whole.set(a.id, [...T.decodeLeaf(a.bytes).rows].sort().join());
   for (const a of T.parseTils(rs.bytes)) {
-    if (!(toc.flags[a.id] & 16) && a.kind !== 0) okLeaves = false;
-    if (a.kind === 1) for (const row of T.decodeLeaf(a.bytes).rows) extRows.has(row) ? nExt++ : (okLeaves = false);
-    if (a.kind === 2 && dv.getUint32(32 + 32 * a.id + 4, true) !== 1) okLeaves = false;
+    if (a.kind === 1) for (const row of T.decodeLeaf(a.bytes).rows) extRows.has(row) ? nExt++ : (okLeaves = false), parts.set(a.id, [...(parts.get(a.id) ?? []), row]);
+    if ((toc.flags[a.id] & 2) && a.kind !== 2) okLeaves = false; // a proxy comes whole first (the tile's own)
   }
-  check("SHELL1: tile=...&shell=1: leaves hold their exterior elements only (all of them), tiles without exterior none", okLeaves && nExt === extRows.size, `${nExt} of ${extRows.size}`);
+  for (const a of T.parseTils(rr.bytes)) {
+    if (a.kind === 2) okLeaves = false;
+    if (a.kind === 1) for (const row of T.decodeLeaf(a.bytes).rows) parts.set(a.id, [...(parts.get(a.id) ?? []), row]);
+  }
+  for (const [id, rows] of whole) if ([...(parts.get(id) ?? [])].sort().join() !== rows) okLeaves = false;
+  check("SHELL1: priority's first fetch (&shell=1) holds the leaves' exterior elements and the proxies whole; what follows (&shell=2) the rest: together each leaf",
+    okLeaves && nExt === extRows.size, `${nExt} of ${extRows.size}`);
   const at = (d) => `eye=${c[0] - d * size},${c[1] - d * size},${c[2] + d * size / 2}&at=${c.join(",")}&fov=60&w=1600&h=1000&err=1`;
   const fr = async (q) => JSON.parse(text((await A.get(`tiles_frame=1&${q}`)).bytes));
   const ins = `eye=${c.join(",")}&at=${c[0] + 1000},${c[1]},${c[2]}&fov=60&w=1600&h=1000&err=1`; // inside the link's box
-  const off = await fr(`${at(0.7)}&shell=off`), on = await fr(`${at(0.7)}&shell=auto`), forced = await fr(`${ins}&shell=outside`), inside = await fr(`${ins}&shell=auto`);
-  check("SHELL1: the walker's modes: off the full walk; auto outside the box the outside walk (its exterior triangles); auto inside the full walk; outside forced",
-    !off.links[0].shell && on.links[0].shell && on.triangles <= off.triangles && on.shell_links === 1 && !inside.links[0].shell && inside.triangles > 0 && inside.triangles === (await fr(`${ins}&shell=off`)).triangles && forced.links[0].shell,
-    `off ${off.triangles}, auto ${on.triangles}, inside ${inside.triangles}`);
-  const truth = await fr(`${at(0.7)}&shell=auto&truth=1`);
-  check("SHELL1: the truth render: elements seen, none missing from the outside walk", truth.seen > 0 && truth.missing === 0, `${truth.seen} seen, ${truth.missing} missing`);
+  const off = await fr(`${at(0.7)}&shell=off`), prio = await fr(`${at(0.7)}`), on = await fr(`${at(0.7)}&shell=filter`), inside = await fr(`${ins}&shell=filter`);
+  check("SHELL1: the walker's modes: priority (the default) the same triangles as off; the experimental filter outside the box the outside walk, inside the full walk",
+    !off.links[0].shell && !prio.links[0].shell && prio.triangles === off.triangles && prio.tiles === off.tiles && on.links[0].shell && on.triangles <= off.triangles &&
+    !inside.links[0].shell && inside.triangles > 0 && inside.triangles === (await fr(`${ins}&shell=off`)).triangles,
+    `off ${off.triangles}, priority ${prio.triangles}, filter ${on.triangles}, inside ${inside.triangles}`);
+  const truth = await fr(`${at(0.7)}&shell=priority&truth=1`);
+  check("SHELL1: the truth render in priority: elements seen, none missing; the first picture's triangles, priority no more than plain for an all-exterior link",
+    truth.seen > 0 && truth.missing === 0 && truth.first_picture.elements > 0 && truth.first_picture.priority <= truth.first_picture.plain,
+    `${truth.seen} seen, ${truth.missing} missing, first picture ${JSON.stringify(truth.first_picture)}`);
   // invalidation: a section box cutting the link, a hidden exterior element
   await A.call("tool", "box_set", JSON.stringify({ min: [bounds[0], bounds[1], bounds[2]], max: [c[0], c[1], bounds[5]], on: true }));
-  const cut = await fr(`${at(0.7)}&shell=auto`);
+  const cut = await fr(`${at(0.7)}&shell=filter`);
   await A.call("tool", "box_set", JSON.stringify({ min: [bounds[0], bounds[1], bounds[2]], max: [c[0], c[1], bounds[5]], on: false }));
-  const uncut = await fr(`${at(0.7)}&shell=auto`);
+  const uncut = await fr(`${at(0.7)}&shell=filter`);
   check("SHELL1: a section box through the link makes its shell invalid (the full walk); switched off, the shell again", !cut.links[0].shell && cut.links[0].shell_invalid && uncut.links[0].shell,
     `cut ${cut.triangles}, uncut ${uncut.triangles}`);
   // the frame's columns stand at its edges: exterior; hiding the class (a view rule) hides exterior elements
   await A.call("action", "view_rule", JSON.stringify({ op: "hide", class: "IfcColumn" }));
-  const hid = await fr(`${at(0.7)}&shell=auto`);
+  const hid = await fr(`${at(0.7)}&shell=filter`);
   await A.call("action", "show_all");
-  const shown = await fr(`${at(0.7)}&shell=auto`);
+  const shown = await fr(`${at(0.7)}&shell=filter`);
   check("SHELL1: hiding exterior elements (the columns) makes the shell invalid; shown again, valid", !hid.links[0].shell && hid.links[0].shell_invalid && shown.links[0].shell,
     `hidden: ${hid.triangles}, shown: ${shown.triangles}`);
   // the cross-link pass: a second link (the same frame, moved 3 m up: the first's slabs and columns hide some of it)
@@ -209,12 +219,12 @@ check("the walker's frame: far, the coarsest tile alone; close, every leaf", g.s
   check("SHELL1: the cross-link pass (two links): 202 computing, then a mark a list entry per link, kept in the cache folder",
     (first === 202 || first === 200) && xg.status === 200 && xg.bytes.length === 72 && xb.status === 200 && xb.bytes.length === 72 && [...xg.bytes, ...xb.bytes].every((v) => v <= 1) && files.length === 1,
     `${first} -> ${xg.status}, ${xg.bytes.length} + ${xb.bytes.length} bytes, ${[...xg.bytes, ...xb.bytes].filter((v) => v).length} exterior, files ${files.length}`);
-  const xf = await fr(`${at(0.7)}&shell=auto`), xo = await fr(`${at(0.7)}&shell=auto&xshell=0`);
+  const xf = await fr(`${at(0.7)}&shell=filter`), xo = await fr(`${at(0.7)}&shell=filter&xshell=0`);
   check("SHELL1: the frame walks with the cross-link marks (xshell=0: the links' own shells)", xf.links.every((l) => l.xshell) && xo.links.every((l) => !l.xshell) &&
     xf.triangles <= xo.triangles && xf.xshell.state === 2, `cross ${xf.triangles}, own ${xo.triangles}`);
   await A.call("action", "manage_links", JSON.stringify({ op: "place", name: "b2.ifc", move_mm: [0, 0, 6000] }));
   const moved = (await A.get("link=0&name=a.ifc&tiles=xshell")).status;
-  const own = await fr(`${at(0.7)}&shell=auto`);
+  const own = await fr(`${at(0.7)}&shell=filter`);
   check("SHELL1: a link moved: the pass again (its marks not served meanwhile; the frame on the links' own shells)", (moved === 202 || moved === 200) && own.xshell.state >= 1, `${moved} ${own.xshell.state}`);
   await A.call("action", "manage_links", JSON.stringify({ op: "remove", name: "b2.ifc" }));
   const rep = readFileSync(join(tmp, "a.ifc.log.txt"), "utf8");

@@ -1771,7 +1771,9 @@ int cc_tiles_leaf_answer(const cc_tiles_src *src, const cc_tiles_toc *toc, uint3
 }
 
 int cc_tiles_leaf_answer_ex(const cc_tiles_src *src, const cc_tiles_toc *toc, uint32_t id, unsigned flags, Buf *out, cc_error *err) {
-    int only = (flags & CC_TILES_ANS_SHELL) && (toc->bake & CC_TILES_BAKE_SHELL); /* SHELL1: its exterior elements only */
+    int baked = (toc->bake & CC_TILES_BAKE_SHELL) || toc->xmask;
+    int only = (flags & CC_TILES_ANS_SHELL) && baked;      /* SHELL1: its exterior elements only */
+    int rest = (flags & CC_TILES_ANS_INTERIOR) && baked;   /* SHELL1: the others (without the shell: none, all came first) */
     if (id >= toc->ntiles) return fail(err, "tiles: no such tile");
     cc_tile t;
     cc_tiles_get(toc, id, &t);
@@ -1784,12 +1786,13 @@ int cc_tiles_leaf_answer_ex(const cc_tiles_src *src, const cc_tiles_toc *toc, ui
     uint32_t nb = 0;
     size_t head = out->len;
     uint32_t nel = 0;
-    for (uint32_t i = 0; i < t.nel; i++) nel += !only || cc_tiles_el_exterior(toc, t.el0 + i);
+    for (uint32_t i = 0; i < t.nel; i++) nel += rest ? !cc_tiles_el_exterior(toc, t.el0 + i) : (flags & CC_TILES_ANS_INTERIOR) ? 0 : !only || cc_tiles_el_exterior(toc, t.el0 + i);
     buf_append(out, "TLF1", 4);
     put32(out, id), put32(out, nel), put32(out, 0);
     static const float ID[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
     for (uint32_t i = 0; i < t.nel; i++) {
         if (only && !cc_tiles_el_exterior(toc, t.el0 + i)) continue;
+        if ((flags & CC_TILES_ANS_INTERIOR) && (!rest || cc_tiles_el_exterior(toc, t.el0 + i))) continue;
         uint32_t el = cc_tiles_list(toc, t.el0 + i);
         if (el >= ne) return free(blk), free(order), fail(err, "tiles: an element");
         int sh = src_shape(src, el);
@@ -2049,6 +2052,21 @@ uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double
         fin[nf++] = h[i];
     }
     qsort(fin, nf, sizeof *fin, sel_cmp);
+    if ((flags & CC_TILES_SEL_PRIORITY) && !shell && ((toc->bake & CC_TILES_BAKE_SHELL) || toc->xtile)) { /* exterior first */
+        HeapE *tmp = malloc(((size_t)nf + 1) * sizeof *tmp);
+        if (tmp) {
+            uint32_t k = 0;
+            for (int pass = 0; pass < 2; pass++)
+                for (uint32_t i = 0; i < nf; i++) {
+                    cc_tile u;
+                    cc_tiles_get(toc, fin[i].id, &u);
+                    int ext = toc->xtile ? toc->xtile[fin[i].id] != 0 : (u.flags & CC_TILE_EXTERIOR) != 0;
+                    if (ext == !pass) tmp[k++] = fin[i];
+                }
+            memcpy(fin, tmp, (size_t)nf * sizeof *fin);
+            free(tmp);
+        }
+    }
     uint32_t n = 0;
     for (uint32_t i = 0; i < nf; i++) {
         cc_tile u;
