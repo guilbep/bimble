@@ -13,6 +13,7 @@ import { currentPanel } from "../panels"; // SIZE2
 import { HIDE_NOT_AVAILABLE, has, notYetAction } from "../shell/capability"; // FAKE1
 import { exportFormat } from "./Export.vue"; // DXF1
 import { shortcutFor } from "../shell/keys";
+import { copyText, modelLink } from "../openurl"; // URL1
 
 type Key = keyof typeof copy.fr;
 const tx = (k: Key) => t(k);
@@ -23,7 +24,7 @@ const UP = '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v8h14v-8"/
 const INFO = '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>';
 
 // KEY1: the shortcut shown is the key table's (shell/keys.ts, Rust's): none for Open, Print, Settings (Rust has none).
-interface Entry { key: Key; icon: string; action?: string; missing?: string; dialog?: string; format?: "dxf"; cap?: string; panel?: string }
+interface Entry { key: Key; icon: string; action?: string; missing?: string; dialog?: string; format?: "dxf"; cap?: string; panel?: string; copy?: true }
 const sections: { title: Key; entries: Entry[] }[] = [
   { title: "filemenu.files", entries: [
     { key: "filemenu.new", icon: NEW, action: "new" },
@@ -41,6 +42,8 @@ const sections: { title: Key; entries: Entry[] }[] = [
     { key: "filemenu.shareView", icon: '<circle cx="6" cy="12" r="2.2"/><circle cx="17" cy="6" r="2.2"/><circle cx="17" cy="18" r="2.2"/><path d="m8 11 7-4M8 13l7 4"/>', action: "share_for_viewing" },
     { key: "filemenu.ifc4", icon: UP, action: "export_ifc4" },
     { key: "filemenu.ifc2x3", icon: UP, action: "export_ifc2x3" },
+    // URL1 (ADR 0086): the link of a model opened from a link (#open=…), shown only then
+    { key: "filemenu.copyLink", icon: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', copy: true },
   ] },
   { title: "filemenu.paper", entries: [
     // Print and export opens screen D4 (dialogs/Export.vue).
@@ -81,6 +84,11 @@ function openPanel(name: string) {
   currentDialog.value = null;
   currentPanel.value = name;
 }
+/** URL1: File -> Copy link. */
+function copyLink() {
+  currentDialog.value = null;
+  if (modelLink.value) void copyText(modelLink.value);
+}
 function run(name?: string, format?: "dxf") {
   currentDialog.value = null;
   exportFormat.value = format ?? null; // DXF1
@@ -92,10 +100,10 @@ function run(name?: string, format?: "dxf") {
   <div class="bb-menu fm" role="menu" :aria-label="tx('filemenu.label')" data-bb="file-menu">
     <template v-for="s in sections" :key="s.title">
       <div class="eyebrow">{{ tx(s.title) }}</div>
-      <button v-for="e in s.entries.filter((x) => !(HIDE_NOT_AVAILABLE && notYet(x)))" :key="e.key" class="ti" type="button" role="menuitem"
-        :disabled="!e.dialog && !e.panel && (!on(e.action) || notYet(e))" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.panel ?? e.missing}`" :data-format="e.format"
-        :data-not-yet="notYet(e) ? '' : undefined" :title="notYet(e) ? t('na.tooltip', { name: tx(e.key) }) : undefined"
-        @click="e.dialog ? (currentDialog = e.dialog) : e.panel ? openPanel(e.panel) : run(e.action, e.format)">
+      <button v-for="e in s.entries.filter((x) => !(HIDE_NOT_AVAILABLE && notYet(x)) && (!x.copy || modelLink))" :key="e.key" class="ti" type="button" role="menuitem"
+        :disabled="!e.dialog && !e.panel && !e.copy && (!on(e.action) || notYet(e))" :data-missing="e.missing" :data-bb="e.copy ? 'file-menu-copy-link' : `file-menu-${e.action ?? e.dialog ?? e.panel ?? e.missing}`" :data-format="e.format"
+        :data-not-yet="notYet(e) ? '' : undefined" :title="e.copy ? modelLink ?? undefined : notYet(e) ? t('na.tooltip', { name: tx(e.key) }) : undefined"
+        @click="e.copy ? copyLink() : e.dialog ? (currentDialog = e.dialog) : e.panel ? openPanel(e.panel) : run(e.action, e.format)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="e.icon"></svg>
         <span style="flex:1">{{ tx(e.key) }}</span><span class="mono" data-bb="file-menu-kbd">{{ shortcutFor(e.action) }}</span>
       </button>

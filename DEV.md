@@ -276,6 +276,7 @@ themselves. Any of them on the GPU:
 ```sh
 LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_first_input.mjs     # input_time.mjs then asserts 200 ms presented
 LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_webgpu.mjs          # the real adapter accepted, pictures = WebGL2's
+LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_webgpu_links.mjs    # GPU2: six links, WebGPU = WebGL2 in 7 states, 10 live switches
 LAB_GPU=vulkan node ccore/tools/frames.mjs --force --models fixture,heavy,large                 # WebGL2: the real-GPU section of results/frames.md
 LAB_GPU=vulkan node ccore/tools/frames.mjs --force --models fixture,heavy,large --renderer webgpu
 LAB_GPU=vulkan HOST_BIN=$PWD/ccore/out/native/bimble-ccore node ccore/tools/frames.mjs --links 17  # a row of that section
@@ -283,10 +284,54 @@ LAB_GPU=vulkan HOST_BIN=$PWD/ccore/out/native/bimble-ccore FRAMES_LINK_FOLDER=<a
   FRAMES_CACHE_DIR=<scratch> node ccore/tools/frames.mjs --steps 5,10,14,17   # your own folder, out/frames/folder.md only
 ```
 
+**The everyday browser (GPU2, 27 Nov 2026).** Chromium 153 as the desktop starts it (no flags) on this machine draws
+WebGL2 with "ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)" and gives WebGPU **no adapter** (the owner's report); with
+`--enable-unsafe-webgpu` alone a SwiftShader fallback adapter; with `--enable-unsafe-webgpu --enable-features=Vulkan
+--use-angle=vulkan` the M1 Pro (WebGL2 and WebGPU on Vulkan). Checked with a non-headless browser process on Ozone's
+headless display (`--ozone-platform=headless`: no window), which reproduces the desktop's GL renderer; the
+`chrome://flags` equivalents (Unsafe WebGPU Support, Vulkan, ANGLE backend: Vulkan) were not checked here.
+`bimble-ccore open --app` (or the setting "Open Bimble in an app window") starts Chromium with exactly these three
+flags, an app window and its own profile (`<config dir>/browser`); `ccore/test/open_app_test.mjs` checks the arguments
+with a fake browser.
+
 A run on the GPU writes only the section "On the machine's GPU" of `ccore/results/frames.md`; a
 SwiftShader run keeps it. A timing taken without these flags measures the CPU, not a GPU: say which in
 every report. The page's performance panel shows the adapter's names as the API gives them and the fill
 rate measured when WebGPU opened its device (`web-ui/src/gpu/device.ts`).
+
+### Investigating performance yourself (ticket VIS1, 27 Nov 2026)
+
+`ccore/tools/drive.mjs` opens the lab headless on the machine's GPU (`--gpu vulkan` by default, `gl` for ANGLE on
+OpenGL ES as Chromium on Linux draws by default) and plays real gestures (CDP mouse, wheel and key events at 60 Hz,
+not awaited, as the OS sends them). It records everything into `ccore/out/drive/<name>/` (git-ignored; files may
+hold your file names: never commit them): the performance panel's report, every frame (kind, script ms, GPU ms by
+timer query, draws, triangles, culled batches, proxies, outlines), every input and the frame that showed it, a CPU
+profile with its top 20, memory every 250 ms, the `/mesh` requests, console errors, screenshots and `summary.md`.
+
+```sh
+ccore/build.sh native                                                     # the host it starts
+node ccore/tools/drive.mjs --links 17 --preset orbit-zoom                 # 17 synthetic buildings (kept in ~/.cache/bimble-drive/)
+node ccore/tools/drive.mjs --project <your .bimble of links> --size 1492x790 --dpr 2 --settings '{"moving_fps":0}' --preset orbit-zoom
+node ccore/tools/drive.mjs --model <a model> --do 'wait ready; orbit 400 0 2000; sleep 150; screenshot stop; wait idle; screenshot still'
+DRIVE_UI=<another worktree>/web-ui node ccore/tools/drive.mjs --links 17 --name before   # the page of another tree
+node ccore/tools/drive.mjs --compare ccore/out/drive/before ccore/out/drive/after
+```
+
+The steps (`wait ready|first-picture|complete|idle`, `orbit DX DY MS [pause]`, `pan`, `zoom STEPS MS`, `click X Y |
+element GLOBALID | centre`, `key`, `fit`, `action NAME JSON`, `open panel` / `close panel`, `screenshot`, `sleep`,
+`mark`, `repeat N {a, b}`, `drawcalls`) and the presets (`orbit-zoom`, `open`, `walk-inside`) are listed in the
+tool's header. A project of over 1 GB of files (or `--lock`) waits for `~/.cache/bimble-measure.lock`; a watchdog
+stops Chromium under 2.5 GB available; temp folders go on any exit. `--strip N` takes a screenshot every N moves
+and through the refill after a stop (each costs tens of ms: it changes what it measures).
+
+The same functions as an MCP server (stdio), for an agent that wants to hold one session open and poke at it:
+
+```json
+{ "mcpServers": { "bimble-drive": { "command": "node", "args": ["ccore/tools/drive.mjs", "--mcp"] } } }
+```
+
+Tools: `open {model|project|links, size, dpr, settings, gpu, panel, name}`, `gesture {script: [steps]}`,
+`screenshot {name}`, `report`, `profile {seconds}`, `close`.
 
 ## 7. Common failures
 

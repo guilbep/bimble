@@ -10,9 +10,10 @@ export const label = "perf.title";
 // the frame times are draw-to-pixels. Nothing is sent anywhere; the report goes to the clipboard only.
 import { onMounted, onUnmounted, shallowRef } from "vue";
 import { state } from "../bimble";
-import { t } from "../i18n";
+import { lang, t } from "../i18n";
+import { optimisations, type Optimisation } from "../optimisations"; // the owner's rule: every optimisation a setting, shown here
 import { currentPanel } from ".";
-import { adapterNames, perfRecord, perfReport, perfSnapshot, perfWait, type FrameStats, type PerfSnapshot } from "../perf";
+import { adapterNames, chooseRenderer, gpuSide, warmRenderer, howToWebgpu, perfCompare, perfComparing, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
 import { linkGpu } from "../gl/linkmem"; // SIZE3 (C)
 
 const snap = shallowRef<PerfSnapshot>(perfSnapshot());
@@ -20,7 +21,7 @@ const names = shallowRef(false);
 const note = shallowRef<string | null>(null);
 const shownReport = shallowRef<string | null>(null);
 let timer = 0;
-onMounted(() => { perfWait(true); timer = window.setInterval(() => { snap.value = perfSnapshot(); }, 500); });
+onMounted(() => { perfWait(true); warmRenderer(); /* GPU2: the device checked ahead of the switch */ timer = window.setInterval(() => { snap.value = perfSnapshot(); }, 500); });
 onUnmounted(() => { perfWait(false); clearInterval(timer); });
 
 const ms = (x: number | null) => (x === null || !Number.isFinite(x) ? "–" : `${x < 10 ? x.toFixed(1) : Math.round(x)} ms`);
@@ -44,6 +45,29 @@ async function copy() {
   }
   (window as unknown as { __bbPerfCopied?: string }).__bbPerfCopied = text; // the lab test reads what was copied
 }
+// GPU2: the renderer switch (live; remembered in the setting `renderer`): what is asked, what draws, why not
+const choose = (a: "webgl2" | "webgpu") => { const err = chooseRenderer(a); if (err) note.value = err; };
+const liveAdapter = () => { // (the adapter of the renderer drawing now, not the last snapshot's)
+  const a = renderer.using === "WebGPU" ? renderer.adapter : snap.value.adapter;
+  return a ? `${adapterNames(a, " · ") || t("perf.unknown")}${a.software ? ` · ${t("perf.softwareShort")}` : ""}` : t("perf.unknown");
+};
+const why = () => whyPlain(renderer.using === "WebGPU" || renderer.asked !== "webgpu" ? null : renderer.reason);
+const comparing = shallowRef<string | null>(null);
+async function compare() { // GPU2: the same camera path on both renderers; the report then holds both blocks
+  comparing.value = t("perf.comparing", { what: "" });
+  await perfCompare((what) => { comparing.value = what ? t("perf.comparing", { what }) : null; });
+  comparing.value = null;
+  note.value = t("perf.compared");
+}
+// the Optimisations section: the registry's rows (other tickets add rows in their own modules)
+const optTick = shallowRef(0);
+const optLabel = (x: { fr: string; en: string }) => (lang.value === "fr" ? x.fr : x.en);
+function setOpt(o: Optimisation, v: boolean | string | number) {
+  const err = o.set(v);
+  if (err) note.value = err;
+  optTick.value++;
+}
+const optValue = (o: Optimisation) => { void optTick.value; void snap.value; return o.get(); };
 function record() {
   perfRecord();
   snap.value = perfSnapshot();
@@ -57,6 +81,16 @@ function record() {
       <span style="flex:1"></span>
       <button type="button" class="cx" :aria-label="t('perf.closePanel')" data-bb="perf-close" @click="currentPanel = null"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
+    <!-- GPU2: the switch where he measures: live, remembered; what draws now, the adapter, and why WebGPU does not draw when asked -->
+    <div class="sw" role="group" :aria-label="t('perf.switch')" data-bb="perf-switch">
+      <button v-for="r in (['webgl2', 'webgpu'] as const)" :key="r" type="button" :class="{ on: gpuSide() === (r === 'webgpu') }"
+        :aria-pressed="gpuSide() === (r === 'webgpu')" :data-bb="`perf-switch-${r}`" @click="choose(r)">{{ r === 'webgpu' ? 'WebGPU' : 'WebGL2' }}</button>
+    </div>
+    <div class="note" data-bb="perf-drawing">{{ t('perf.drawing', { what: renderer.using }) }}<template v-if="renderer.switchMs !== null && renderer.switchMs !== undefined"> · {{ t('perf.switched', { ms: ms(renderer.switchMs) }) }}</template></div>
+    <div class="note mono" data-bb="perf-adapter-line">{{ liveAdapter() }}</div>
+    <div v-if="renderer.progress" class="note" role="status" data-bb="perf-progress">{{ renderer.progress }}</div>
+    <div v-if="why()" class="warn" data-bb="perf-why">{{ t(why()!.key, { what: why()!.what ?? '' }) }}</div>
+    <div v-if="why() && howToWebgpu(renderer.reason)" class="note" data-bb="perf-how">{{ t(howToWebgpu(renderer.reason)!) }}</div>
     <div class="note">{{ t('perf.hint') }}</div>
     <dl class="kv">
       <dt>{{ t('perf.renderer') }}</dt>
@@ -73,6 +107,7 @@ function record() {
       <tbody>
         <tr><td>{{ t('perf.moving') }}</td><td class="r mono" data-bb="perf-moving">{{ row(snap.moving) }}</td></tr>
         <tr><td>{{ t('perf.still') }}</td><td class="r mono" data-bb="perf-still">{{ row(snap.still) }}</td></tr>
+        <tr v-if="snap.capped.n"><td>{{ t('perf.capped') }}</td><td class="r mono" data-bb="perf-capped">{{ row(snap.capped) }}</td></tr>
       </tbody>
     </table>
     <div class="sec">{{ t('perf.lastFrame') }}</div>
@@ -81,6 +116,9 @@ function record() {
       <dt>{{ t('perf.draws') }}</dt><dd class="mono" data-bb="perf-draws">{{ num(snap.draws) }}</dd>
       <dt>{{ t('perf.culled') }}</dt><dd class="mono">{{ num(snap.culled) }} / {{ num(snap.batches) }}</dd>
       <dt>{{ t('perf.proxies') }}</dt><dd class="mono">{{ num(snap.proxiesDrawn) }} ({{ num(snap.proxyTris) }})</dd>
+      <!-- VIS1: draw only what can be seen: what the last frame left out; the ground truth taken by Record -->
+      <template v-if="snap.hidden"><dt>{{ t('perf.hidden') }}</dt><dd class="mono" data-bb="perf-hidden">{{ num(snap.hidden.tris) }} △<span v-if="!snap.hidden.used" class="q"> · {{ t('perf.hiddenUnused') }}</span></dd></template>
+      <template v-if="snap.truth"><dt>{{ t('perf.seen') }}</dt><dd class="mono" data-bb="perf-seen">{{ t('perf.seenText', { drawn: num(snap.truth.submitted), seen: num(snap.truth.seenTris), n: num(snap.truth.seen) }) }}</dd></template>
       <template v-if="snap.renderer.using === 'WebGPU'"><dt>{{ t('perf.gpuCull') }}</dt><dd>{{ snap.renderer.gpuCull ? t('perf.on') : t('perf.off') }}</dd></template>
     </dl>
     <div class="sec">{{ t('perf.memory') }}</div>
@@ -93,6 +131,7 @@ function record() {
     <div class="sec">{{ t('perf.model') }}</div>
     <dl class="kv two">
       <dt>{{ t('perf.elements') }}</dt><dd class="mono">{{ num(snap.elements) }} · {{ num(snap.triangles) }} △</dd>
+      <dt>{{ t('perf.openPreview') }}</dt><dd class="mono" data-bb="perf-open-preview">{{ ms(snap.openToPreview) }}</dd>
       <dt>{{ t('perf.openFirst') }}</dt><dd class="mono">{{ ms(snap.openToFirst) }}</dd>
       <dt>{{ t('perf.openComplete') }}</dt><dd class="mono">{{ ms(snap.openToComplete) }}</dd>
     </dl>
@@ -100,16 +139,33 @@ function record() {
       <div class="sec">{{ t('perf.links') }}</div>
       <div v-for="(l, k) in snap.links" :key="k" class="note mono" data-bb="perf-link">{{ names ? l.name : `${k + 1}` }} · {{ num(l.elements) }} · {{ num(l.triangles) }} △ · {{ l.visible ? t('perf.linkShown') : t('perf.linkHidden') }}<template v-if="l.detail === true"> · {{ t('links.detailLoaded') }} ({{ ((l.gpuBytes ?? 0) / 1048576).toFixed(1) }} MB)</template><template v-else-if="l.detail === false"> · {{ t('links.proxiesOnly') }}</template></div>
     </template>
+    <div class="sec" data-bb="perf-optimisations">{{ t('perf.optimisations') }}</div>
+    <dl class="kv two">
+      <template v-for="o in optimisations()" :key="o.key">
+        <dt :title="o.hint ? optLabel(o.hint) : undefined">{{ optLabel(o.label) }}</dt>
+        <dd :data-bb="`perf-opt-${o.key}`">
+          <span v-if="o.applies && !o.applies()" class="q">{{ t('perf.optNotHere') }}</span>
+          <input v-else-if="o.kind === 'toggle'" type="checkbox" :checked="optValue(o) === true" @change="setOpt(o, ($event.target as HTMLInputElement).checked)">
+          <select v-else-if="o.kind === 'choice'" class="inp" :value="optValue(o)" @change="setOpt(o, typeof o.default === 'number' ? Number(($event.target as HTMLSelectElement).value) : ($event.target as HTMLSelectElement).value)">
+            <option v-for="c in o.choices ?? []" :key="String(c.value)" :value="c.value">{{ optLabel(c.label) }}</option>
+          </select>
+          <input v-else type="number" class="inp" style="width:5em" :min="o.min" :max="o.max" :step="o.step" :value="optValue(o)" @change="setOpt(o, Number(($event.target as HTMLInputElement).value))">
+          <span v-if="optValue(o) === o.off" class="q"> · {{ t('perf.off') }}</span>
+        </dd>
+      </template>
+    </dl>
     <div class="sec">{{ t('perf.inputs') }}</div>
     <ol class="inputs" data-bb="perf-inputs">
       <li v-for="(i, k) in snap.inputs" :key="k" class="mono">{{ ms(i.ms) }} · {{ i.what }}</li>
       <li v-if="!snap.inputs.length" class="q" style="list-style:none">{{ t('perf.none') }}</li>
     </ol>
+    <div v-if="comparing" class="note" role="status" data-bb="perf-comparing">{{ comparing }}</div>
     <div v-if="snap.recording" class="note" data-bb="perf-recording">{{ t('perf.recording') }}</div>
     <div v-else-if="snap.record" class="note" data-bb="perf-recorded">{{ t('perf.recorded', { s: snap.record.seconds, n: snap.record.moving.n + snap.record.still.n, m: ms(snap.record.moving.median) }) }}</div>
     <label class="note" style="display:flex;gap:6px;align-items:center"><input v-model="names" type="checkbox" data-bb="perf-names">{{ t('perf.names') }}</label>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn s" type="button" :disabled="snap.recording" data-bb="perf-record" @click="record">{{ t('perf.record') }}</button>
+      <button class="btn s" type="button" :disabled="snap.recording || !!comparing" data-bb="perf-record" @click="record">{{ t('perf.record') }}</button>
+      <button class="btn s" type="button" :disabled="snap.recording || !!comparing || perfComparing()" data-bb="perf-compare" :title="t('perf.compareTitle')" @click="compare">{{ t('perf.compare') }}</button>
       <button class="btn p" type="button" data-bb="perf-copy" @click="copy">{{ t('perf.copy') }}</button>
     </div>
     <div v-if="note" class="note" role="status" data-bb="perf-note">{{ note }}</div>
@@ -137,4 +193,8 @@ function record() {
 .inputs { margin: 0; padding-left: 20px; }
 .cx { width: 22px; height: 22px; border: 0; padding: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--bb-radius-pill); }
 textarea { width: 100%; font-size: 11px; }
+/* GPU2: the renderer switch (two states, the status bar's segmented look) */
+.sw { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--bb-radius-pill); background: var(--bb-sunk); align-self: flex-start; }
+.sw button { padding: 3px 14px; border-radius: var(--bb-radius-pill); border: 0; background: none; color: var(--bb-stone); font: inherit; font-family: var(--bb-font-data); cursor: pointer; }
+.sw .on { background: var(--bb-ink); color: var(--bb-on-ink); }
 </style>

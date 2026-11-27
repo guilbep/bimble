@@ -1,204 +1,122 @@
-// The scene on the GPU for the WebGPU renderer (ticket GPU1, ADR 0083): buffers from the mesh the
-// viewport parsed (BMSH v3: own meshes merged, shapes once with a placement per copy; glviewport.ts
-// parseMesh / bake), the draw lists of the elements shown cut into the batches of gl/cull.ts
-// (makeBatches: Morton order, largest first, by HLOD leaf when the proxies' tree is in), and the
-// proxies of gl/proxies.ts. The lists are the WebGL2 path's (drawLists): the merged faces and edges
-// of the open model, then the links', and the copies of shapes with 4 or more copies grouped by
-// (link, shape, mirrored); here a copy is a 64-byte record in a storage buffer (its placement, its
-// element, its batch and rank) that the vertex shader reads, and that cull.wgsl tests on the GPU.
-// A vertex of the merged lists carries its element (4 bytes): a selection rewrites 4 bytes an element.
-import { BATCH_TRIS, makeBatches, type Batch } from "../gl/cull";
+// The scene on the GPU for the WebGPU renderer (tickets GPU1, GPU2; ADR 0083, ADR 0078 amendments 3-4).
+// GPU2: WebGPU draws the viewport's own models (glviewport.ts slots: the open model, then each link, each in
+// its own buffers), from the same draw lists, batches and instanced groups WebGL2 made, so both renderers draw
+// the same thing by construction. A model's buffers are TAKEN OVER from WebGL2's (read back once with
+// getBufferSubData, WebGL2's emptied: never both on the GPU), and given back when WebGL2 draws again; a model
+// the memory budget releases is released here too. Per element the state texel (gl/cull.ts packState, the
+// viewport's array) is one storage buffer; a model's placement's rows and plain colour are each draw's
+// uniforms (render.ts). The open model's HLOD proxies and each link's baked proxies are uploaded from the page's copies.
 import type { Proxies } from "../gl/proxies";
 import { BU } from "./device";
-import type { GpuMesh } from "./switch";
+import { GL_NAMES, type GlName, type GlStream, type GpuLinkPrx } from "./switch";
 
-/** A batch as the renderer draws it: merged (g -1: faces from index f0, edges from e0) or a group's. */
-export interface GBatch { b: Batch; link: boolean; g: number; f0: number; e0: number; ri: number; k0: number; k1: number }
-/** A run of copies of one shape: its packed indices, its segments, its copies [first, first + count). */
-export interface Group { i0: number; ni: number; s0: number; ns: number; first: number; count: number; mirrored: boolean; link: boolean; batches: GBatch[] }
+/** GPU2: a model's buffers move between the renderers in chunks of this size (one reused array in the page). */
+export const CHUNK = 16 << 20;
+const chunk = new Uint8Array(CHUNK);
 
 const PALETTE: [number, number, number][] = [ // glviewport.ts CATEGORY_SRGB (style.rs): the proxies' parts
   [214, 214, 210], [150, 170, 196], [226, 196, 150], [206, 150, 128], [236, 220, 120], [176, 160, 132], [176, 214, 226], [238, 238, 236],
 ];
-/** The per-draw uniform slots (256 bytes each: dynamic offsets): 0 the merged main, 1 links, 2 proxies, 3 outlines, 4 the box, 5.. a group's. */
-export const SLOT = 256, SLOT_MAIN = 0, SLOT_LINK = 1, SLOT_PRX = 2, SLOT_OUTLINE = 3, SLOT_BOX = 4, SLOT_GROUP0 = 5;
+/** The per-draw uniform's stride (dynamic offsets: 256 bytes). */
+export const SLOT = 256;
+
+/** The usage of each taken-over buffer (all can be copied out: picks, the hand back). */
+const USAGE: Record<GlName, number> = {
+  pos: BU.VERTEX, el: BU.VERTEX, edge: BU.VERTEX, edgeNrm: BU.VERTEX, edgeEl: BU.VERTEX, shapeIdx: BU.INDEX,
+  idx: BU.INDEX, edgeIdx: BU.INDEX, instMat: BU.STORAGE, instEl: BU.STORAGE,
+};
+
+/** A model's buffers on the GPU, taken over from WebGL2's ModelGl `gl`. */
+export class GModel {
+  gl: object;
+  b: Partial<Record<GlName, GPUBuffer>> = {};
+  size: Partial<Record<GlName, number>> = {};
+  /** The compacted copies (GPU culling) and the copies' bind group (made again when a buffer changes). */
+  visible: GPUBuffer | null = null; meta: GPUBuffer | null = null; group: GPUBindGroup | null = null; key: unknown[] = [];
+  cullGroup: GPUBindGroup | null = null; cullKey: unknown[] = [];
+  /** What the viewport's slot looked like when taken (its bytes, the lists' key): changed, it is read again. */
+  seen: unknown = null;
+  constructor(gl: object) { this.gl = gl; }
+  get bytes(): number { let n = 0; for (const k of GL_NAMES) n += this.size[k] ?? 0; return n + (this.visible?.size ?? 0) + (this.meta?.size ?? 0); }
+}
 
 export class Scene {
   device: GPUDevice;
-  mesh: GpuMesh | null = null;
-  bytes = 0;
-  pos!: GPUBuffer; vel!: GPUBuffer; edgePos!: GPUBuffer; edgeNrm!: GPUBuffer; shapeIdx!: GPUBuffer;
-  colours!: GPUBuffer; boxes!: GPUBuffer;
-  faceIdx!: GPUBuffer; edgeIdx!: GPUBuffer; insts!: GPUBuffer; visible!: GPUBuffer; ranges!: GPUBuffer; args!: GPUBuffer; bases!: GPUBuffer;
-  draws!: GPUBuffer;
-  argsInit = new Uint32Array(5);
-  batches: GBatch[] = [];
-  groups: Group[] = [];
-  nInst = 0; nInstBatches = 0; faceN = 0; edgeN = 0;
-  meshBytes = 0; listBytes = 0; prxBytes = 0;
-  /** Lists made for: the mesh, its shown array and the proxies' leaves. */
-  listKey: [unknown, unknown, unknown] = [null, null, null];
-  shapeI0 = new Uint32Array(0);
+  /** Per model k (0 the open one, k + 1 link k): its buffers, when WebGPU holds them. */
+  models: (GModel | undefined)[] = [];
+  /** The state texels (an u32 an element) and each model's row; the dummy copies' bind group. */
+  states: GPUBuffer; statesFor: unknown = null; statesLen = 0;
+  empty: GPUBuffer; emptyGroup: GPUBindGroup | null = null;
   prx: Proxies | null = null;
-  prxPos: GPUBuffer | null = null; prxCol: GPUBuffer | null = null; prxIdx: GPUBuffer | null = null; prxEdge: GPUBuffer | null = null; prxNrm: GPUBuffer | null = null;
+  prxPos: GPUBuffer | null = null; prxCol: GPUBuffer | null = null; prxIdx: GPUBuffer | null = null;
+  prxBytes = 0;
+  /** Each link's baked proxies (by its proxies object: the page keeps it). */
+  lprx = new Map<Proxies, { pos: GPUBuffer; idx: GPUBuffer; bytes: number; used: boolean }>();
   private old: GPUBuffer[] = [];
 
   constructor(device: GPUDevice) {
     this.device = device;
-    const e = (u: number) => this.buf(16, u);
-    this.pos = e(BU.VERTEX), this.vel = e(BU.VERTEX), this.edgePos = e(BU.VERTEX), this.edgeNrm = e(BU.VERTEX), this.shapeIdx = e(BU.INDEX);
-    this.colours = e(BU.STORAGE), this.boxes = e(BU.STORAGE);
-    this.faceIdx = e(BU.INDEX), this.edgeIdx = e(BU.INDEX), this.insts = e(BU.STORAGE), this.visible = e(BU.STORAGE), this.ranges = e(BU.STORAGE);
-    this.args = e(BU.STORAGE | BU.INDIRECT | BU.COPY_SRC), this.bases = e(BU.STORAGE);
-    this.draws = this.buf(SLOT * SLOT_GROUP0, BU.UNIFORM);
+    this.states = this.buf(16, BU.STORAGE);
+    this.empty = this.buf(64, BU.STORAGE);
   }
 
-  /** A buffer of at least 16 bytes holding `data` (or zeros), COPY_DST added. */
-  buf(size: number, usage: number, data?: ArrayBufferView): GPUBuffer {
-    const n = Math.max(16, Math.ceil(Math.max(size, data?.byteLength ?? 0) / 4) * 4);
-    const b = this.device.createBuffer({ size: n, usage: usage | BU.COPY_DST, mappedAtCreation: !!data });
-    if (data) {
-      new Uint8Array(b.getMappedRange()).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
-      b.unmap();
-    }
+  /** A buffer of at least 16 bytes holding `data` (or zeros), COPY_DST and COPY_SRC added. */
+  buf(size: number, usage: number, data?: ArrayBufferView | ArrayBuffer): GPUBuffer {
+    const bytes = data ? (data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)) : null;
+    const n = Math.max(16, Math.ceil(Math.max(size, bytes?.byteLength ?? 0) / 4) * 4);
+    const b = this.device.createBuffer({ size: n, usage: usage | BU.COPY_DST | BU.COPY_SRC, mappedAtCreation: !!bytes });
+    if (bytes) { new Uint8Array(b.getMappedRange()).set(bytes); b.unmap(); }
     return b;
   }
-  private swap(b: GPUBuffer): GPUBuffer { this.old.push(b); return b; }
   /** Buffers replaced are destroyed after the frame that last used them is submitted. */
+  drop(b: GPUBuffer | null | undefined): void { if (b) this.old.push(b); }
   flushOld(): void { for (const b of this.old) b.destroy(); this.old = []; }
 
-  /** The mesh's vertices, edges, shapes' indices, element boxes (static until the next mesh). */
-  setMesh(m: GpuMesh, boxes: Float32Array): void {
-    this.mesh = m;
-    const nE = m.ids.length, nV = m.pos.length / 3, nS = m.edges.length / 6;
-    const vel = new Uint32Array(nV);
-    for (let e = 0; e < nE; e++) if (!m.shape?.[e]) vel.fill(e, m.v0[e]!, m.v0[e]! + m.nv[e]!);
-    // the two face normals of each segment for both its vertices (as glviewport.ts upload)
-    const nrm = new Uint32Array(4 * nS);
-    const sw = m.normals.byteOffset % 4 === 0 ? new Uint32Array(m.normals.buffer, m.normals.byteOffset, 2 * nS) : new Uint32Array(m.normals.slice().buffer, 0, 2 * nS);
-    for (let k = 0; k < nS; k++) { const a = sw[2 * k]!, b = sw[2 * k + 1]!; nrm[4 * k] = a, nrm[4 * k + 1] = b, nrm[4 * k + 2] = a, nrm[4 * k + 3] = b; }
-    let nsh = 0;
-    for (let e = 0; e < nE; e++) nsh = Math.max(nsh, m.shape?.[e] ?? 0);
-    this.shapeI0 = new Uint32Array(nsh);
-    const seen = new Uint8Array(nsh);
-    let si = 0;
-    for (let e = 0; e < nE; e++) { const k = m.shape?.[e] ?? 0; if (k && !seen[k - 1]) seen[k - 1] = 1, this.shapeI0[k - 1] = si, si += m.ni[e]!; }
-    const sidx = new Uint32Array(si);
-    for (let e = 0; e < nE; e++) {
-      const k = m.shape?.[e] ?? 0;
-      if (k && seen[k - 1] === 1) seen[k - 1] = 2, sidx.set(m.idx.subarray(m.i0[e]!, m.i0[e]! + m.ni[e]!), this.shapeI0[k - 1]!);
-    }
-    for (const b of [this.pos, this.vel, this.edgePos, this.edgeNrm, this.shapeIdx, this.colours, this.boxes]) this.swap(b);
-    this.pos = this.buf(0, BU.VERTEX, m.pos);
-    this.vel = this.buf(0, BU.VERTEX, vel);
-    this.edgePos = this.buf(0, BU.VERTEX, m.edges);
-    this.edgeNrm = this.buf(0, BU.VERTEX, nrm);
-    this.shapeIdx = this.buf(0, BU.INDEX, sidx);
-    this.colours = this.buf(4 * nE, BU.STORAGE);
-    this.boxes = this.buf(0, BU.STORAGE, boxes);
-    this.meshBytes = m.pos.byteLength + vel.byteLength + m.edges.byteLength + nrm.byteLength + sidx.byteLength + 4 * nE + boxes.byteLength;
-    this.listKey = [null, null, null];
-    this.total();
-  }
-
-  setColours(c: Uint32Array): void {
-    if (this.mesh && c.length === this.mesh.ids.length && c.length) this.device.queue.writeBuffer(this.colours, 0, c.buffer, c.byteOffset, c.byteLength);
-  }
-
-  /** The draw lists of the elements shown (glviewport.ts drawLists' order), by leaf when the tree is in. */
-  setLists(m: GpuMesh, boxes: Float32Array, shown: Uint8Array, p: Proxies | null): void {
-    const nE = m.ids.length, lk = (e: number) => (m.model?.[e] ?? 0) > 0;
-    const grp = (e: number) => (p && !lk(e) ? p.leafOf[e] ?? -1 : -1);
-    let nf = 0, ne = 0;
-    for (let e = 0; e < nE; e++) if (shown[e] && !m.shape?.[e]) nf += m.ni[e]!, ne += m.ns[e]!;
-    const fi = new Uint32Array(nf), ei = new Uint32Array(2 * ne);
-    let f = 0, k = 0;
-    const main: GBatch[] = [], links: GBatch[] = [];
-    for (const link of [false, true]) {
-      const items: number[] = [];
-      for (let e = 0; e < nE; e++) if (shown[e] && lk(e) === link && !m.shape?.[e]) items.push(e);
-      const { order, batches } = makeBatches(items, boxes, (e) => m.ni[e]! / 3, (e) => m.ns[e]!, BATCH_TRIS, grp);
-      for (const b of batches) {
-        (link ? links : main).push({ b, link, g: -1, f0: f, e0: k, ri: -1, k0: 0, k1: b.n });
-        for (let j = b.first; j < b.first + b.n; j++) {
-          const e = order[j]!;
-          fi.set(m.idx.subarray(m.i0[e]!, m.i0[e]! + m.ni[e]!), f);
-          f += m.ni[e]!;
-          for (let q = m.s0[e]!; q < m.s0[e]! + m.ns[e]!; q++) ei[k++] = 2 * q, ei[k++] = 2 * q + 1;
-        }
+  /** Model k's buffers from WebGL2's (only those WebGL2 wrote since: the others are kept), streamed in CHUNK pieces
+   *  through one reused array (getBufferSubData, then writeBuffer: no whole copy in the page). Returns the bytes moved. */
+  take(k: number, gl: object, streams: GlStream[], seen: unknown): number {
+    let g = this.models[k];
+    if (!g || g.gl !== gl) { if (g) this.release(k); g = this.models[k] = new GModel(gl); }
+    let moved = 0;
+    for (const s of streams) {
+      this.drop(g.b[s.name]);
+      const b = this.buf(s.size, USAGE[s.name]);
+      for (let off = 0; off < s.size; off += CHUNK) {
+        const n = Math.min(CHUNK, s.size - off), n4 = Math.ceil(n / 4) * 4;
+        if (n4 > n) chunk.fill(0, n, n4);
+        s.read(off, chunk.subarray(0, n));
+        this.device.queue.writeBuffer(b, off, chunk, 0, n4);
       }
+      g.b[s.name] = b, g.size[s.name] = s.size, moved += s.size;
+      if (s.name === "instMat" || s.name === "instEl") g.group = null;
     }
-    // copies: grouped by (link, shape, mirrored), each group's in batches
-    const P = m.place ?? new Float32Array(0);
-    const mirrored = (e: number) => {
-      const q = P.subarray(12 * e, 12 * e + 12);
-      return q[0]! * (q[4]! * q[8]! - q[5]! * q[7]!) + q[1]! * (q[5]! * q[6]! - q[3]! * q[8]!) + q[2]! * (q[3]! * q[7]! - q[4]! * q[6]!) < 0;
-    };
-    const order: number[] = [];
-    const keys = new Map<number, number>();
-    if (m.shape) for (let e = 0; e < nE; e++) if (shown[e] && m.shape[e]) order.push(e), keys.set(e, (lk(e) ? 1 : 0) * 2 ** 33 + m.shape[e]! * 2 + (mirrored(e) ? 1 : 0));
-    order.sort((a, b) => keys.get(a)! - keys.get(b)! || a - b);
-    const groups: Group[] = [], byGroup: number[][] = [];
-    for (const e of order) {
-      const last = byGroup[byGroup.length - 1];
-      if (last && keys.get(last[0]!) === keys.get(e)) { last.push(e); groups[groups.length - 1]!.count++; continue; }
-      byGroup.push([e]);
-      groups.push({ i0: this.shapeI0[m.shape![e]! - 1] ?? 0, ni: m.ni[e]!, s0: m.s0[e]!, ns: m.ns[e]!, first: 0, count: 1, mirrored: mirrored(e), link: lk(e), batches: [] });
-    }
-    const inst: number[] = [], batchOf: number[] = [], rankOf: number[] = [], groupOf: number[] = [];
-    let ri = 0;
-    groups.forEach((g, gi) => {
-      g.first = inst.length;
-      const { order: ord, batches } = makeBatches(byGroup[gi]!, boxes, () => g.ni / 3, () => g.ns, BATCH_TRIS, grp);
-      for (const b of batches) {
-        const d: GBatch = { b, link: g.link, g: gi, f0: 0, e0: 0, ri, k0: 0, k1: b.n };
-        g.batches.push(d);
-        (g.link ? links : main).push(d);
-        for (let j = 0; j < b.n; j++) batchOf.push(ri), rankOf.push(j), groupOf.push(gi);
-        ri++;
-      }
-      inst.push(...ord);
-    });
-    const recs = new ArrayBuffer(64 * inst.length), rf = new Float32Array(recs), ru = new Uint32Array(recs);
-    inst.forEach((e, i) => {
-      rf.set(P.subarray(12 * e, 12 * e + 12), 16 * i);
-      ru[16 * i + 12] = e, ru[16 * i + 13] = batchOf[i]!, ru[16 * i + 14] = rankOf[i]!, ru[16 * i + 15] = groupOf[i]!;
-    });
-    const argsInit = new Uint32Array(5 * groups.length), bases = new Uint32Array(groups.length);
-    groups.forEach((g, gi) => { argsInit.set([g.ni, 0, g.i0, 0, 0], 5 * gi); bases[gi] = g.first; });
-    // the per-draw slots: base and whether the copies come from the compacted list, the edge colour
-    const slots = new ArrayBuffer(SLOT * (SLOT_GROUP0 + groups.length));
-    const put = (s: number, base: number, list: number, rgb: readonly number[]) => {
-      const u = new Uint32Array(slots, SLOT * s, 4), c = new Float32Array(slots, SLOT * s + 16, 4);
-      u[0] = base, u[1] = list;
-      c.set([rgb[0]! / 255, rgb[1]! / 255, rgb[2]! / 255, 1]);
-    };
-    put(SLOT_MAIN, 0, 0, EDGE), put(SLOT_LINK, 0, 0, REFERENCE_EDGE), put(SLOT_PRX, 0, 0, EDGE), put(SLOT_OUTLINE, 0, 0, OUTLINE), put(SLOT_BOX, 0, 0, BOX);
-    groups.forEach((g, gi) => put(SLOT_GROUP0 + gi, g.first, 1, g.link ? REFERENCE_EDGE : EDGE));
-    for (const b of [this.faceIdx, this.edgeIdx, this.insts, this.visible, this.ranges, this.args, this.bases, this.draws]) this.swap(b);
-    this.faceIdx = this.buf(0, BU.INDEX, fi);
-    this.edgeIdx = this.buf(0, BU.INDEX, ei);
-    this.insts = this.buf(0, BU.STORAGE, new Uint8Array(recs));
-    this.visible = this.buf(4 * inst.length, BU.STORAGE);
-    this.ranges = this.buf(8 * ri, BU.STORAGE);
-    this.args = this.buf(0, BU.STORAGE | BU.INDIRECT | BU.COPY_SRC, argsInit);
-    this.bases = this.buf(0, BU.STORAGE, bases);
-    this.draws = this.buf(0, BU.UNIFORM, new Uint8Array(slots));
-    this.argsInit = argsInit;
-    this.batches = [...main, ...links];
-    this.groups = groups;
-    this.nInst = inst.length, this.nInstBatches = ri, this.faceN = nf, this.edgeN = 2 * ne;
-    this.listBytes = fi.byteLength + ei.byteLength + recs.byteLength + 4 * inst.length + 8 * ri + argsInit.byteLength + bases.byteLength + slots.byteLength;
-    this.listKey = [m, shown, p?.leafOf ?? null];
-    this.total();
+    g.seen = seen;
+    return moved;
+  }
+  /** Model k's buffers freed (released by the budget, handed back to WebGL2, or the mesh gone). */
+  release(k: number): void {
+    const g = this.models[k];
+    if (!g) return;
+    for (const n of GL_NAMES) this.drop(g.b[n]);
+    this.drop(g.visible), this.drop(g.meta);
+    this.models[k] = undefined;
   }
 
-  /** The proxies' faces (a colour per vertex from its part's family) and crease edges. */
+  /** The state texels (the viewport's array, RGBA8 an element: one u32 each), when they changed. */
+  setStates(t: Uint8Array, key: unknown): void {
+    if (key === this.statesFor && t.length === this.statesLen) return;
+    this.statesFor = key;
+    const n = Math.max(16, t.byteLength);
+    if (this.states.size < n || this.statesLen !== t.length) { this.drop(this.states); this.states = this.buf(n, BU.STORAGE); }
+    this.statesLen = t.length;
+    if (t.byteLength) this.device.queue.writeBuffer(this.states, 0, t.buffer, t.byteOffset, t.byteLength - (t.byteLength % 4));
+  }
+  /** The open model's proxies' faces (a colour per vertex from its part's family). */
   setProxies(p: Proxies | null): void {
     if (p === this.prx) return;
     this.prx = p;
-    for (const b of [this.prxPos, this.prxCol, this.prxIdx, this.prxEdge, this.prxNrm]) if (b) this.swap(b);
-    this.prxPos = this.prxCol = this.prxIdx = this.prxEdge = this.prxNrm = null;
+    for (const b of [this.prxPos, this.prxCol, this.prxIdx]) this.drop(b);
+    this.prxPos = this.prxCol = this.prxIdx = null;
     this.prxBytes = 0;
     if (p) {
       const col = new Uint8Array(4 * (p.pos.length / 3));
@@ -206,27 +124,42 @@ export class Scene {
         const rgb = PALETTE[q.cat] ?? PALETTE[7]!;
         for (let v = q.v0; v < q.v0 + q.nv; v++) col.set([rgb[0], rgb[1], rgb[2], 255], 4 * v);
       }
-      const nrm = new Int8Array(2 * p.normals.length);
-      for (let k = 0; k < p.normals.length / 8; k++) nrm.set(p.normals.subarray(8 * k, 8 * k + 8), 16 * k), nrm.set(p.normals.subarray(8 * k, 8 * k + 8), 16 * k + 8);
       this.prxPos = this.buf(0, BU.VERTEX, p.pos);
       this.prxCol = this.buf(0, BU.VERTEX, col);
       this.prxIdx = this.buf(0, BU.INDEX, p.idx);
-      this.prxEdge = this.buf(0, BU.VERTEX, p.edges);
-      this.prxNrm = this.buf(0, BU.VERTEX, nrm);
-      this.prxBytes = p.pos.byteLength + col.byteLength + p.idx.byteLength + p.edges.byteLength + nrm.byteLength;
+      this.prxBytes = p.pos.byteLength + col.byteLength + p.idx.byteLength;
     }
-    this.total();
+  }
+  /** A link's proxies on the GPU (uploaded at their first use from the page's copy). */
+  linkProxies(x: GpuLinkPrx): { pos: GPUBuffer; idx: GPUBuffer } {
+    let e = this.lprx.get(x.p);
+    if (!e) this.lprx.set(x.p, (e = { pos: this.buf(0, BU.VERTEX, x.p.pos), idx: this.buf(0, BU.INDEX, x.p.idx), bytes: x.p.pos.byteLength + x.p.idx.byteLength, used: true }));
+    e.used = true;
+    return e;
+  }
+  /** Link proxies no longer held by the viewport are freed. */
+  keepLinkProxies(held: Set<Proxies>): void {
+    for (const [p, e] of this.lprx) if (!held.has(p)) this.drop(e.pos), this.drop(e.idx), this.lprx.delete(p);
   }
 
-  private total(): void { this.bytes = this.meshBytes + this.listBytes + this.prxBytes; }
+  /** The bytes WebGPU holds for the scene: the models', the states, the rows, the proxies. */
+  get bytes(): number {
+    let n = this.states.size + this.prxBytes;
+    for (const g of this.models) if (g) n += g.bytes;
+    for (const e of this.lprx.values()) n += e.bytes;
+    return n;
+  }
 
   destroy(): void {
+    for (let k = 0; k < this.models.length; k++) this.release(k);
+    for (const e of this.lprx.values()) this.drop(e.pos), this.drop(e.idx);
+    this.lprx.clear();
+    this.drop(this.states), this.drop(this.empty), this.drop(this.prxPos), this.drop(this.prxCol), this.drop(this.prxIdx);
     this.flushOld();
-    for (const b of [this.pos, this.vel, this.edgePos, this.edgeNrm, this.shapeIdx, this.colours, this.boxes, this.faceIdx, this.edgeIdx, this.insts,
-      this.visible, this.ranges, this.args, this.bases, this.draws, this.prxPos, this.prxCol, this.prxIdx, this.prxEdge, this.prxNrm]) b?.destroy();
   }
 }
 
 // glviewport.ts's colours (sRGB): edges, a link's edges, an unfinished batch's outline, the section box.
 export const EDGE = [26, 26, 28] as const, REFERENCE_EDGE = [52, 110, 180] as const, OUTLINE = [120, 120, 124] as const, BOX = [40, 110, 200] as const;
 export const BACKGROUND = [247, 247, 245] as const;
+export const GHOST = [74, 128, 214] as const, GHOST_EDGE = [32, 70, 150] as const, GHOST_ALPHA = 0.45;

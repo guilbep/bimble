@@ -1003,6 +1003,17 @@ export interface SettingsValues {
   renderer?: "auto" | "webgl2" | "webgpu";
   /** SIZE3 (ADR 0078 amendment 5): the GPU memory the links' detail may take, MB (not Rust's; absent from an older core: 768). */
   link_gpu_mb?: number;
+  /** TESS1 (ADR 0085): the detail linked IFC files are converted at (not Rust's; absent from an older core: standard). */
+  link_detail?: "exact" | "standard" | "light" | "custom";
+  /** TESS1: custom's chord distance (mm, 0.01..1000, 2) and angle per chord (degrees, 1..90, 18). */
+  link_chord_mm?: number;
+  link_max_deg?: number;
+  /** GPU2: `bimble-ccore open` starts a Chromium-family browser in an app window with the WebGPU flags (native host only). */
+  open_app?: boolean;
+  /** VIS1 (ADR 0078 amendment 7): "Draw only what can be seen" (not Rust's; absent from an older core: off). */
+  draw_visible?: boolean;
+  /** VIS1: the 3D view's edges, back faces culled, the still frame's pixel cut, the refill offscreen (not Rust's). */
+  edge_mode?: "screen" | "lines" | "none"; cull_back?: boolean; still_px?: number; refill_offscreen?: boolean;
 }
 /** `query settings`. */
 export interface UserSettings {
@@ -1010,6 +1021,8 @@ export interface UserSettings {
   note: string | null; text_sizes: [number, number]; themes: string[]; values: SettingsValues;
 }
 export const userSettings = shallowRef<UserSettings | null>(null);
+// VIS1: the stored values the performance report names (its optimisations in force), read without an import cycle
+(window as unknown as { __bbSettings?: () => SettingsValues | null }).__bbSettings = () => userSettings.value?.values ?? null;
 let settingsAsked = false;
 /** Reads the settings (the file may have changed: the Rust app shares it) and applies the look. */
 export function loadSettings(): void {

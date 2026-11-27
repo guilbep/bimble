@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 0000000000000000 0000000000000000 407f400000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cRoundedRect0000004" "Level 0"
+grids 0
+elements 1 triangles 100 meshes yes
+000 2T2cRoundedRect0000010 IfcMember 7 Other v=52 i=100 e=52 n=52 name="rounded_rect" storey="Level 0" material=""

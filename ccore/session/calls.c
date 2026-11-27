@@ -2649,6 +2649,27 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         }
     } else if (o == 0) cc_links_remove(s, li);
     else if (o == 1) {
+        /* TESS1 (ADR 0085): a Reload may name the link's own detail ("detail": exact, standard, light,
+         * custom with "chord_mm" and "max_deg"; null: the settings' again); kept for the session. */
+        const JrVal *dv = jr_get(v, "detail");
+        if (dv) {
+            static const char *const D[] = {"exact", "standard", "light", "custom"};
+            int d = -1;
+            for (int q = 0; dv->type == JR_STR && q < 4; q++)
+                if (dv->n == strlen(D[q]) && !memcmp(dv->s, D[q], dv->n)) d = q;
+            const JrVal *cm = jr_get(v, "chord_mm"), *md = jr_get(v, "max_deg");
+            int nums = cm && cm->type == JR_NUM && cm->num >= CC_IFC_CHORD_MM_MIN && cm->num <= CC_IFC_CHORD_MM_MAX && md &&
+                       md->type == JR_NUM && md->num >= CC_IFC_MAX_DEG_MIN && md->num <= CC_IFC_MAX_DEG_MAX;
+            if (dv->type != JR_NULL && (d < 0 || (d == CC_IFC_DETAIL_CUSTOM && !nums))) {
+                buf_puts(out, "detail: exact, standard, light, custom (with chord_mm 0.01..1000 and max_deg 1..90), or null (the settings')");
+                goto end;
+            }
+            cc_link *k = &s->links[li];
+            k->detail_own = dv->type != JR_NULL;
+            k->detail.detail = d < 0 ? CC_IFC_DETAIL_STANDARD : (cc_ifc_detail)d;
+            k->detail.chord_mm = d == CC_IFC_DETAIL_CUSTOM ? cm->num : 2.0;
+            k->detail.max_deg = d == CC_IFC_DETAIL_CUSTOM ? md->num : 18.0;
+        }
         cc_error err;
         if (cc_links_reload(s, li, &err)) {
             buf_puts(out, err.msg);

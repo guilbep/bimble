@@ -17,12 +17,16 @@ void cc_settings_default(cc_settings *s) { /* settings.rs:43-58 */
     s->moving_fps = 30;
     s->moving_proxies = 1;
     s->gpu_cull = 0;
+    s->draw_visible = 0; /* VIS1: off until it is exact on a real project of links (ADR 0078 amendment 7) */
+    strcpy(s->edge_mode, "screen"), s->cull_back = 0, s->still_px = 0, s->refill_offscreen = 1; /* VIS1 */
     strcpy(s->theme, "grey");    /* ui_theme::THEMES[0] */
     strcpy(s->ui_font, "roboto"); /* UiFont::Roboto */
     s->text_size = 12.0f;
     strcpy(s->coordinates, "survey");
     strcpy(s->renderer, "auto"); /* GPU1 */
     s->link_gpu_mb = CC_LINK_GPU_MB_DEFAULT; /* SIZE3 */
+    strcpy(s->link_detail, "standard"); /* TESS1 */
+    s->link_chord_mm = 2.0, s->link_max_deg = 18.0;
 }
 
 #ifndef CC_VIEW_ONLY /* the viewer-only wasm has no settings (the 400 KB budget): the stubs at the end */
@@ -31,9 +35,14 @@ void cc_settings_default(cc_settings *s) { /* settings.rs:43-58 */
 static const char *const THEMES[] = {"grey", "dark", "light", "solarized-dark", "solarized-light", "high-contrast"};
 static const char *const FONTS[] = {"roboto", "ubuntu"};
 static const char *const RENDERERS[] = {"auto", "webgl2", "webgpu"}; /* GPU1: the lab's 3D renderer */
+static const char *const EDGE_MODES[] = {"screen", "lines", "none"}; /* VIS1: the 3D view's edges */
+#define NEDGE_MODES (sizeof EDGE_MODES / sizeof EDGE_MODES[0])
+#define STILL_PX_MAX 8.0
 #define NTHEMES (sizeof THEMES / sizeof THEMES[0])
 #define NFONTS (sizeof FONTS / sizeof FONTS[0])
 #define NRENDERERS (sizeof RENDERERS / sizeof RENDERERS[0])
+static const char *const LINK_DETAILS[] = {"exact", "standard", "light", "custom"}; /* TESS1: cc_ifc_detail's order */
+#define NLINK_DETAILS (sizeof LINK_DETAILS / sizeof LINK_DETAILS[0])
 #define TEXT_MIN 10.0f /* ui_theme.rs TEXT_SIZES */
 #define TEXT_MAX 16.0f
 
@@ -204,6 +213,11 @@ void cc_settings_of(const JrVal *v, cc_settings *s) { /* settings.rs:70-125 from
     if (!as_u64(field(v, "moving_fps"), &u)) s->moving_fps = u > 240 ? 240 : (unsigned)u;
     if ((f = field(v, "moving_proxies")) && f->type == JR_BOOL) s->moving_proxies = f->b;
     if ((f = field(v, "gpu_cull")) && f->type == JR_BOOL) s->gpu_cull = f->b;
+    if ((f = field(v, "draw_visible")) && f->type == JR_BOOL) s->draw_visible = f->b; /* VIS1 */
+    if ((f = field(v, "cull_back")) && f->type == JR_BOOL) s->cull_back = f->b;
+    if ((f = field(v, "refill_offscreen")) && f->type == JR_BOOL) s->refill_offscreen = f->b;
+    if ((f = field(v, "still_px")) && f->type == JR_NUM && finite(f->num)) s->still_px = f->num < 0 ? 0 : f->num > STILL_PX_MAX ? STILL_PX_MAX : f->num;
+    { int e = known(EDGE_MODES, NEDGE_MODES, field(v, "edge_mode")); if (e >= 0) strcpy(s->edge_mode, EDGE_MODES[e]); }
     if ((f = field(v, "theme")) && f->type == JR_STR) { /* by_id: an unknown id is the default */
         int k = known(THEMES, NTHEMES, f);
         strcpy(s->theme, THEMES[k < 0 ? 0 : k]);
@@ -222,6 +236,12 @@ void cc_settings_of(const JrVal *v, cc_settings *s) { /* settings.rs:70-125 from
     else if ((f = field(v, "wgs84")) && f->type == JR_BOOL && f->b) strcpy(s->coordinates, "wgs84"); /* 0.14's setting */
     if ((k = known(RENDERERS, NRENDERERS, field(v, "renderer"))) >= 0) strcpy(s->renderer, RENDERERS[k]); /* GPU1 */
     if (!as_u64(field(v, "link_gpu_mb"), &u)) s->link_gpu_mb = u < 64 ? 64 : u > 65536 ? 65536 : (unsigned)u; /* SIZE3 */
+    if ((k = known(LINK_DETAILS, NLINK_DETAILS, field(v, "link_detail"))) >= 0) strcpy(s->link_detail, LINK_DETAILS[k]); /* TESS1 */
+    if ((f = field(v, "link_chord_mm")) && f->type == JR_NUM && f->num >= CC_IFC_CHORD_MM_MIN && f->num <= CC_IFC_CHORD_MM_MAX)
+        s->link_chord_mm = f->num;
+    if ((f = field(v, "link_max_deg")) && f->type == JR_NUM && f->num >= CC_IFC_MAX_DEG_MIN && f->num <= CC_IFC_MAX_DEG_MAX)
+        s->link_max_deg = f->num;
+    if ((f = field(v, "open_app")) && f->type == JR_BOOL) s->open_app = f->b; /* GPU2 */
 }
 
 int cc_settings_parse(const char *text, size_t n, cc_settings *s) {
@@ -274,9 +294,17 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
             unsigned long long u;
             if (as_u64(v, &u) || u > 240) buf_puts(why, "`moving_fps`: a whole number from 0 to 240 (0: draw everything)");
             else t.moving_fps = (unsigned)u;
-        } else if (jr_key_is(m, "moving_proxies") || jr_key_is(m, "gpu_cull")) {
+        } else if (jr_key_is(m, "moving_proxies") || jr_key_is(m, "gpu_cull") || jr_key_is(m, "draw_visible") || jr_key_is(m, "cull_back") || jr_key_is(m, "refill_offscreen")) {
             if (v->type != JR_BOOL) say(why, "`%s`: true or false", m->key);
-            else *(jr_key_is(m, "gpu_cull") ? &t.gpu_cull : &t.moving_proxies) = v->b;
+            else *(jr_key_is(m, "gpu_cull") ? &t.gpu_cull : jr_key_is(m, "draw_visible") ? &t.draw_visible : jr_key_is(m, "cull_back") ? &t.cull_back
+                   : jr_key_is(m, "refill_offscreen") ? &t.refill_offscreen : &t.moving_proxies) = v->b;
+        } else if (jr_key_is(m, "edge_mode")) { /* VIS1 */
+            int k = known(EDGE_MODES, NEDGE_MODES, v);
+            if (k < 0) buf_puts(why, "`edge_mode`: screen, lines or none");
+            else strcpy(t.edge_mode, EDGE_MODES[k]);
+        } else if (jr_key_is(m, "still_px")) { /* VIS1 */
+            if (v->type != JR_NUM || !finite(v->num) || v->num < 0 || v->num > STILL_PX_MAX) buf_puts(why, "`still_px`: pixels, from 0 (off) to 8");
+            else t.still_px = v->num;
         } else if (jr_key_is(m, "theme")) {
             int k = known(THEMES, NTHEMES, v);
             if (k < 0) buf_puts(why, "`theme`: one of grey, dark, light, solarized-dark, solarized-light, high-contrast");
@@ -298,15 +326,30 @@ int cc_settings_set(cc_settings *s, const JrVal *body, Buf *why) {
             int k = known(RENDERERS, NRENDERERS, v);
             if (k < 0) buf_puts(why, "`renderer`: auto, webgl2 or webgpu");
             else strcpy(t.renderer, RENDERERS[k]);
+        } else if (jr_key_is(m, "link_detail")) { /* TESS1 */
+            int k = known(LINK_DETAILS, NLINK_DETAILS, v);
+            if (k < 0) buf_puts(why, "`link_detail`: exact, standard, light or custom");
+            else strcpy(t.link_detail, LINK_DETAILS[k]);
+        } else if (jr_key_is(m, "link_chord_mm")) { /* TESS1 */
+            if (v->type != JR_NUM || !(v->num >= CC_IFC_CHORD_MM_MIN && v->num <= CC_IFC_CHORD_MM_MAX))
+                buf_puts(why, "`link_chord_mm`: millimetres from 0.01 to 1000");
+            else t.link_chord_mm = v->num;
+        } else if (jr_key_is(m, "link_max_deg")) { /* TESS1 */
+            if (v->type != JR_NUM || !(v->num >= CC_IFC_MAX_DEG_MIN && v->num <= CC_IFC_MAX_DEG_MAX))
+                buf_puts(why, "`link_max_deg`: degrees from 1 to 90");
+            else t.link_max_deg = v->num;
         } else if (jr_key_is(m, "link_gpu_mb")) { /* SIZE3 */
             unsigned long long u;
             if (as_u64(v, &u) || u < 64 || u > 65536) buf_puts(why, "`link_gpu_mb`: a whole number of MB from 64 to 65536");
             else t.link_gpu_mb = (unsigned)u;
+        } else if (jr_key_is(m, "open_app")) { /* GPU2 */
+            if (v->type != JR_BOOL) buf_puts(why, "`open_app`: true or false");
+            else t.open_app = v->b;
         } else if (jr_key_is(m, "recent")) buf_puts(why, "`recent` changes by opening a file, or with the action recent_remove");
         else {
             buf_puts(why, "unknown field `");
             buf_append(why, m->key, m->key_n < 64 ? m->key_n : 64);
-            buf_puts(why, "`, expected one of `coordinates`, `gpu_cull`, `link_gpu_mb`, `memory_share`, `moving_fps`, `moving_proxies`, `renderer`, `text_size`, "
+            buf_puts(why, "`, expected one of `coordinates`, `cull_back`, `draw_visible`, `edge_mode`, `gpu_cull`, `link_chord_mm`, `link_detail`, `link_gpu_mb`, `link_max_deg`, `memory_share`, `moving_fps`, `moving_proxies`, `open_app`, `refill_offscreen`, `renderer`, `still_px`, `text_size`, "
                           "`theme`, `ui_font`, `user_email`, `user_name`");
         }
     }
@@ -336,8 +379,19 @@ static void field_value(JsonW *w, const cc_settings *s, size_t k) {
 static void values(JsonW *w, const cc_settings *s, char *const *recent, size_t nrecent, int with_renderer) {
     jw_obj_begin(w);
     for (size_t k = 0; k < NFIELDS; k++) {
+        if (k == 2 && with_renderer) jw_key(w, "link_chord_mm"), jw_f64(w, s->link_chord_mm); /* TESS1 */
+        if (k == 2 && with_renderer) jw_key(w, "link_detail"), jw_str(w, s->link_detail); /* TESS1: before link_gpu_mb */
+        if (k == 1 && with_renderer) { /* VIS1: sorted between coordinates and gpu_cull */
+            jw_key(w, "cull_back"), jw_bool(w, s->cull_back);
+            jw_key(w, "draw_visible"), jw_bool(w, s->draw_visible);
+            jw_key(w, "edge_mode"), jw_str(w, s->edge_mode);
+        }
+        if (k == 6 && with_renderer) jw_key(w, "refill_offscreen"), jw_bool(w, s->refill_offscreen); /* VIS1: before renderer */
         if (k == 2 && with_renderer) jw_key(w, "link_gpu_mb"), jw_u64(w, s->link_gpu_mb); /* SIZE3: sorted between gpu_cull and memory_share */
+        if (k == 2 && with_renderer) jw_key(w, "link_max_deg"), jw_f64(w, s->link_max_deg); /* TESS1 */
+        if (k == 5 && with_renderer) jw_key(w, "open_app"), jw_bool(w, s->open_app); /* GPU2: sorted between moving_proxies and recent */
         if (k == 6 && with_renderer) jw_key(w, "renderer"), jw_str(w, s->renderer); /* GPU1: sorted between recent and text_size */
+        if (k == 6 && with_renderer) jw_key(w, "still_px"), jw_f64(w, s->still_px); /* VIS1: after renderer */
         jw_key(w, FIELDS[k]);
         if (k != 5) {
             field_value(w, s, k);
@@ -386,7 +440,12 @@ typedef struct {
     size_t nrecent;
     int has_recent; /* the text has a "recent" member */
     int has_renderer; /* GPU1: the text has a "renderer" member */
+    int has_draw_visible; /* VIS1: the text has a "draw_visible" member */
+    int has_vis1[4]; /* VIS1: edge_mode, cull_back, still_px, refill_offscreen in the text */
     int has_link_gpu; /* SIZE3: the text has a "link_gpu_mb" member */
+    int has_link_detail; /* TESS1: the text has a "link_detail" member */
+    int has_link_chord, has_link_deg; /* TESS1: "link_chord_mm", "link_max_deg" */
+    int has_open_app; /* GPU2: the text has an "open_app" member */
     char *text;
     size_t n;
 } Now;
@@ -418,7 +477,14 @@ static int now_read(cc_session *s, Now *c) {
         cc_settings_recent_of(v, c->recent, &c->nrecent);
         c->has_recent = v->type == JR_OBJ && field(v, "recent") != NULL;
         c->has_renderer = v->type == JR_OBJ && field(v, "renderer") != NULL;
+        c->has_draw_visible = v->type == JR_OBJ && field(v, "draw_visible") != NULL;
+        { static const char *const K[4] = {"edge_mode", "cull_back", "still_px", "refill_offscreen"};
+          for (int i = 0; i < 4; i++) c->has_vis1[i] = v->type == JR_OBJ && field(v, K[i]) != NULL; }
         c->has_link_gpu = v->type == JR_OBJ && field(v, "link_gpu_mb") != NULL; /* SIZE3 */
+        c->has_link_detail = v->type == JR_OBJ && field(v, "link_detail") != NULL; /* TESS1 */
+        c->has_link_chord = v->type == JR_OBJ && field(v, "link_chord_mm") != NULL;
+        c->has_link_deg = v->type == JR_OBJ && field(v, "link_max_deg") != NULL;
+        c->has_open_app = v->type == JR_OBJ && field(v, "open_app") != NULL;
         if (!u->in_mem && v->type != JR_OBJ) snprintf(u->note, sizeof u->note, "the settings are not a JSON object: the defaults");
         else if (!u->in_mem) u->note[0] = 0;
     } else if (c->text && c->n && !u->in_mem) /* settings.rs: broken JSON reads as the defaults */
@@ -477,8 +543,14 @@ int cc_settings_query(cc_session *s, Buf *out) {
     int webgpu = !strcmp(c.v.renderer, "webgpu");
     jw_key(&w, "applies"), jw_obj_begin(&w);
     for (size_t k = 0; k < NFIELDS; k++) {
+        if (k == 1) jw_key(&w, "cull_back"), jw_bool(&w, 1), jw_key(&w, "draw_visible"), jw_bool(&w, 1), jw_key(&w, "edge_mode"), jw_bool(&w, 1); /* VIS1: the WebGL2 3D view */
+        if (k == 2) jw_key(&w, "link_chord_mm"), jw_bool(&w, 1); /* TESS1: the links' conversion */
+        if (k == 2) jw_key(&w, "link_detail"), jw_bool(&w, 1);
         if (k == 2) jw_key(&w, "link_gpu_mb"), jw_bool(&w, 1); /* SIZE3: the WebGL2 viewport's budget across links */
-        if (k == 6) jw_key(&w, "renderer"), jw_bool(&w, 1);
+        if (k == 2) jw_key(&w, "link_max_deg"), jw_bool(&w, 1); /* TESS1 */
+        if (k == 5) jw_key(&w, "open_app"), jw_bool(&w, files); /* GPU2: the native host's `open` reads it */
+        if (k == 6) jw_key(&w, "refill_offscreen"), jw_bool(&w, 1);
+        if (k == 6) jw_key(&w, "renderer"), jw_bool(&w, 1), jw_key(&w, "still_px"), jw_bool(&w, 1);
         jw_key(&w, FIELDS[k]), jw_bool(&w, k == 1 ? webgpu : APPLIES[k] < 0 ? files : APPLIES[k]);
     }
     jw_obj_end(&w);
@@ -508,6 +580,16 @@ int cc_settings_query(cc_session *s, Buf *out) {
     return jw_finish(&w) == JW_OK ? 0 : (out->oom = 1, -1);
 }
 
+void cc_settings_link_opts(cc_session *s, cc_ifc_read_opts *o) { /* TESS1 */
+    o->detail = CC_IFC_DETAIL_STANDARD, o->chord_mm = 2.0, o->max_deg = 18.0;
+    Now c;
+    if (now_read(s, &c)) return;
+    for (size_t i = 0; i < NLINK_DETAILS; i++)
+        if (!strcmp(c.v.link_detail, LINK_DETAILS[i])) o->detail = (cc_ifc_detail)i;
+    o->chord_mm = c.v.link_chord_mm, o->max_deg = c.v.link_max_deg;
+    now_free(&c);
+}
+
 int cc_settings_text_query(cc_session *s, Buf *out) {
     Now c;
     if (now_read(s, &c)) return out->oom = 1, -1;
@@ -521,18 +603,43 @@ int cc_settings_text_query(cc_session *s, Buf *out) {
  * members kept (a text with no "recent" gets the session's list, as Rust writes it). */
 static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
     Buf vals[NFIELDS];
-    cc_settings_member m[NFIELDS + 2];
+    cc_settings_member m[NFIELDS + 14]; /* the lab fields: GPU1, SIZE3, TESS1, GPU2, VIS1 */
+    char ej[16], sj[32]; /* VIS1: edge_mode's and still_px's JSON */
+    snprintf(ej, sizeof ej, "\"%s\"", v->edge_mode);
+    { Buf b; buf_init(&b); JsonW jw; jw_init(&jw, &b, 0); jw_f64(&jw, v->still_px); jw_finish(&jw); snprintf(sj, sizeof sj, "%.*s", (int)b.len, b.p ? b.p : "0"); buf_free(&b); }
     size_t nm = 0;
     int rc = 0;
     char rj[16]; /* GPU1: "renderer"'s JSON */
     snprintf(rj, sizeof rj, "\"%s\"", v->renderer);
     char gj[16]; /* SIZE3: "link_gpu_mb"'s JSON */
+    char dj[16]; /* TESS1: "link_detail"'s JSON, "link_chord_mm" and "link_max_deg" */
+    snprintf(dj, sizeof dj, "\"%s\"", v->link_detail);
+    Buf cjb, mjb;
+    buf_init(&cjb), buf_init(&mjb);
+    {
+        JsonW jw;
+        jw_init(&jw, &cjb, 0), jw_f64(&jw, v->link_chord_mm), jw_finish(&jw);
+        jw_init(&jw, &mjb, 0), jw_f64(&jw, v->link_max_deg), jw_finish(&jw);
+    }
     snprintf(gj, sizeof gj, "%u", v->link_gpu_mb);
     for (size_t k = 0; k < NFIELDS; k++) {
         /* SIZE3: the links' GPU budget, once set or already in the text (sorted: after gpu_cull) */
+        /* TESS1: the links' detail, once set or already in the text (sorted: before link_gpu_mb) */
+        if (k == 2 && (v->link_chord_mm != 2.0 || c->has_link_chord)) m[nm++] = (cc_settings_member){"link_chord_mm", cjb.p, cjb.len};
+        if (k == 2 && (strcmp(v->link_detail, "standard") || c->has_link_detail)) m[nm++] = (cc_settings_member){"link_detail", dj, strlen(dj)};
         if (k == 2 && (v->link_gpu_mb != CC_LINK_GPU_MB_DEFAULT || c->has_link_gpu)) m[nm++] = (cc_settings_member){"link_gpu_mb", gj, strlen(gj)};
+        if (k == 2 && (v->link_max_deg != 18.0 || c->has_link_deg)) m[nm++] = (cc_settings_member){"link_max_deg", mjb.p, mjb.len};
+        /* GPU2: open_app, once set or already in the text (sorted: before recent) */
+        if (k == 5 && (v->open_app || c->has_open_app)) m[nm++] = (cc_settings_member){"open_app", v->open_app ? "true" : "false", v->open_app ? 4u : 5u};
+        /* VIS1: the 3D view's optimisations, each once set from its default or already in the text (sorted) */
+        if (k == 1 && (v->cull_back || c->has_vis1[1])) m[nm++] = (cc_settings_member){"cull_back", v->cull_back ? "true" : "false", v->cull_back ? 4u : 5u};
+        /* VIS1: draw_visible, once set off or already in the text (sorted: after coordinates) */
+        if (k == 1 && (v->draw_visible || c->has_draw_visible)) m[nm++] = (cc_settings_member){"draw_visible", v->draw_visible ? "true" : "false", v->draw_visible ? 4u : 5u};
+        if (k == 1 && (strcmp(v->edge_mode, "screen") || c->has_vis1[0])) m[nm++] = (cc_settings_member){"edge_mode", ej, strlen(ej)};
+        if (k == 6 && (!v->refill_offscreen || c->has_vis1[3])) m[nm++] = (cc_settings_member){"refill_offscreen", v->refill_offscreen ? "true" : "false", v->refill_offscreen ? 4u : 5u};
         /* GPU1: the lab's renderer, once set or already in the text (sorted: after recent) */
         if (k == 6 && (strcmp(v->renderer, "auto") || c->has_renderer)) m[nm++] = (cc_settings_member){"renderer", rj, strlen(rj)};
+        if (k == 6 && (v->still_px != 0 || c->has_vis1[2])) m[nm++] = (cc_settings_member){"still_px", sj, strlen(sj)};
         buf_init(&vals[k]);
         JsonW w;
         jw_init(&w, &vals[k], 0);
@@ -563,6 +670,7 @@ static int write_members(cc_session *s, const Now *c, const cc_settings *v) {
         buf_free(&b);
     }
     for (size_t k = 0; k < NFIELDS; k++) buf_free(&vals[k]);
+    buf_free(&cjb), buf_free(&mjb); /* TESS1 */
     return rc;
 }
 
@@ -624,6 +732,9 @@ int cc_settings_action(cc_session *s, const char *name, const char *body, size_t
 }
 void cc_settings_user_json(cc_session *s, JsonW *w) { (void)s, jw_null(w); }
 void cc_settings_free(cc_session *s) { (void)s; }
+void cc_settings_link_opts(cc_session *s, cc_ifc_read_opts *o) { /* TESS1: standard */
+    (void)s, o->detail = CC_IFC_DETAIL_STANDARD, o->chord_mm = 2.0, o->max_deg = 18.0;
+}
 #endif
 
 /* ---- query about (lib.rs:4081 about_ui): in both builds ---- */

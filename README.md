@@ -19,7 +19,7 @@ and as an MCP server for agents (ADR 0067–0069, ADR 0072).
 <!-- status:begin -->
 <!-- Written by `node ccore/tools/status.mjs --write` from ccore/results/. Do not edit between the markers: `ci/run.sh unit` checks them. -->
 
-## Status (version `0.1.0-preview.6`)
+## Status (version `0.1.0-preview.7`)
 
 A preview. Each number is copied from a generated report under `ccore/results/`; the sources and
 the conditions of each number are listed under the list.
@@ -44,10 +44,10 @@ the conditions of each number are listed under the list.
   (Ctrl N: the browser keeps it). The Rust answers were dumped from a development build that
   reports `bimble 0.18.1`, not from v0.19.0.
   6 controls still shown are not served by the C core; the report lists them.
-- **Size** [3]: 72,338 lines of C; the viewer wasm 544,389 bytes (253,956 gzip, 54.4 % of
-  its 1,000,000-byte limit), the editor wasm 1,269,984 bytes (517,303 gzip), the native program
-  3,476,944 bytes (stripped), the Linux aarch64 release archive 2,944,573 bytes.
-  That archive was built on the dev machine with a stale `web/ccore/` copy inside (1,863,864 bytes
+- **Size** [3]: 82,911 lines of C; the viewer wasm 550,523 bytes (257,258 gzip, 55.1 % of
+  its 1,000,000-byte limit), the editor wasm 1,362,281 bytes (557,757 gzip), the native program
+  3,476,944 bytes (stripped), the Linux aarch64 release archive 2,961,384 bytes.
+  That archive was built on the dev machine with a stale `web/ccore/` copy inside (1,876,955 bytes
   before compression) that the CI archive does not have.
 - **Speed** [4]: Lighthouse performance (desktop / mobile, median of 3 runs): 80 / 75 for the
   current build served locally on the dev machine under load (load average 17.89 at the start);
@@ -89,7 +89,10 @@ fail), collaboration, rebar, steel. See [ROADMAP.md](ROADMAP.md).
 ## Try it
 
 - **In a browser:** <https://guilbep.github.io/bimble/> (the C lab, built from `main`). Files
-  you open stay on your computer.
+  you open stay on your computer. A link opens a model with nothing to install:
+  <https://guilbep.github.io/bimble/?open=samples/frame.ifc> (the demo frame, synthetic); any
+  `https://` file whose server allows other sites (CORS) opens with `#open=<url>`, and the page asks
+  before it fetches from another site (ADR 0086).
 - **Desktop (Linux x86_64 and aarch64, macOS arm64 and x86_64):** the archives of the latest
   `ccore-v*` [prerelease](https://github.com/guilbep/bimble/releases). Unpack, then
   `./bimble-ccore open model.ifc`: the lab opens in your browser.

@@ -116,7 +116,7 @@ let g = await A.get("link=0&name=a.ifc&tiles=toc");
 check("while it indexes: its tiles answer 202 indexing", r?.indexing === true && g.status === 202 && text(g.bytes) === "indexing", `${g.status} ${text(g.bytes)}`);
 r = await until(async () => { const m = await A.row("a.ifc"); return m && !m.indexing ? m : null; });
 const cache = readFileSync(cacheOf("a.ifc"));
-check("indexed: its cache holds a section TILE, complete, format 7", text(cache).includes("TILE") && /"complete":true/.test(text(cache)) && text(cache).includes("bimble-link-cache 7"));
+check("indexed: its cache holds a section TILE, complete, format 8", text(cache).includes("TILE") && /"complete":true/.test(text(cache)) && text(cache).includes("bimble-link-cache 8"));
 g = await A.get("link=0&name=a.ifc&tiles=toc");
 let toc;
 try { toc = T.parseToc(g.bytes, 72); } catch (e) { toc = null; console.log(e.message); }
@@ -154,8 +154,8 @@ check("the walker's frame: far, the coarsest tile alone; close, every leaf", g.s
 // ---- a format 6 cache: re-indexed, not read again ----
 A.h.kill("SIGKILL");
 const c6 = Buffer.from(readFileSync(cacheOf("a.ifc")));
-const at = c6.indexOf("bimble-link-cache 7");
-c6.write("bimble-link-cache 6", at, "latin1");
+const at = c6.indexOf("bimble-link-cache 8");
+c6.write("bimble-link-cache 7", at, "latin1");
 writeFileSync(cacheOf("a.ifc"), c6);
 const B = await startHost("link_tiles_test_2", { BIMBLE_LINK_CACHE_MIN: "0" });
 await B.call("action", "new");
@@ -165,7 +165,7 @@ check("a format 6 cache: linked from it (the IFC not read), indexing", r?.from_c
 r = await until(async () => { const m = await B.row("a.ifc"); return m && !m.indexing ? m : null; });
 const c7 = text(readFileSync(cacheOf("a.ifc")));
 g = await B.get("link=0&tiles=toc");
-check("then re-indexed: format 7, complete, its TILE served", c7.includes("bimble-link-cache 7") && /"complete":true/.test(c7) && g.status === 200);
+check("then re-indexed: format 8, complete, its TILE served", c7.includes("bimble-link-cache 8") && /"complete":true/.test(c7) && g.status === 200);
 
 // ---- the bake settings (BIMBLE_TILES): recorded in SRCE; a cache baked otherwise is indexed again, not converted ----
 check("its source record names the bake settings", /"tiles":"leaf=40000 proxy=16384 root=512 res=64 occ=64"/.test(c7), c7.match(/"tiles":"[^"]*"/)?.[0] ?? "none");

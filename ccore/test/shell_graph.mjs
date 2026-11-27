@@ -6,6 +6,9 @@
 //   path to the model's view; no node shows a model state without a model, or the view without a
 //   tab after the session said so; every control (machine.ts CONTROLS, the list the UI shows its
 //   controls from) has a row in every node where it is shown; every event has a row somewhere.
+//   URL1 (ADR 0086): an open from a link (`open {url}`) carries its address through the question,
+//   the open and its error; Try again (the error's `open {url}`) starts from the screen under the
+//   error, never nested; the error of a link shows Back to Home and Try again, other errors Back.
 // Prints the tables' sizes, "N passed, M failed"; exits non-zero on a failure.
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,7 +33,7 @@ const key = (s, c) => JSON.stringify([s, c]);
 // changes (an agent, another window, the user closing a tab) change the session first.
 function moves(s, core) {
   const out = [];
-  const user = [{ do: "new" }, { do: "open" }, { do: "open", path: "/x/sample.bimble" }, { do: "import" }, { do: "close" },
+  const user = [{ do: "new" }, { do: "open" }, { do: "open", path: "/x/sample.bimble" }, { do: "open", url: "https://example.org/sample.ifc" }, { do: "import" }, { do: "close" },
     { do: "discard" }, { do: "cancel" }, { do: "showView" }, { do: "showPage", page: "quantities" },
     { do: "showSheet", sheet: "s1" }, { do: "back" }, { do: "home" }, { do: "retry" }];
   for (const e of user) {
@@ -143,7 +146,7 @@ const WANT_ROWS = {
   "model.view": MODEL_ROWS,
   "model.page": `${MODEL_ROWS} back`,
   "model.sheet": `${MODEL_ROWS} back`,
-  error: "back home opened closed failed core lost",
+  error: "back home open opened closed failed core lost", // URL1: open {url}, Try again
   confirmClose: "discard cancel opened closed failed core lost",
   disconnected: "retry lost failed opened closed core reconnected",
   sessionLost: "home new open import showView opened closed core failed lost",
@@ -156,6 +159,7 @@ const DIRTY = { ...LOADED, unsaved: true };
 const sheetS = { at: "model", show: "sheet", sheet: "s1" };
 const opening = (back, what = "open") => ({ at: "opening", what, discard: false, back });
 const err = { at: "error", message: "first", back: page };
+const L = "https://example.org/sample.ifc"; // URL1
 const ask = { at: "confirmClose", then: "open", back: page };
 const gone = { at: "disconnected", file: "sample.bimble", unsaved: true, back: page };
 const lostS = { at: "sessionLost", file: "sample.bimble", unsaved: true };
@@ -193,6 +197,17 @@ const CASES = [
   ["session lost -> Home", lostS, { do: "home" }, EMPTY, "home"],
   ["session lost -> reopen the file", lostS, { do: "open", path: "/x/sample.bimble" }, EMPTY, "opening", (r) => r.path === "/x/sample.bimble"],
   ["session lost -> show what the host has open", lostS, { do: "showView" }, LOADED, "model.view"],
+  // URL1: a link
+  ["Home -> a link: the open, with its address", { at: "home" }, { do: "open", url: L }, EMPTY, "opening", (r) => r.url === L && r.back.at === "home"],
+  ["the view, unsaved -> a link: asks first, the address kept", VIEW, { do: "open", url: L }, DIRTY, "confirmClose", (r) => r.url === L],
+  ["the question of a link -> discard: the open of that link", { ...ask, url: L }, { do: "discard" }, DIRTY, "opening", (r) => r.url === L && r.discard === true],
+  ["an open without a link -> failed: its error has no address", opening({ at: "home" }, "open"), { do: "failed", message: "x" }, EMPTY, "error", (r) => r.url === undefined],
+  ["a link's open -> failed: its error, with the address", { ...opening({ at: "home" }), url: L }, { do: "failed", message: "404" }, EMPTY, "error", (r) => r.url === L && r.back.at === "home"],
+  ["a link's error -> Try again: the open again, from Home", { at: "error", message: "404", url: L, back: { at: "home" } }, { do: "open", url: L }, EMPTY, "opening", (r) => r.url === L && r.back.at === "home"],
+  ["a link's error -> Try again: from the screen under it, not from an earlier question", { at: "error", message: "x", url: L, back: { ...ask, url: L } }, { do: "open", url: L }, LOADED, "opening", (r) => kind(r.back) === "model.page"],
+  ["a link's error -> Back to Home", { at: "error", message: "404", url: L, back: VIEW }, { do: "home" }, LOADED, "home"],
+  ["an error -> an open without a link: refused (no Open there)", err, { do: "open" }, LOADED, null],
+  ["a link's open -> cancel: back where it came from", { ...opening(page), url: L }, { do: "cancel" }, LOADED, "model.page"],
 ];
 for (const [name, st, e, c, want, pred] of CASES) {
   const r = step(st, e, c);
@@ -203,6 +218,11 @@ const WANT_CONTROLS = ["file-menu-close", "shell-disconnected-retry", "shell-los
 check("the connection notices' and File -> Close's controls exist", WANT_CONTROLS.every((id) => CONTROLS.some((x) => x.id === id)));
 const ctl = (id) => CONTROLS.find((x) => x.id === id);
 check("File -> Close shows with a model, not without", ctl("file-menu-close")?.shown(VIEW, LOADED) === true && ctl("file-menu-close")?.shown({ at: "home" }, EMPTY) === false);
+// URL1: the link's controls
+for (const id of ["shell-error-home", "shell-error-retry", "home-open-link", "home-recent-link", "page-link"]) check(`URL1 control ${id} exists`, !!ctl(id));
+const linkErr = { at: "error", message: "404", url: L, back: VIEW };
+check("a link's error shows Back to Home and Try again, not Back", ctl("shell-error-home")?.shown(linkErr, LOADED) === true && ctl("shell-error-retry")?.shown(linkErr, LOADED) === true && ctl("shell-error-back")?.shown(linkErr, LOADED) === false);
+check("another error shows Back, not Try again", ctl("shell-error-back")?.shown(err, LOADED) === true && ctl("shell-error-retry")?.shown(err, LOADED) === false && ctl("shell-error-home")?.shown(err, LOADED) === false);
 check("Retry shows only while disconnected", ctl("shell-disconnected-retry")?.shown(gone, LOADED) === true && ctl("shell-disconnected-retry")?.shown(VIEW, LOADED) === false);
 
 console.log(`${passed} passed, ${failed} failed`);

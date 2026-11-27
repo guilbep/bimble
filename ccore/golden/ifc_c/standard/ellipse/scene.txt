@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 3ff0000000000000 0000000000000000 407f400000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cEllipse00000000004" "Level 0"
+grids 0
+elements 1 triangles 88 meshes yes
+000 2T2cEllipse00000000010 IfcMember 7 Other v=46 i=88 e=53 n=53 name="ellipse" storey="Level 0" material=""

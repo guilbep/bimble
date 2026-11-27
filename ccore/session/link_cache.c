@@ -49,8 +49,18 @@ static int ends_hash(const char *head, size_t nh, const char *tail, size_t nt, u
     return 0;
 }
 
+static const char *const DETAILS[] = {"exact", "standard", "light", "custom"}; /* TESS1: cc_ifc_detail */
+static const char *detail_name(int d) { return d >= 0 && d <= 3 ? DETAILS[d] : DETAILS[1]; }
+static const cc_ifc_read_opts STANDARD = {CC_IFC_DETAIL_STANDARD, 0, 0};
+
 int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
                          const double *base_mm, char *out, size_t n) {
+    return cc_link_cache_source_at(bytes, mtime_s, head, nh, tail, nt, base_mm, &STANDARD, out, n);
+}
+
+int cc_link_cache_source_at(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
+                            const double *base_mm, const cc_ifc_read_opts *detail, char *out, size_t n) {
+    int custom = detail->detail == CC_IFC_DETAIL_CUSTOM;
     char e[65];
     if (ends_hash(head, nh, tail, nt, bytes, e)) return -1;
     Buf b;
@@ -64,9 +74,12 @@ int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size
         jw_arr_end(&w);
     }
     jw_key(&w, "bytes"), jw_u64(&w, bytes);
+    if (custom) jw_key(&w, "chord_mm"), jw_f64(&w, detail->chord_mm); /* TESS1 */
     jw_key(&w, "complete"), jw_bool(&w, 0); /* SIZE3 (E): the proxies are baked after (cc_link_cache_mark_complete) */
+    jw_key(&w, "detail"), jw_str(&w, detail_name((int)detail->detail)); /* TESS1 */
     jw_key(&w, "ends"), jw_str(&w, e);
     jw_key(&w, "format"), jw_str(&w, CC_LINK_CACHE_FORMAT);
+    if (custom) jw_key(&w, "max_deg"), jw_f64(&w, detail->max_deg); /* TESS1 */
     jw_key(&w, "mtime_s"), jw_i64(&w, mtime_s);
     jw_obj_end(&w);
     int rc = jw_finish(&w) != JW_OK || b.oom || b.len + 1 > n ? -1 : 0;
@@ -94,6 +107,11 @@ int cc_link_cache_base_point(const char *src, size_t n, double out[3]) {
 }
 
 int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex, int ends_known) {
+    return cc_link_cache_matches_at(src, n, bytes, mtime_s, ends_hex, ends_known, &STANDARD);
+}
+
+int cc_link_cache_matches_at(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex,
+                             int ends_known, const cc_ifc_read_opts *detail) {
     Arena a;
     arena_init(&a, 0);
     JrError je;
@@ -105,6 +123,13 @@ int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mti
              f && f->type == JR_STR && (!strcmp(f->s, CC_LINK_CACHE_FORMAT) || !strcmp(f->s, CC_LINK_CACHE_FORMAT_PREV)) && e && e->type == JR_STR &&
              e->n == 64; /* TILE1: a format 6 cache's geometry is format 7's: re-indexed, not read again from the IFC */
         if (ok && ends_known) ok = !memcmp(e->s, ends_hex, 64);
+        const JrVal *d = jr_get(v, "detail"); /* TESS1 */
+        const char *want = detail_name((int)detail->detail);
+        if (ok) ok = d ? d->type == JR_STR && d->n == strlen(want) && !memcmp(d->s, want, d->n) : detail->detail == CC_IFC_DETAIL_STANDARD;
+        if (ok && detail->detail == CC_IFC_DETAIL_CUSTOM) { /* the same two numbers, bit for bit through ryu */
+            const JrVal *c = jr_get(v, "chord_mm"), *g = jr_get(v, "max_deg");
+            ok = c && c->type == JR_NUM && c->num == detail->chord_mm && g && g->type == JR_NUM && g->num == detail->max_deg;
+        }
     }
     arena_free(&a);
     return ok;
@@ -181,6 +206,7 @@ cc_link_job *cc_link_job_new(const cc_platform *pf, const char *path) {
     strcpy(j->path, path);
     j->pf = pf;
     j->cache_min = CC_LINK_CACHE_MIN;
+    j->detail = STANDARD; /* TESS1 */
     return j;
 }
 
@@ -599,7 +625,7 @@ static void run(cc_link_job *j) {
         void *map = NULL;
         cc_viewfile *vf = cc_session_fits(pf, cp, cs.size, &e) ? NULL : map_view(pf, cp, &map, &e); /* SIZE3: in place */
         if (!vf) vf = read_view(pf, cp, cs.size, &e);
-        if (vf && vf->has_source && cc_link_cache_matches(vf->source.p, vf->source.n, j->bytes, j->mtime_s, ends, ends_known)) {
+        if (vf && vf->has_source && cc_link_cache_matches_at(vf->source.p, vf->source.n, j->bytes, j->mtime_s, ends, ends_known, &j->detail)) {
             j->vf = vf, j->from_cache = 1, j->map = map;
             j->incomplete = !cc_link_cache_complete(vf->source.p, vf->source.n); /* SIZE3 (E): its proxies to bake */
             { /* TILE1: or its pyramid baked with other settings: indexed again (not converted) */
@@ -645,9 +671,9 @@ static void run(cc_link_job *j) {
     if (!have_stat) j->bytes = n;
     char src[512] = "";
     cc_ifc_scene *s = malloc(sizeof *s);
-    int rc = s ? cc_ifc_read_progress(text, n, s, &j->err, &j->pg) : -1;
-    if (!rc && cached && cc_link_cache_source(j->bytes, j->mtime_s, text, n < ENDS ? n : ENDS, n > ENDS ? text + n - ENDS : text,
-                                              n < ENDS ? n : ENDS, s->base_point_mm, src, sizeof src))
+    int rc = s ? cc_ifc_read_with(text, n, &j->detail, s, &j->err, &j->pg) : -1; /* TESS1: the job's detail */
+    if (!rc && cached && cc_link_cache_source_at(j->bytes, j->mtime_s, text, n < ENDS ? n : ENDS, n > ENDS ? text + n - ENDS : text,
+                                                 n < ENDS ? n : ENDS, s->base_point_mm, &j->detail, src, sizeof src))
         cached = 0;
     Buf psb; /* M1LINKS: the property sets, read beside the display (ifc_psets.h); none when they cannot be */
     buf_init(&psb);
