@@ -30,6 +30,24 @@ Built into the program
   winpthreads: mingw-w64-libraries/winpthreads/COPYING in the mingw-w64 sources
   (https://www.mingw-w64.org)
 
+Built into the native app `bimble` (Linux archive; ticket NUI1)
+- Dear ImGui 1.93.0 (docking branch; the immediate-mode UI, its SDL3 and SDL_GPU backends, FreeType
+  font loading), commit 6d32174
+  MIT
+  licences/DearImGui-LICENSE.txt
+  https://github.com/ocornut/imgui
+- cimgui (the C API of Dear ImGui, generated for 1.93.0), commit 2a6a93f
+  MIT
+  licences/cimgui-LICENSE.txt
+  https://github.com/cimgui/cimgui
+- nanosvg (SVG parser and rasteriser: the ribbon's icons), commit 239e102
+  Zlib
+  licences/nanosvg-LICENSE.txt
+  https://github.com/memononen/nanosvg
+- The lab's fonts below (Sora, Source Sans 3, DM Mono), the same files, built in
+Used by `bimble` from the system, not in the archive: SDL 3.4 or newer (Zlib: https://libsdl.org,
+its LICENSE.txt) and FreeType 2 (its FTL.TXT, or GPL-2.0, at your choice: https://freetype.org).
+
 In web/ (the lab's interface fonts, from @fontsource)
 - Sora 5.3.0
   OFL-1.1

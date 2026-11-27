@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The C core's checks in one script, for CI and for builders alike (tickets K1, K3):
-#   ccore/ci/run.sh [fast|full|unit|san|lab|clang]    (default fast)
+#   ccore/ci/run.sh [fast|full|unit|san|lab|clang|native]    (default fast)
 #   fast  the gate of every ticket: build.sh tcc, test/run.sh (tcc), test/run.sh (clang with
 #         ASan and UBSan), build.sh wasm, test/wasm_run.mjs, test/host.sh (host_test, lab_boot).
 #   unit  all but the sanitizers and the Chromium lab suites (the job ccore-linux): the gate's
@@ -18,7 +18,12 @@
 #   lab   build.sh tcc and wasm, then every test/lab_*.mjs but lab_boot (host.sh runs it): the
 #         Chromium suites (the job ccore-lab); then the performance report (tools/perf.mjs,
 #         ticket PERF1: out/ci/perf.md and its change against results/perf.md).
-#   full  fast, the lab suites, then the rest of unit: every suite once.
+#   full  fast, the lab suites, then the rest of unit: every suite once (test/native_app_test.mjs among
+#         them: it says "skipped" without SDL3 >= 3.4 or a Vulkan device).
+#   native  the native app `bimble` (ticket NUI1, ADR 0084; the job ccore-native): its third parties
+#         checked (native/deps.sh --check), the shell's data against the TypeScript sources, build.sh
+#         native-app, then test/native_app_test.mjs with CCORE_NATIVE_REQUIRED=1 (no skip: a missing
+#         SDL3 or Vulkan device fails), and the same under ASan and UBSan (native/build.sh asan).
 #   clang for a machine with neither tcc nor wasm-ld (macOS, ticket MAC1, the job ccore-macos):
 #         test/run.sh with clang (the kernel when deps.sh built it), then test/host.sh on the host
 #         built by build.sh native (clang -O2 -Werror, every suite and tool too).
@@ -38,7 +43,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 source ./portable.sh
 mode=${1:-fast}
-case "$mode" in fast | full | unit | san | lab | clang) ;; *) echo "usage: $0 [fast|full|unit|san|lab|clang]" >&2; exit 2 ;; esac
+case "$mode" in fast | full | unit | san | lab | clang | native) ;; *) echo "usage: $0 [fast|full|unit|san|lab|clang|native]" >&2; exit 2 ;; esac
 export CCORE_PORT_BASE=${CCORE_PORT_BASE:-auto}
 LIMIT=${CCORE_CI_TIMEOUT:-900}
 LOGS=${CCORE_CI_LOGS:-out/ci}
@@ -156,6 +161,16 @@ labs() {
 docs_checks() {
     suite status node tools/status.mjs --check
     suite parity node tools/parity.mjs --check
+    # NUI1: the native app's data (ribbon, keys, strings, machine, themes) equals what the TypeScript gives
+    suite shell_data node ../web-ui/scripts/export-shell-data.mjs --check
+}
+native_suites() {
+    suite shell_data node ../web-ui/scripts/export-shell-data.mjs --check
+    suite build-native-app ./build.sh native-app
+    suite native-deps native/deps.sh --check
+    suite native_app env CCORE_NATIVE_REQUIRED=1 node test/native_app_test.mjs
+    suite build-native-asan native/build.sh asan
+    suite native_app_asan env CCORE_NATIVE_REQUIRED=1 NATIVE_BIN=out/app-asan/bimble ASAN_OPTIONS=detect_leaks=0 node test/native_app_test.mjs
 }
 unit_rest() {
     # The viewer-only wasm and its 400 KB budget (ADR 0069), for test/wasm_view_run.mjs below.
@@ -183,6 +198,7 @@ case "$mode" in
     lab) labs ;;
     full) suite build-tcc ./build.sh tcc; unit_c; san; san_host; gate_rest; docs_checks; labs; unit_rest ;;
     clang) suite run-clang env CC=clang test/run.sh; suite host env HOST_BUILD=native test/host.sh ;;
+    native) native_suites ;;
 esac
 
 printf 'ci: %s, %d s in all, logs in ccore/%s\n' "$mode" $((($(ms_now) - t_all) / 1000)) "$LOGS"

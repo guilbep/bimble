@@ -12,6 +12,7 @@ the repository root unless a line says otherwise.
 | The gate of every change | `make gate` (`ccore/ci/run.sh fast`) | minutes (no report; the last line of the run prints its time) |
 | Everything CI runs on Linux | `make full` (`ccore/ci/run.sh full`) | 836 s, 57 suites, machine loaded (`ccore/results/ci.md`, ticket WIN2) |
 | Editor include paths | nothing: `ccore/compile_flags.txt` is committed | |
+| Edit the native app, see pixels | `make dev-native` | edit → offscreen shot 188–258 ms (section 2b; no report file) |
 
 ## 1. Prerequisites (once)
 
@@ -54,6 +55,36 @@ edit written (the watcher's delay is not in it); 2.1 s at 20,000 elements (`larg
 - The wasm lab instead of the native host (no server, as on GitHub Pages):
   `cd web-ui && npm run dev:wasm`, then open `http://localhost:5173/` (rebuild the wasm with
   `npm run ccore:wasm` after a C change).
+
+## 2b. The native Linux app (`bimble`, ADR 0084)
+
+`bimble` is the same C core with a native 3D view (SDL3's GPU API on Vulkan) and the lab's ribbon,
+navigator and panels drawn by Dear ImGui, in one process (`ccore/native/`). It needs SDL 3.4 or newer
+and FreeType (`pkg-config sdl3 freetype2`), and `glslc` (shaderc) to build its shaders. Where SDL 3.4
+is not packaged: `ccore/ci/sdl3.sh ~/.local/sdl3`, then `PKG_CONFIG_PATH=~/.local/sdl3/lib/pkgconfig`.
+
+```sh
+make native                       # = ccore/build.sh native-app: ccore/out/app/bimble (clang -O2, 5 MB)
+ccore/out/app/bimble project.bimble          # a window; no file: Home; --en / --fr
+make dev-native                   # = ccore/native/build.sh watch: tcc rebuild on every save under
+                                  #   ccore/native/, then an offscreen shot of the fixture
+make native-test                  # = ccore/ci/run.sh native (the CI job ccore-native)
+```
+
+- The edit loop: a save of a shell C file → tcc build (one object per changed file, the core's clang
+  -O2 objects cached) 67–110 ms → the offscreen shot written: **188–258 ms** (6 saves, 27 Nov 2026,
+  load 7–9). `native/build.sh watch <cmd…>` runs another command after each build.
+- Offscreen and scripted (no window, no display): `bimble --offscreen [--size WxH --scale k]
+  [--script steps.txt | --preset orbit-zoom] --out dir file` writes `frames.csv`, `inputs.csv` (event →
+  the app's work done, event → the GPU's fence), `memory.csv`, `summary.md` and the shots; the steps
+  are listed at the top of `ccore/native/ui/drive.c`. `--shot f.png --quit-after n` for one picture.
+- Under ASan and UBSan: `ccore/native/build.sh asan` → `ccore/out/app-asan/bimble`.
+- The shell's data (ribbon, keys, strings, themes, the machine's shape) comes from the TypeScript:
+  after a change there, `node web-ui/scripts/export-shell-data.mjs` and commit
+  `ccore/native/ui/data/` (`ccore/ci/run.sh unit` checks it).
+- Its own environment: `BIMBLE_NATIVE_LOADERS` (link loader threads, default 2), `BIMBLE_LINK_GPU_MB`
+  (the links' GPU budget for one run; else the setting), and the host's `BIMBLE_CONFIG_DIR`,
+  `BIMBLE_CACHE_DIR`, `BIMBLE_LINK_CACHE_BESIDE=0`, `BIMBLE_LINK_CACHE_MIN`.
 
 ## 3. Tests
 
