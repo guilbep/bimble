@@ -55,7 +55,7 @@
 // HOST_BIN measure another tree (the code before a change).
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { arch, cpus, loadavg, platform, release, tmpdir, totalmem } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,7 +81,11 @@ const NFRAMES = Number(opt("--frames") ?? 120);
 const PIXELS = opt("--pixels") ? resolve(opt("--pixels")) : null;
 const COMPARE = opt("--compare") ? resolve(opt("--compare")) : null;
 const HEAVY = 700, HEAVY_TRIS = 1000, LARGE_N = 20000;
-const OUT = resolve(opt("--out") ?? (GPU ? join(CCORE, "out/frames/frames-webgpu.md") : EXTRA ? join(CCORE, "out/frames/frames-local.md") : join(CCORE, "results/frames.md")));
+// REAL1: a run on the machine's GPU (LAB_GPU=gl|vulkan, test/lib/chromium.mjs) writes only the section "On the machine's
+// GPU" of results/frames.md (one table per renderer, model and build; --links N rows), the SwiftShader tables kept; a
+// SwiftShader run keeps that section as it is. The two are never mixed in one table.
+const REAL = LAB_GPU !== "software";
+const OUT = resolve(opt("--out") ?? (EXTRA ? join(CCORE, "out/frames/frames-local.md") : REAL ? join(CCORE, "results/frames.md") : GPU ? join(CCORE, "out/frames/frames-webgpu.md") : join(CCORE, "results/frames.md")));
 const RAW = join(CCORE, "out/frames");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const WASM = join(CCORE, "out/wasm/ccore.wasm");
@@ -176,7 +180,7 @@ function serve(site) {
 }
 function buildSite() {
   if (opt("--site")) return resolve(opt("--site"));
-  if (!LINKS && !existsSync(WASM)) throw new Error(`no ${WASM}: ccore/build.sh wasm`); // (--links: the native build only)
+  if (!LINKS && !FOLDER && !existsSync(WASM)) throw new Error(`no ${WASM}: ccore/build.sh wasm`); // (--links: the native build only)
   const site = join(tmp, "site"), t0 = Date.now();
   execFileSync("npx", ["vite", "build", "--base", "./", "--outDir", site, "--emptyOutDir", "--logLevel", "warn"],
     { cwd: UI, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, VITE_CCORE: "1", VITE_CCORE_REV: "" } });
@@ -199,9 +203,10 @@ const MODEL_FILE = {
     return f;
   },
   local: () => { if (!EXTRA || !existsSync(EXTRA)) throw new Error("FRAMES_EXTRA_MODEL: no such file"); return EXTRA; },
+  fixture: () => FIXTURE, // REAL1: golden/frame.json, 72 elements
 };
 const siteName = (model) => `ccore/${model}${extname(MODEL_FILE[model]())}`;
-const MODEL_NAME = { large: "20,026 elements (synthetic, large.md)", heavy: "772 elements, mesh-heavy (synthetic)", local: "a local imported model" };
+const MODEL_NAME = { large: "20,026 elements (synthetic, large.md)", heavy: "772 elements, mesh-heavy (synthetic)", local: "a local imported model", fixture: "72 elements (golden/frame.json)" };
 
 // ---- the native host ----
 const HOST_PORT = port("frames_host");
@@ -233,6 +238,8 @@ async function cdpConnect(wsUrl) {
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error("CDP connect failed")); });
   let id = 0;
   const pending = new Map();
+  // REAL1: a browser gone (the folder's watchdog kills it) fails the calls waiting, never hangs them
+  ws.onclose = () => { for (const { reject } of pending.values()) reject(new Error("CDP: the browser is gone")); pending.clear(); };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.id !== undefined && pending.has(msg.id)) {
@@ -243,6 +250,7 @@ async function cdpConnect(wsUrl) {
     }
   };
   const send = (method, params = {}, sessionId) => new Promise((ok, reject) => {
+    if (ws.readyState > 1) return reject(new Error("CDP: the browser is gone")); // REAL1 (closing or closed)
     const m = ++id;
     pending.set(m, { ok, reject });
     ws.send(JSON.stringify({ id: m, method, params, ...(sessionId ? { sessionId } : {}) }));
@@ -594,7 +602,55 @@ function report(rows, history, cmp, forced, loads) {
     L.push("");
   }
   L.push(`<!-- frames-history ${JSON.stringify(history)} -->`, "");
+  return L.join("\n") + realSection(readReal());
+}
+
+// ---- REAL1: the section "On the machine's GPU" (its data in a comment, the tables made from it) ----
+const REAL_BEGIN = "<!-- real-gpu-begin -->", REAL_END = "<!-- real-gpu-end -->";
+function readReal() {
+  const t = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
+  const d = /<!-- real-gpu-data (.*) -->/.exec(t)?.[1];
+  return d ? JSON.parse(d) : { runs: {}, links: {} };
+}
+const linksHead = ["| run | links | detail triangles | caches MB (proxies MB, ms) | open → first picture ms (from) | → complete ms | still ms: triangles / draws (without edges ms; segments) | moving ms median (p95): triangles / draws | close still ms: triangles / draws | GPU MB | GPU MB, half hidden, budget ½ (detail loaded) | load start → end |",
+  "|---|---|---|---|---|---|---|---|---|---|---|---|"];
+const linksRow = (r, name = r.label) => { const f = (v, d = 0) => fmt(v, d); return `| ${name} | ${r.links} | ${f(r.detailTris)} | ${mb(r.cacheBytes)} (${mb(r.hlodBytes)}, ${f(r.hlodMs)}) | ${f(r.firstPicture)} (${r.fromProxies ? "proxies" : "first frame"}) | ${f(r.complete)} | ${f(r.still, 1)}: ${f(r.stillTris)} / ${f(r.stillDraws)} (${f(r.stillNoEdges, 1)}; ${f(r.edgeSegs)}) | ${f(r.moving, 1)} (${f(r.movingP95, 1)}): ${f(r.movingTris)} / ${f(r.movingDraws)} | ${f(r.closeStill, 1)}: ${f(r.closeTris)} / ${f(r.closeDraws)} | ${mb(r.gpuBytes)} | ${mb(r.gpuBudgetBytes)} (${r.detailLoaded ?? "–"}) | ${r.load.split(" ")[0]} → ${r.endLoad.split(" ")[0]} |`; };
+function realSection(D) {
+  const runs = Object.entries(D.runs ?? {}), links = Object.entries(D.links ?? {});
+  if (!runs.length && !links.length) return "";
+  const L = ["", REAL_BEGIN, "", "## On the machine's GPU (not SwiftShader: never compare with the tables above)", ""];
+  L.push("Ticket REAL1: the same tool with `LAB_GPU=vulkan` (`ccore/test/lib/chromium.mjs`, DEV.md): headless Chromium draws on the");
+  L.push("machine's GPU through ANGLE on Vulkan, and WebGPU through Dawn on the same Vulkan driver. The GPU and driver below are");
+  L.push("what the page reports (`WEBGL_debug_renderer_info`, WebGPU's `GPUAdapterInfo`). Each frame is finished as above (WebGL2:");
+  L.push("a 1×1 `readPixels`; WebGPU: `onSubmittedWorkDone`).", "");
+  for (const [key, r] of runs) {
+    L.push(`### ${r.renderer === "webgpu" ? "WebGPU" : "WebGL2"} (\`LAB_GPU=${r.gpu}\`)`, "");
+    L.push(`GPU: WebGL2 \`${r.webgl}\`${r.webgpu ? `; WebGPU adapter \`${[r.webgpu.vendor, r.webgpu.architecture, r.webgpu.device, r.webgpu.description].filter(Boolean).join(" / ")}\` (${r.webgpu.evidence ?? "?"})` : ""}. ` +
+      `Run ${r.date}, label \`${r.label}\`; 1-minute load (/proc/loadavg) at each model's start: ${r.loads.join(", ")}.`, "");
+    for (const model of [...new Set(r.rows.map((x) => x.model))]) {
+      L.push(`#### ${MODEL_NAME[model] ?? model}`, "");
+      L.push(...table(r.rows.filter((x) => x.model === model)), "");
+    }
+    void key;
+  }
+  if (links.length) {
+    L.push("### Synthetic links (`--links N`, native host)", "");
+    L.push("Each link: `bench/links_synth.mjs` (160 unique closed meshes of about 600 triangles), converted by LINKF, linked as a folder.", "");
+    L.push(...linksHead);
+    for (const [key, r] of links) L.push(linksRow(r, `${key} (\`${r.gpu}\`, ${r.renderer})`));
+    L.push("", `GPU: ${[...new Set(links.map(([, r]) => r.webgl))].map((x) => `\`${x}\``).join(", ")}.`, "");
+  }
+  L.push(`<!-- real-gpu-data ${JSON.stringify(D)} -->`, "", REAL_END, "");
   return L.join("\n");
+}
+/** Writes the real-GPU section into OUT, the rest of the file as it is. */
+function writeReal(D) {
+  const t = existsSync(OUT) ? readFileSync(OUT, "utf8") : "# 3D speed of the C lab (frames)\n";
+  const a = t.indexOf(REAL_BEGIN), b = t.indexOf(REAL_END);
+  const head = a >= 0 ? t.slice(0, a).trimEnd() + "\n" : t.trimEnd() + "\n", tail = a >= 0 && b > a ? t.slice(b + REAL_END.length).replace(/^\n+/, "") : "";
+  mkdirSync(dirname(OUT), { recursive: true });
+  writeFileSync(OUT, head + realSection(D) + tail);
+  log(`wrote the real-GPU section of ${OUT}`);
 }
 
 // ---- LNK3D: --links N ----
@@ -689,13 +745,166 @@ async function linksMain() {
   out.stateCost30k = await ev("window.__bbGl.bench.stateCost ? window.__bbGl.bench.stateCost(30000, 100) : null");
   console.log(`a visibility change of 30,000 elements (100 vertices each): ${JSON.stringify(out.stateCost30k)}`);
   const r = out, f = (v, d = 0) => fmt(v, d);
-  console.log(["| label | links | detail triangles | caches MB (proxies MB, ms) | open → first picture ms (from) | → complete ms | still ms: triangles / draws (without edges ms; segments) | moving ms median (p95): triangles / draws | close still ms: triangles / draws | GPU MB | GPU MB, half hidden, budget ½ (detail loaded) | load start → end |",
-    "|---|---|---|---|---|---|---|---|---|---|---|---|",
-    `| ${r.label} | ${r.links} | ${f(r.detailTris)} | ${mb(r.cacheBytes)} (${mb(r.hlodBytes)}, ${f(r.hlodMs)}) | ${f(r.firstPicture)} (${r.fromProxies ? "proxies" : "first frame"}) | ${f(r.complete)} | ${f(r.still, 1)}: ${f(r.stillTris)} / ${f(r.stillDraws)} (${f(r.stillNoEdges, 1)}; ${f(r.edgeSegs)}) | ${f(r.moving, 1)} (${f(r.movingP95, 1)}): ${f(r.movingTris)} / ${f(r.movingDraws)} | ${f(r.closeStill, 1)}: ${f(r.closeTris)} / ${f(r.closeDraws)} | ${mb(r.gpuBytes)} | ${mb(r.gpuBudgetBytes)} (${r.detailLoaded ?? "–"}) | ${r.load.split(" ")[0]} → ${r.endLoad.split(" ")[0]} |`].join("\n"));
+  console.log([...linksHead, linksRow(r)].join("\n"));
+  if (REAL && !opt("--out")) { const D = readReal(); D.links[`${RENDERER} ${LINKS}`] = { ...r, gpu: LAB_GPU, renderer: RENDERER, webgl: GPU_SEEN.webgl }; writeReal(D); }
   if (COMPARE && PIXELS) for (const c of comparePixels()) console.log(`pictures: camera ${c.cam}: ${c.changed} of ${c.pixels} pixels differ by more than 40 levels (${c.any} at all)`);
 }
 
+// ---- REAL1: FRAMES_LINK_FOLDER=<dir> --steps 5,10,14,17: a folder of your own IFC files linked ----
+// The N smallest files of the folder, linked into a new project (link_folder on a scratch folder of symbolic
+// links: the folder itself is only read, caches go to the run's cache folder, BIMBLE_LINK_CACHE_BESIDE=0),
+// N growing by step, one host and one Chromium per step (the caches of earlier steps are reused). Measured:
+// conversion, open → first picture (proxies) and complete, still and moving frames (triangles, draws),
+// GPU bytes, the tab's JS heap, the renderer's and the GPU process's RSS, the host's RSS, the links' origins
+// (a link far from the others: where Fit all puts the camera), and a screenshot after Fit all (raw rows,
+// out/frames/folder-*.json and .png, never committed: no name or path is written). A watchdog stops the
+// step (kills Chromium) when MemAvailable falls under FRAMES_MIN_AVAIL_GB (2.5) or the tab's JS heap passes
+// FRAMES_MAX_HEAP_GB (3), and the next steps are not run.
+const FOLDER = process.env.FRAMES_LINK_FOLDER ? resolve(process.env.FRAMES_LINK_FOLDER) : null;
+const MIN_AVAIL = Number(process.env.FRAMES_MIN_AVAIL_GB ?? 2.5), MAX_HEAP = Number(process.env.FRAMES_MAX_HEAP_GB ?? 3);
+function procTree(root) {
+  const kids = new Map();
+  for (const d of readdirSync("/proc")) {
+    if (!/^\d+$/.test(d)) continue;
+    try { const st = readFileSync(`/proc/${d}/stat`, "utf8"); const pp = Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[1]); (kids.get(pp) ?? kids.set(pp, []).get(pp)).push(Number(d)); } catch { /* gone */ }
+  }
+  const out = [], todo = [root];
+  while (todo.length) { const p = todo.pop(); out.push(p); todo.push(...(kids.get(p) ?? [])); }
+  return out;
+}
+const rssMb = (pid) => { try { return Number(/VmRSS:\s+(\d+)/.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1] ?? 0) / 1024; } catch { return 0; } };
+const cmd = (pid) => { try { return readFileSync(`/proc/${pid}/cmdline`, "utf8"); } catch { return ""; } };
+/** The browser's processes by kind (MB of RSS): renderer (the tab), gpu, others. */
+function chromeRss() {
+  const r = { renderer: 0, gpu: 0, other: 0 };
+  if (!browser) return r;
+  for (const p of procTree(browser.pid)) { const c = cmd(p), m = rssMb(p); if (/--type=renderer/.test(c)) r.renderer += m; else if (/--type=gpu-process/.test(c)) r.gpu += m; else r.other += m; }
+  return r;
+}
+async function folderMain() {
+  const steps = (opt("--steps") ?? "5,10,14,17").split(",").map(Number);
+  const all = readdirSync(FOLDER).filter((f) => /\.ifc$/i.test(f)).map((f) => ({ f, bytes: statSync(join(FOLDER, f)).size })).sort((a, b) => a.bytes - b.bytes);
+  log(`folder: ${all.length} IFC files, ${mb(all.reduce((n, x) => n + x.bytes, 0))} MB; steps ${steps.join(", ")} (load ${loadNow()})`);
+  const site = buildSite();
+  await serve(site);
+  // the links' folder under the host's HOME (it lists only its roots, query fs_roots), at a path that stays the same
+  // from run to run with FRAMES_CACHE_DIR (a cache is found by its IFC's path)
+  const cache = process.env.FRAMES_CACHE_DIR ? resolve(process.env.FRAMES_CACHE_DIR) : join(tmp, "cache");
+  const fhome = process.env.FRAMES_CACHE_DIR ? join(cache, "home") : HOME, dir = join(fhome, "folder");
+  mkdirSync(dir, { recursive: true }), mkdirSync(cache, { recursive: true });
+  const results = [];
+  let minAvail = Infinity, maxHeap = 0, stopWhy = null, heapNow = 0, stopNow = () => {};
+  // the waits end when the watchdog fires (waitFor retries a check that throws until its timeout)
+  const stopped = new Promise((_, rej) => { stopNow = () => rej(new Error(stopWhy)); });
+  stopped.catch(() => {});
+  const W = (p) => Promise.race([p, stopped]);
+  const watch = setInterval(() => {
+    const a = memGb();
+    minAvail = Math.min(minAvail, a);
+    if (!stopWhy && (a < MIN_AVAIL || heapNow > MAX_HEAP * 2 ** 30)) {
+      stopWhy = a < MIN_AVAIL ? `MemAvailable ${a.toFixed(2)} GB under ${MIN_AVAIL}` : `JS heap ${(heapNow / 2 ** 30).toFixed(2)} GB over ${MAX_HEAP}`;
+      const rs = chromeRss();
+      log(`WATCHDOG: ${stopWhy}: Chromium killed (tab RSS ${rs.renderer.toFixed(0)} MB, GPU process ${rs.gpu.toFixed(0)} MB, JS heap ${(heapNow / 2 ** 20).toFixed(0)} MB, host RSS ${host ? rssMb(host.pid).toFixed(0) : "-"} MB)`);
+      if (browser) try { process.kill(-browser.pid, "SIGKILL"); } catch { /* gone */ }
+      if (cdp) cdp.close();
+      stopNow();
+    }
+  }, 250);
+  try {
+    for (const n of steps) {
+      if (stopWhy) break;
+      const take = all.slice(0, n);
+      for (const x of take) if (!existsSync(join(dir, x.f))) symlinkSync(join(FOLDER, x.f), join(dir, x.f));
+      const out = { files: take.length, ifcBytes: take.reduce((k, x) => k + x.bytes, 0), load: loadNow() };
+      minAvail = memGb(), maxHeap = 0, heapNow = 0;
+      host = start("host", BIN, [String(HOST_PORT)], { cwd: FILES, env: { ...process.env, HOME: fhome, BIMBLE_CONFIG_DIR: CONFIG, BIMBLE_TOKEN: TOKEN, BIMBLE_ORIGINS: ORIGIN,
+        BIMBLE_CACHE_DIR: join(cache, "links-cache"), BIMBLE_LINK_CACHE_BESIDE: "0" } });
+      await waitFor("the host", 60000, async () => { if (host.exitCode !== null) throw new Error(host.out.slice(-400)); return host.out.includes("listening"); }, 30);
+      const hcall = async (op, name, body = {}) => {
+        const r = await fetch(`http://127.0.0.1:${HOST_PORT}/${op}/${name}?t=${TOKEN}`, { method: "POST", body: JSON.stringify(body) });
+        return { status: r.status, text: await r.text() };
+      };
+      await hcall("action", "new");
+      const t0 = Date.now();
+      const lf = await hcall("action", "link_folder", { path: dir });
+      if (lf.status !== 200) throw new Error(`link_folder: ${lf.status} ${lf.text.slice(0, 200)}`);
+      let panel = null;
+      await W(waitFor("the links converted", 3600000, async () => {
+        panel = JSON.parse((await hcall("query", "links_panel")).text).models;
+        return panel.length === n && panel.every((m) => m.state !== "converting" && m.state !== "queued");
+      }, 500));
+      out.convertMs = Date.now() - t0;
+      out.states = panel.map((m) => m.state).join(",");
+      out.fromCache = panel.filter((m) => m.from_cache).length;
+      out.elements = panel.reduce((k, m) => k + m.elements, 0), out.storedTris = panel.reduce((k, m) => k + m.triangles, 0);
+      out.origins = panel.map((m) => m.origin);
+      out.hostRssMb = rssMb(host.pid);
+      log(`${n} files: converted in ${out.convertMs} ms (${out.fromCache} from cache), ${out.elements} elements, ${out.storedTris} stored triangles, host RSS ${out.hostRssMb.toFixed(0)} MB`);
+      try {
+        if (memGb() < 3) throw new Error(`memory: ${memGb().toFixed(1)} GB available before Chromium`);
+        curTarget = null;
+        await startBrowser();
+        BUILD = "native", MODEL = "links";
+        await openTab();
+        const tNav = Date.now();
+        await S("Page.navigate", { url: pageUrl() });
+        const heapPoll = setInterval(() => { S("Runtime.getHeapUsage").then((h) => { heapNow = h.usedSize + (h.backingStorageSize ?? 0); maxHeap = Math.max(maxHeap, heapNow); }).catch(() => {}); }, 1000);
+        try {
+          await W(waitFor("the page ready", 900000, () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.links && window.__bbGl.links.length === ${n})`), 200));
+          out.readyWallMs = Date.now() - tNav;
+          await whichGpu();
+          out.renderer = GPU_SEEN.webgl;
+          await quiet(120000);
+          const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, preview: g.proxyPreview ? g.proxyPreview.at : null, full: g.fullFrameMs ?? null,
+            fetch: g.meshFetchMs, bytes: g.meshBytes, draw: (g.linkDraw ?? []).map((l) => l.xf ? l.xf.t : null), far: g.farLinks ?? null, detail: (g.linkDetail ?? []).filter((x) => x.detail).length }; })()`);
+          out.firstPicture = g0.preview ?? g0.first, out.fromProxies = g0.preview != null, out.firstFrameMs = g0.first, out.complete = g0.full;
+          out.meshBytes = g0.bytes, out.detailLoaded = g0.detail, out.linkT = g0.draw, out.farKm = g0.far ? g0.far.map((x) => x.km) : null;
+          await ev("(window.__bbGl.bench.snap(0, 0), 0)");
+          await quiet(60000);
+          const shot = await S("Page.captureScreenshot", { format: "png" });
+          writeFileSync(join(RAW, `folder-${n}.png`), Buffer.from(shot.data, "base64"));
+          const still = await ev(`(() => { const b = window.__bbGl.bench, ms = []; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
+            return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
+          out.still = med(still.ms), out.stillMax = Math.max(...still.ms), out.stillTris = still.tris, out.stillDraws = still.draws;
+          const orbit = await ev(`(() => { const b = window.__bbGl.bench, ms = []; const d = 2 * Math.PI / 60;
+            for (let i = 0; i < 60; i++) ms.push(b.frame(d, true));
+            return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
+          out.moving = med(orbit.ms), out.movingP95 = p95(orbit.ms), out.movingTris = orbit.tris, out.movingDraws = orbit.draws;
+          await ev("(window.__bbGl.bench.snap(0, 0), 0)");
+          await quiet(60000);
+          out.gpuBytes = await ev("window.__bbGl.gpuBytes ?? null");
+          await S("HeapProfiler.collectGarbage").catch(() => {});
+          const h = await S("Runtime.getHeapUsage");
+          out.jsHeap = h.usedSize, out.arrayBuffers = h.backingStorageSize ?? null;
+          out.maxHeap = maxHeap;
+          out.rss = chromeRss();
+          out.survived = (await ev("1 + 1")) === 2;
+        } finally { clearInterval(heapPoll); }
+      } catch (e) {
+        out.error = String(e.message ?? e).slice(0, 300), out.survived = false;
+        log(`${n} files: ${out.error}`);
+      }
+      out.minAvailGb = minAvail, out.stopWhy = stopWhy, out.endLoad = loadNow();
+      results.push(out);
+      log(`${n} files: ${JSON.stringify(out)}`);
+      writeFileSync(join(RAW, "folder.json"), JSON.stringify({ label: LABEL, gpu: LAB_GPU, results }, null, 1));
+      if (cdp) cdp.close(), cdp = null;
+      if (browser) await stop(browser), browser = null;
+      await stop(host), host = null;
+    }
+  } finally { clearInterval(watch); }
+  const f = (v, d = 0) => fmt(v, d);
+  const L = ["| IFC files (MB) | elements | stored triangles | conversion s (from cache) | open → first picture ms (from) | → complete ms | still ms: triangles / draws | moving ms median (p95): triangles / draws | detail links on GPU | GPU MB | JS heap MB (+ array buffers; max) | tab RSS MB | GPU process RSS MB | host RSS MB | min MemAvailable GB | survived |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"];
+  for (const r of results)
+    L.push(`| ${r.files} (${mb(r.ifcBytes)}) | ${f(r.elements)} | ${f(r.storedTris)} | ${f(r.convertMs / 1000, 1)} (${r.fromCache}) | ${f(r.firstPicture)} (${r.fromProxies ? "proxies" : "first frame"}) | ${f(r.complete)} | ${f(r.still, 1)}: ${f(r.stillTris)} / ${f(r.stillDraws)} | ${f(r.moving, 1)} (${f(r.movingP95, 1)}): ${f(r.movingTris)} / ${f(r.movingDraws)} | ${r.detailLoaded ?? "–"} | ${mb(r.gpuBytes)} | ${mb(r.jsHeap)} (+ ${mb(r.arrayBuffers)}; ${mb(r.maxHeap)}) | ${f(r.rss?.renderer)} | ${f(r.rss?.gpu)} | ${f(r.hostRssMb)} | ${f(r.minAvailGb, 2)} | ${r.survived ? "yes" : `no: ${r.stopWhy ?? r.error}`} |`);
+  const md = [`# A local folder of IFC files linked, LAB_GPU=${LAB_GPU} (never committed)`, "", `Renderer: ${results.find((r) => r.renderer)?.renderer ?? "?"}. Load at the start of each step: ${results.map((r) => r.load.split(" ")[0]).join(", ")}.`, "", ...L, ""].join("\n");
+  writeFileSync(join(RAW, "folder.md"), md);
+  console.log(md);
+}
+
 async function main() {
+  if (FOLDER) return folderMain();
   if (LINKS) return linksMain();
   const loads = [];
   // The load before the run (the run's own SwiftShader threads raise it: it is recorded per model, not checked).
@@ -723,10 +932,16 @@ async function main() {
   const history = (prev ? JSON.parse(prev) : []).filter((h) => h.label !== LABEL);
   for (const r of rows.filter((x) => x.build === "wasm"))
     history.push({ label: LABEL, model: r.model, orbit: r.orbitMedian, still: r.stillMedian, close: r.closeMedian, pick: r.pickMedian, first: r.firstFrameMs, gpu: r.gpuBytes, move: r.moveMedian, load: r.load.split(" ")[0] });
-  writeFileSync(join(RAW, EXTRA ? "frames-local.json" : "frames.json"), JSON.stringify({ label: LABEL, rows, cmp }, null, 1));
-  mkdirSync(dirname(OUT), { recursive: true });
-  writeFileSync(OUT, report(rows, history, cmp, forced, loads));
-  log(`wrote ${OUT}`);
+  writeFileSync(join(RAW, EXTRA ? "frames-local.json" : REAL ? `frames-${LAB_GPU}-${RENDERER}.json` : "frames.json"), JSON.stringify({ label: LABEL, rows, cmp }, null, 1));
+  if (REAL && !EXTRA && !opt("--out")) {
+    const D = readReal();
+    D.runs[RENDERER] = { renderer: RENDERER, gpu: LAB_GPU, label: LABEL, date: new Date().toISOString().slice(0, 16) + "Z", loads, webgl: GPU_SEEN.webgl, webgpu: GPU_SEEN.webgpu, rows };
+    writeReal(D);
+  } else {
+    mkdirSync(dirname(OUT), { recursive: true });
+    writeFileSync(OUT, report(rows, history, cmp, forced, loads));
+    log(`wrote ${OUT}`);
+  }
   for (const r of rows) if (r.dragNonBg !== null && r.stillNonBg && r.dragNonBg < 0.2 * r.stillNonBg) { log(`blank while dragging: ${r.build} ${r.model} ${r.dragNonBg} of ${r.stillNonBg}`); process.exitCode = 1; }
   if (cmp) for (const c of cmp) if (c.changed < 0 || c.changed > 0.001 * c.pixels) { log(`pictures differ: ${JSON.stringify(c)}`); process.exitCode = 1; }
 }
