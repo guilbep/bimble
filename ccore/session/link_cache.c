@@ -5,6 +5,8 @@
 
 #include "guid.h"
 #include "hlod.h"
+#include "ifc_psets.h"
+#include "inflate.h"
 #include "links.h"
 #include "json_r.h"
 #include "jobs.h"
@@ -214,6 +216,19 @@ static void report(Buf *b, const cc_link_job *j, const cc_ifc_scene *s, double r
     if (!s->scene.nwarnings) buf_puts(b, "  none\n");
 }
 
+/* SIZE2: the bytes of a view file's sections of one kind (heads included). */
+static uint64_t section_bytes(const Buf *vb, const char *kind) {
+    uint64_t sum = 0;
+    for (size_t at = 12; at + 12 <= vb->len;) {
+        uint64_t len = 0;
+        for (int i = 0; i < 8; i++) len |= (uint64_t)(unsigned char)vb->p[at + 4 + i] << (8 * i);
+        if (len > vb->len - at - 12) break;
+        if (!memcmp(vb->p + at, kind, 4)) sum += 12 + len;
+        at += 12 + (size_t)len;
+    }
+    return sum;
+}
+
 static void report_tail(Buf *b, const cc_link_job *j, uint64_t cache_bytes, const char *cache, const char *where) {
     /* LNK3D (ADR 0078 amendment 3): the proxies baked into the cache (section HLOD) */
     buf_puts(b, "\nproxies (HLOD, baked for the 3D view): ");
@@ -221,11 +236,48 @@ static void report_tail(Buf *b, const cc_link_job *j, uint64_t cache_bytes, cons
         buf_u64(b, j->hlod_cells), buf_puts(b, " cells, "), buf_u64(b, j->hlod_tris), buf_puts(b, " triangles, ");
         buf_u64(b, j->hlod_bytes), buf_puts(b, " bytes, built in "), buf_u64(b, (uint64_t)(j->hlod_ms + 0.5)), buf_puts(b, " ms");
     } else buf_puts(b, j->hlod_why[0] ? j->hlod_why : "none");
+    if (j->hlod_bytes) { /* SIZE2: the budget and what is stored */
+        buf_puts(b, "\nproxies' budget: "), buf_u64(b, cc_link_hlod_cap(j->geom_bytes)), buf_puts(b, " bytes (15 % of the geometry), ");
+        buf_u64(b, j->hlod_dropped), buf_puts(b, " finer cells left without; stored gzipped: "), buf_u64(b, j->hlod_stored), buf_puts(b, " bytes");
+    }
+    buf_puts(b, "\ncache sections (bytes):");
+    static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ"};
+    for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) {
+        uint64_t x = j->sections[q];
+        if (x) buf_puts(b, " "), buf_puts(b, KINDS[q]), buf_puts(b, " "), buf_u64(b, x);
+    }
+    if (j->psets_raw) buf_puts(b, "\nproperty sets: "), buf_u64(b, j->psets_raw), buf_puts(b, " bytes as read, stored once per distinct set and gzipped");
     buf_puts(b, "\ncache: ");
     if (cache[0]) buf_puts(b, cache), buf_puts(b, " ("), buf_u64(b, cache_bytes), buf_puts(b, " bytes)");
     else buf_puts(b, "none written");
     if (where && *where) buf_puts(b, "\n"), buf_puts(b, where);
     buf_puts(b, "\nThe cache is the IFC read for display, read only. Do not edit it; it is written again when the IFC changes.\n");
+}
+
+/* SIZE2: the proxies' byte budget of a link: 15 % of its geometry section (ELEM: the mesh codec's bytes),
+ * at most CC_LINK_HLOD_MAX, at least CC_LINK_HLOD_MIN (a small link keeps its coarse cells). */
+uint64_t cc_link_hlod_cap(uint64_t geom_bytes) {
+    uint64_t c = geom_bytes / 100 * 15;
+    if (c > CC_LINK_HLOD_MAX) c = CC_LINK_HLOD_MAX;
+    if (c < CC_LINK_HLOD_MIN) c = CC_LINK_HLOD_MIN;
+    return c;
+}
+
+/* SIZE2: the proxies of the finest cells dropped until those kept fit `cap` bytes (cc_hlod_proxy_bytes):
+ * the coarsest cells first (depth, then the tree's order), as the page uses a released link's coarsest
+ * usable proxies. The cells dropped. */
+uint32_t cc_link_hlod_budget(cc_hlod *h, uint64_t cap) {
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < h->ncells; i++) total += cc_hlod_proxy_bytes(&h->cells[i]);
+    uint32_t dropped = 0;
+    for (uint32_t d = CC_HLOD_MAX_DEPTH + 1; d-- > 0 && total > cap;)
+        for (uint32_t i = h->ncells; i-- > 0 && total > cap;) {
+            cc_hlod_cell *c = &h->cells[i];
+            if (c->depth != d || !c->nproxy) continue;
+            total -= cc_hlod_proxy_bytes(c);
+            c->nproxy = 0, dropped++;
+        }
+    return dropped;
 }
 
 /* LNK3D (ADR 0078 amendment 3): the cache's proxies, baked once here (on the conversion's thread): the
@@ -251,6 +303,7 @@ static void bake_hlod(cc_link_job *j, Buf *vb) {
     cc_hlod h;
     cc_hlod_opts o;
     cc_hlod_default(&o);
+    o.max_proxy_triangles = CC_LINK_HLOD_PROXY_TRIS; /* SIZE2: a coarser stand-in per cell (the grid coarsens to fit) */
     Buf b;
     buf_init(&b);
     int rc = cc_hlod_start(&h, &sc, &o, &e);
@@ -260,12 +313,17 @@ static void bake_hlod(cc_link_job *j, Buf *vb) {
         if (st != 0) break;
     }
     if (rc == 0 && h.work) snprintf(j->hlod_why, sizeof j->hlod_why, "none (cancelled)"), rc = 1;
+    if (rc == 0) j->hlod_dropped = cc_link_hlod_budget(&h, cc_link_hlod_cap(j->geom_bytes)); /* SIZE2: coarser cells first */
     if (rc == 0 && cc_hlod_bprx(&h, 0, (uint32_t)sc.nelements, &b, &e)) rc = -1;
     if (rc == 0 && sc.nelements && h.ncells) {
         j->hlod_cells = h.ncells;
         for (uint32_t i = 0; i < h.ncells; i++) j->hlod_tris += cc_hlod_proxy_triangles(&h.cells[i]);
-        if (cc_viewfile_append_hlod(vb, b.p, b.len)) j->hlod_cells = j->hlod_tris = 0;
-        else j->hlod_bytes = b.len;
+        Buf z; /* SIZE2: one gzip member (read once per link, sequentially) */
+        buf_init(&z);
+        int bad = cc_gzip((const unsigned char *)b.p, b.len, &z) || z.oom || cc_viewfile_append_hlod(vb, z.p, z.len);
+        if (bad) j->hlod_cells = j->hlod_tris = 0;
+        else j->hlod_bytes = b.len, j->hlod_stored = z.len;
+        buf_free(&z);
     } else if (rc < 0) snprintf(j->hlod_why, sizeof j->hlod_why, "none (%s)", e.msg);
     else if (!j->hlod_why[0]) snprintf(j->hlod_why, sizeof j->hlod_why, "none (nothing drawn)");
     buf_free(&b);
@@ -367,13 +425,21 @@ static void run(cc_link_job *j) {
     cc_viewfile_meta mt;
     Buf vb, lg;
     buf_init(&vb), buf_init(&lg);
-    int wr = cc_ifc_scene_meta(s, &mt) || cc_viewfile_write_meta(&mt, &s->scene, 0, &vb) ||
-             cc_viewfile_append_source(&vb, src, strlen(src));
+    int wr = cc_ifc_scene_meta(s, &mt) || cc_viewfile_write_meta(&mt, &s->scene, 0, &vb);
+    if (!wr) j->geom_bytes = section_bytes(&vb, "ELEM"); /* SIZE2: the proxies' budget follows it */
+    wr = wr || cc_viewfile_append_source(&vb, src, strlen(src));
     cc_viewfile_meta_free(&mt);
     report(&lg, j, s, read_ms);
     cc_ifc_scene_free(s), free(s); /* LNK3D: the IFC's scene goes before the proxies are built (its peak) */
     if (!wr && !vb.oom) bake_hlod(j, &vb); /* LNK3D: then HLOD, then PROP (both read lazily) */
-    if (!wr && psb.len) wr = cc_viewfile_append_psets(&vb, psb.p, psb.len); /* M1LINKS: last, read lazily */
+    if (!wr && psb.len) { /* M1LINKS: last, read lazily; SIZE2: packed (each set once, in gzip blocks) */
+        Buf pk;
+        buf_init(&pk);
+        if (cc_psets_pack((const uint8_t *)psb.p, psb.len, &pk) == 0 && !pk.oom) wr = cc_viewfile_append_psets_packed(&vb, pk.p, pk.len);
+        else wr = cc_viewfile_append_psets(&vb, psb.p, psb.len); /* (a table the packer refuses: as it is) */
+        j->psets_raw = psb.len;
+        buf_free(&pk);
+    }
     buf_free(&psb);
     if (wr || vb.oom) {
         buf_free(&vb), buf_free(&lg);
@@ -394,6 +460,10 @@ static void run(cc_link_job *j) {
     } else {
         logp[0] = 0;
         snprintf(j->note, sizeof j->note, "no cache written (neither the IFC's folder nor the cache folder could be written)");
+    }
+    {
+        static const char *const KINDS[] = {"HEAD", "META", "GEOR", "ELEM", "SRCE", "HLOD", "PROP", "PRPZ"};
+        for (size_t q = 0; q < sizeof KINDS / sizeof *KINDS; q++) j->sections[q] = section_bytes(&vb, KINDS[q]);
     }
     if (j->cache[0]) {
         cc_pf_stat cs;

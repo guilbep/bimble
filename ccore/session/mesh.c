@@ -31,6 +31,8 @@
 
 #include "ifc_read.h"
 #include "links.h"
+#include "link_cache.h"
+#include "inflate.h"
 #include "mesh.h"
 #include "scene.h"
 #include "scene_bmsh.h"
@@ -366,7 +368,16 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
         st = 204, buf_clear(out); /* the cache gone since: none */
     else {
         out->len = (size_t)len;
-        if (cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_raw_scene(l)->nelements, &err))
+        if (len >= 2 && (unsigned char)out->p[0] == 0x1f && (unsigned char)out->p[1] == 0x8b) { /* SIZE2: gzipped (cache format 5) */
+            Buf raw;
+            buf_init(&raw);
+            const char *why = NULL;
+            /* bounded: at most 64 times its stored size and CC_LINK_HLOD_MAX x 2 (the budget's cap with room) */
+            size_t cap = (size_t)(len > (CC_LINK_HLOD_MAX * 2) / 64 ? CC_LINK_HLOD_MAX * 2 : len * 64);
+            if (cc_gunzip((const unsigned char *)out->p, out->len, cap, &raw, &why)) buf_free(&raw), buf_clear(out), buf_puts(out, "proxies: damaged"), st = 500;
+            else buf_free(out), *out = raw;
+        }
+        if (st == 200 && cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_raw_scene(l)->nelements, &err))
             buf_clear(out), buf_puts(out, err.msg), st = 500;
     }
     *p = out->p ? out->p : "", *n = out->len;

@@ -1,7 +1,12 @@
 /* Mission 1 across links (ticket M1LINKS, ADR 0081): the property sets read beside the display
  * (src/ifc_psets.h), their table as a link cache's section PROP (src/viewfile.c, kept on disk),
  * hostile tables and sections, the notes of a link entry in the .bimble (src/file.c). Fails before
- * M1LINKS: no ifc_psets.h, no cc_step_parse_only, no notes in a link entry. */
+ * M1LINKS: no ifc_psets.h, no cc_step_parse_only, no notes in a link entry.
+ * SIZE2: the packed table (section PRPZ: each distinct set once, gzip blocks): every element's entry read
+ * back through the packed reader is the table's, the shared sets stored once, the section smaller; a
+ * table of 3,000 elements sharing 3 sets packs to a few % of it; hostile packed sections (every byte
+ * flipped, cuts, a block that inflates past its declared size) are refused or read as JSON-free errors, no
+ * crash, no read past the section. Fails before SIZE2: no cc_psets_pack. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +17,80 @@
 #include "viewfile.h"
 
 static const char *golden;
+
+/* SIZE2: the packed reader over bytes in memory (a cache's section) */
+typedef struct { const uint8_t *p; uint64_t n; } Mem;
+static int mem_read(void *ctx, uint64_t off, size_t n, void *dst) {
+    const Mem *m = ctx;
+    if (off > m->n || n > m->n - off) return -1;
+    memcpy(dst, m->p + off, n);
+    return 0;
+}
+
+static void packed(const char *what, const Buf *t, int shared_expected) {
+    Buf pk;
+    buf_init(&pk);
+    char msg[200];
+    snprintf(msg, sizeof msg, "%s: packed", what);
+    check_true(msg, cc_psets_pack((const uint8_t *)t->p, t->len, &pk) == 0 && !pk.oom);
+    uint32_t ne = 0, ns = 0, nr = 0;
+    memcpy(&ne, pk.p, 4), memcpy(&ns, pk.p + 4, 4), memcpy(&nr, pk.p + 8, 4);
+    Mem m = {(const uint8_t *)pk.p, pk.len};
+    int same = cc_psets_packed_check((const uint8_t *)pk.p, pk.len, pk.len, ne) == 0;
+    Buf e;
+    buf_init(&e);
+    for (size_t i = 0; same && i < ne; i++) {
+        const uint8_t *p;
+        size_t len;
+        buf_clear(&e);
+        same = cc_psets_entry((const uint8_t *)t->p, t->len, i, &p, &len) == 0 && cc_psets_packed_entry(mem_read, &m, pk.len, i, &e) == 0 &&
+               e.len == len && (!len || !memcmp(e.p, p, len));
+    }
+    snprintf(msg, sizeof msg, "%s: every entry read back from the packed table is the table's (%u elements, %u references, %u distinct sets; %zu -> %zu bytes)",
+             what, ne, nr, ns, t->len, pk.len);
+    check_true(msg, same);
+    if (shared_expected) {
+        snprintf(msg, sizeof msg, "%s: shared sets stored once, the packed table under a tenth of the table", what);
+        check_true(msg, ns < nr && pk.len * 10 < t->len);
+    }
+    /* hostile: every byte flipped (a sample), every cut: refused or read, never a crash or a read past */
+    size_t step = pk.len / 500 + 1, reads = 0;
+    uint8_t *d = malloc(pk.len);
+    for (size_t at = 0; d && at < pk.len; at += step) {
+        memcpy(d, pk.p, pk.len);
+        d[at] ^= 0x5a;
+        Mem h = {d, pk.len};
+        for (size_t i = 0; i < ne && i < 40; i++) {
+            buf_clear(&e);
+            reads += cc_psets_packed_entry(mem_read, &h, pk.len, i, &e) == 0;
+        }
+    }
+    for (size_t cut = 0; cut < pk.len; cut += step) {
+        Mem h = {(const uint8_t *)pk.p, cut};
+        buf_clear(&e);
+        if (cc_psets_packed_entry(mem_read, &h, cut, ne ? ne - 1 : 0, &e) == 0 && cut < pk.len && e.len) reads++;
+    }
+    snprintf(msg, sizeof msg, "%s: damaged packed tables never crash (%zu entries still read)", what, reads);
+    check_true(msg, 1);
+    free(d);
+    buf_free(&e), buf_free(&pk);
+}
+
+/* SIZE2: a table of `n` elements, each with one of 3 sets (as IfcRelDefinesByProperties shares them). */
+static void shared_table(Buf *t, size_t n) {
+    static const char *const SETS[3] = {"[{\"name\":\"Pset_WallCommon\",\"properties\":[{\"name\":\"IsExternal\",\"value\":\"true\"},{\"name\":\"LoadBearing\",\"value\":\"false\"}],\"type\":\"IfcPropertySet\"}]",
+                                        "[{\"name\":\"Pset_SlabCommon\",\"properties\":[{\"name\":\"IsExternal\",\"value\":\"false\"}],\"type\":\"IfcPropertySet\"},{\"name\":\"Qto\",\"properties\":[{\"name\":\"Width\",\"value\":\"200\"}],\"type\":\"IfcElementQuantity\"}]",
+                                        ""};
+    uint32_t c = (uint32_t)n, end = 0;
+    buf_append(t, &c, 4);
+    size_t head = t->len;
+    for (size_t i = 0; i < n; i++) buf_append(t, &end, 4);
+    for (size_t i = 0; i < n; i++) {
+        buf_puts(t, SETS[i % 3]);
+        end = (uint32_t)(t->len - head - 4 * n);
+        memcpy(t->p + head + 4 * i, &end, 4);
+    }
+}
 
 static void psets_of_frame(void) {
     size_t n;
@@ -67,6 +146,43 @@ static void psets_of_frame(void) {
     check_true("a table shorter than its head", cc_psets_entry(tiny, 3, 0, &p, &len) != 0);
     check_true("a table counting more entries than it holds", cc_psets_entry(big, 8, 0, &p, &len) != 0);
     check_true("an entry past the count", cc_psets_entry((const uint8_t *)t.p, t.len, s.scene.nelements, &p, &len) != 0);
+    packed("frame.ifc", &t, 0); /* SIZE2 */
+    { /* SIZE2: the packed section in a cache: PRPZ found, kept on disk, its head checked */
+        Buf pk, vb2;
+        buf_init(&pk), buf_init(&vb2);
+        cc_viewfile_meta mt2;
+        int ok = !cc_psets_pack((const uint8_t *)t.p, t.len, &pk) && !cc_ifc_scene_meta(&s, &mt2) && !cc_viewfile_write_meta(&mt2, &s.scene, 0, &vb2) &&
+                 !cc_viewfile_append_psets_packed(&vb2, pk.p, pk.len);
+        cc_viewfile_meta_free(&mt2);
+        ok = ok && cc_viewfile_read((const uint8_t *)vb2.p, vb2.len, &v, &err) == 0 && v.has_psets && v.psets_packed &&
+             v.psets_off + v.psets_len == vb2.len && v.psets_len == pk.len;
+        check_true("the cache read: PRPZ found, packed, not copied", ok);
+        cc_viewfile_free(&v);
+        vb2.p[vb2.len - pk.len] ^= 1; /* its element count */
+        check_true("a PRPZ of another element count refused", cc_viewfile_read((const uint8_t *)vb2.p, vb2.len, &v, &err) != 0);
+        cc_viewfile_free(&v);
+        buf_free(&pk), buf_free(&vb2);
+    }
+    {
+        Buf big;
+        buf_init(&big);
+        shared_table(&big, 3000);
+        packed("3,000 elements sharing 3 sets", &big, 1);
+        /* a block that inflates past its declared size: the declared size shrunk (send[] of the last set) */
+        Buf pk;
+        buf_init(&pk);
+        cc_psets_pack((const uint8_t *)big.p, big.len, &pk);
+        uint32_t ne, ns, nr;
+        memcpy(&ne, pk.p, 4), memcpy(&ns, pk.p + 4, 4), memcpy(&nr, pk.p + 8, 4);
+        size_t send_last = 16 + 4 * ((size_t)ne + 1) + 4 * (size_t)nr + 4 * ((size_t)ns - 1);
+        uint32_t small = 3;
+        memcpy(pk.p + send_last, &small, 4);
+        Mem m = {(const uint8_t *)pk.p, pk.len};
+        Buf e;
+        buf_init(&e);
+        check_true("a block inflating past its declared size refused (zip-bomb guard)", cc_psets_packed_entry(mem_read, &m, pk.len, 1, &e) != 0);
+        buf_free(&e), buf_free(&pk), buf_free(&big);
+    }
     buf_free(&vb), buf_free(&t);
     cc_ifc_scene_free(&s);
     free(text);
