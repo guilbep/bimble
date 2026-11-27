@@ -48,7 +48,7 @@ const FEATURES = [
   ["queries (model queries)", "query"],
   ["quantities and schedules", "quantity schedules verbs_schedules"], // QTY1: saved lists (ADR 0080)
   ["command palette", "palette"],
-  ["scene and mesh (triangulation, BMSH)", "scene earcut meshcodec mesh mesh_model prism_cut scene_bmsh hlod bvh"],
+  ["scene and mesh (triangulation, BMSH)", "scene earcut meshcodec mesh mesh_model prism_cut scene_bmsh hlod tiles bvh"],
   ["booleans glue (kernel calls)", "boolean"],
   ["views and visibility (2D views, ranges)", "view view_effective view_range views visibility"],
   ["drawing D1-D5 (cut, plan, annotations, style, sheets, paper, SVG)", "draw_cut draw_plan draw_annot draw_style draw_view draw_sheet paper sheet_svg toggles paper_scene"],

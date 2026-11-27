@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "hlod.h"
+#include "hlod_grid.h"
 #include "math.h"
 #include "scene_build.h"
 
@@ -24,40 +25,6 @@ static int fail(cc_error *err, const char *msg) {
 
 /* ---- the clusters (hlod.rs:236 Family, Grid; 377 Clusters) ---- */
 
-typedef struct {
-    int64_t k[3];
-} Key;
-typedef struct {
-    Key k;
-    double s[3]; /* sum of the original vertices in the grid cell */
-    uint64_t n;  /* their count */
-} Vert;
-typedef struct {
-    Key t[3];
-} Tri;
-typedef struct {
-    Vert *v;
-    size_t nv, cv;
-    Tri *t;
-    size_t nt, ct;
-} Fam;
-typedef struct {
-    uint32_t e; /* the grid's cell size is g0 x 2^e */
-    Fam f[CC_CAT_COUNT];
-    uint64_t tmark, vmark; /* triangles and vertices after the last merge */
-} Grid;
-typedef struct { /* a finished family: verts sorted by key, triangles as indices into them */
-    Vert *v;
-    size_t nv;
-    uint32_t (*t)[3];
-    size_t nt;
-} Part;
-typedef struct {
-    uint32_t e;
-    int built;
-    Part p[CC_CAT_COUNT];
-} Clusters;
-
 static int key_cmp(const Key *a, const Key *b) {
     for (int i = 0; i < 3; i++)
         if (a->k[i] != b->k[i]) return a->k[i] < b->k[i] ? -1 : 1;
@@ -76,12 +43,12 @@ static int tri_cmp(const void *a, const void *b) {
 
 /* `c >> s` on i64 (floor division by 2^s), as Rust's arithmetic shift. */
 static int64_t shr(int64_t c, unsigned s) { return c >= 0 ? c >> s : ~((~c) >> s); }
-static Key up(Key k, unsigned s) {
+Key cc_hg_up(Key k, unsigned s) {
     for (int i = 0; i < 3; i++) k.k[i] = shr(k.k[i], s);
     return k;
 }
 
-static int fam_vert(Fam *f, Key k, const double s[3], uint64_t n) { /* hlod.rs:247 add_vertex (merged later) */
+int cc_hg_fam_vert(Fam *f, Key k, const double s[3], uint64_t n, const float *box) { /* hlod.rs:247 add_vertex (merged later) */
     if (f->nv == f->cv) {
         size_t c = f->cv ? 2 * f->cv : 64;
         Vert *v = realloc(f->v, c * sizeof *v);
@@ -91,12 +58,14 @@ static int fam_vert(Fam *f, Key k, const double s[3], uint64_t n) { /* hlod.rs:2
     Vert *v = &f->v[f->nv++];
     v->k = k, v->n = n;
     memcpy(v->s, s, sizeof v->s);
+    for (int j = 0; j < 3; j++) /* TILE1: the members' box (a point: itself) */
+        v->lo[j] = box ? box[j] : (float)(s[j] / (double)(n ? n : 1)), v->hi[j] = box ? box[3 + j] : v->lo[j];
     return 0;
 }
 
 /* hlod.rs:254 add_triangle: dropped when two corners share a cell; kept once whatever corner it
  * starts from (the smallest first, the turn kept). */
-static int fam_tri(Fam *f, Key a, Key b, Key c) {
+int cc_hg_fam_tri(Fam *f, Key a, Key b, Key c) {
     if (key_eq(&a, &b) || key_eq(&b, &c) || key_eq(&a, &c)) return 0;
     Key t[3] = {a, b, c};
     int r = 0;
@@ -122,6 +91,10 @@ static void fam_compact(Fam *f) {
             if (key_eq(&f->v[i].k, &f->v[o].k)) {
                 for (int c = 0; c < 3; c++) f->v[o].s[c] += f->v[i].s[c];
                 f->v[o].n += f->v[i].n;
+                for (int c = 0; c < 3; c++) {
+                    if (f->v[i].lo[c] < f->v[o].lo[c]) f->v[o].lo[c] = f->v[i].lo[c];
+                    if (f->v[i].hi[c] > f->v[o].hi[c]) f->v[o].hi[c] = f->v[i].hi[c];
+                }
             } else f->v[++o] = f->v[i];
         }
         f->nv = o + 1;
@@ -135,12 +108,12 @@ static void fam_compact(Fam *f) {
     }
 }
 
-static void grid_free(Grid *g) {
+void cc_hg_grid_free(Grid *g) {
     for (int i = 0; i < CC_CAT_COUNT; i++) free(g->f[i].v), free(g->f[i].t);
     memset(g, 0, sizeof *g);
 }
 
-static uint64_t grid_triangles(const Grid *g) {
+uint64_t cc_hg_grid_triangles(const Grid *g) {
     uint64_t n = 0;
     for (int i = 0; i < CC_CAT_COUNT; i++) n += g->f[i].nt;
     return n;
@@ -157,45 +130,45 @@ static uint64_t grid_vertices(const Grid *g) {
  * (sorted) only when they have doubled since the last merge and pass the cap, and always at the end
  * (`force`): the unique triangles at a grid only grow as triangles are added and only fall as the
  * grid coarsens, so the final grid is the same coarsest-needed one, in O(n log n). */
-static int grid_fit(Grid *g, uint64_t max, int force) {
-    uint64_t nt = grid_triangles(g), nv = grid_vertices(g);
+int cc_hg_grid_fit(Grid *g, uint64_t max, int force) {
+    uint64_t nt = cc_hg_grid_triangles(g), nv = grid_vertices(g);
     if (!force && !((nt > max && nt >= 2 * g->tmark) || (nv > 4 * max && nv >= 2 * g->vmark))) return 0;
     for (int i = 0; i < CC_CAT_COUNT; i++) fam_compact(&g->f[i]);
-    while (grid_triangles(g) > max && g->e < 62) {
+    while (cc_hg_grid_triangles(g) > max && g->e < 62) {
         g->e++;
         for (int i = 0; i < CC_CAT_COUNT; i++) {
             Fam *f = &g->f[i];
-            for (size_t v = 0; v < f->nv; v++) f->v[v].k = up(f->v[v].k, 1);
+            for (size_t v = 0; v < f->nv; v++) f->v[v].k = cc_hg_up(f->v[v].k, 1);
             size_t n = f->nt;
             f->nt = 0;
             for (size_t t = 0; t < n; t++) { /* in place: fam_tri writes at most where it reads */
                 Tri x = f->t[t];
-                if (fam_tri(f, up(x.t[0], 1), up(x.t[1], 1), up(x.t[2], 1))) return -1;
+                if (cc_hg_fam_tri(f, cc_hg_up(x.t[0], 1), cc_hg_up(x.t[1], 1), cc_hg_up(x.t[2], 1))) return -1;
             }
             fam_compact(f);
         }
     }
-    g->tmark = grid_triangles(g), g->vmark = grid_vertices(g);
+    g->tmark = cc_hg_grid_triangles(g), g->vmark = grid_vertices(g);
     return 0;
 }
 
 /* hlod.rs:330 add_clusters: a child's clusters, on this coarser grid. */
-static int grid_add_clusters(Grid *g, const Clusters *cl) {
+int cc_hg_grid_add_clusters(Grid *g, const Clusters *cl) {
     unsigned shift = g->e > cl->e ? g->e - cl->e : 0;
     if (shift > 63) shift = 63;
     for (int i = 0; i < CC_CAT_COUNT; i++) {
         const Part *p = &cl->p[i];
         Fam *f = &g->f[i];
         for (size_t v = 0; v < p->nv; v++)
-            if (fam_vert(f, up(p->v[v].k, shift), p->v[v].s, p->v[v].n)) return -1;
+            if (cc_hg_fam_vert(f, cc_hg_up(p->v[v].k, shift), p->v[v].s, p->v[v].n, p->v[v].lo)) return -1;
         for (size_t t = 0; t < p->nt; t++)
-            if (fam_tri(f, up(p->v[p->t[t][0]].k, shift), up(p->v[p->t[t][1]].k, shift), up(p->v[p->t[t][2]].k, shift)))
+            if (cc_hg_fam_tri(f, cc_hg_up(p->v[p->t[t][0]].k, shift), cc_hg_up(p->v[p->t[t][1]].k, shift), cc_hg_up(p->v[p->t[t][2]].k, shift)))
                 return -1;
     }
     return 0;
 }
 
-static void clusters_free(Clusters *c) {
+void cc_hg_clusters_free(Clusters *c) {
     for (int i = 0; i < CC_CAT_COUNT; i++) free(c->p[i].v), free(c->p[i].t);
     memset(c, 0, sizeof *c);
 }
@@ -213,7 +186,7 @@ static size_t find_vert(const Vert *v, size_t n, const Key *k) {
 }
 
 /* hlod.rs:360 finish: sorted (deterministic) and compact; the grid is emptied. */
-static int grid_finish(Grid *g, Clusters *out) {
+int cc_hg_grid_finish(Grid *g, Clusters *out) {
     memset(out, 0, sizeof *out);
     out->e = g->e, out->built = 1;
     for (int i = 0; i < CC_CAT_COUNT; i++) {
@@ -229,11 +202,11 @@ static int grid_finish(Grid *g, Clusters *out) {
         p->v = f->v, p->nv = f->nv; /* the grid's sorted vertices move into the part */
         f->v = NULL, f->nv = f->cv = 0;
     }
-    grid_free(g);
+    cc_hg_grid_free(g);
     return 0;
 }
 
-static uint64_t clusters_triangles(const Clusters *c) {
+uint64_t cc_hg_clusters_triangles(const Clusters *c) {
     uint64_t n = 0;
     for (int i = 0; i < CC_CAT_COUNT; i++) n += c->p[i].nt;
     return n;
@@ -289,8 +262,8 @@ static int lattice_key(const struct cc_hlod_work *w, const float p[3], uint32_t 
 static void work_free(struct cc_hlod_work *w, uint32_t ncells) {
     if (!w) return;
     if (w->cl)
-        for (uint32_t i = 0; i < ncells; i++) clusters_free(&w->cl[i]);
-    grid_free(&w->g);
+        for (uint32_t i = 0; i < ncells; i++) cc_hg_clusters_free(&w->cl[i]);
+    cc_hg_grid_free(&w->g);
     free(w->cl), free(w->tris), free(w->order), free(w->wpos), free(w->stamp), free(w->keys), free(w->has), free(w->ke);
     arena_free(&w->scratch);
     free(w);
@@ -349,13 +322,13 @@ static int add_triangles(struct cc_hlod_work *w, cc_category cat, const float (*
                 w->ke[i] = (uint8_t)w->g.e;
                 if (w->has[i]) {
                     double s[3] = {pos[i][0], pos[i][1], pos[i][2]};
-                    if (fam_vert(f, w->keys[i], s, 1)) return -1;
+                    if (cc_hg_fam_vert(f, w->keys[i], s, 1, NULL)) return -1;
                 }
             }
             if (!w->has[i]) ok = 0;
-            else k[c] = up(w->keys[i], w->g.e - w->ke[i]);
+            else k[c] = cc_hg_up(w->keys[i], w->g.e - w->ke[i]);
         }
-        if (ok && fam_tri(f, k[0], k[1], k[2])) return -1;
+        if (ok && cc_hg_fam_tri(f, k[0], k[1], k[2])) return -1;
     }
     return 0;
 }
@@ -588,7 +561,7 @@ int cc_hlod_step(cc_hlod *h, uint64_t budget, cc_error *err) {
                     if (k > max) k = max;
                     if (k > rem) k = rem;
                     if (add_triangles(w, w->s->elements[el].category, p, m->nv, m->idx, w->off, w->off + k, mir) ||
-                        grid_fit(&w->g, max, 0))
+                        cc_hg_grid_fit(&w->g, max, 0))
                         return fail(err, "out of memory");
                     w->off += k, h->read += k, used += k;
                     if (used >= budget) { /* the next step goes on from here */
@@ -604,19 +577,19 @@ int cc_hlod_step(cc_hlod *h, uint64_t budget, cc_error *err) {
         for (uint32_t k = 0; k < c->nchildren; k++) {
             Clusters *ch = &w->cl[c->children[k]];
             if (!ch->built) continue;
-            used += clusters_triangles(ch);
-            if (grid_add_clusters(&w->g, ch) || grid_fit(&w->g, max, 0)) return fail(err, "out of memory");
+            used += cc_hg_clusters_triangles(ch);
+            if (cc_hg_grid_add_clusters(&w->g, ch) || cc_hg_grid_fit(&w->g, max, 0)) return fail(err, "out of memory");
         }
         Clusters cl;
-        if (grid_fit(&w->g, max, 1) || grid_finish(&w->g, &cl)) {
-            clusters_free(&cl);
+        if (cc_hg_grid_fit(&w->g, max, 1) || cc_hg_grid_finish(&w->g, &cl)) {
+            cc_hg_clusters_free(&cl);
             return fail(err, "out of memory");
         }
         w->open = 0;
-        for (uint32_t k = 0; k < c->nchildren; k++) clusters_free(&w->cl[c->children[k]]);
+        for (uint32_t k = 0; k < c->nchildren; k++) cc_hg_clusters_free(&w->cl[c->children[k]]);
         c->error_mm = (float)(lattice_size(w, cl.e) * cc_sqrt(3.0));
-        if ((double)clusters_triangles(&cl) <= w->o.max_ratio * (double)c->original_triangles && proxy_of(h, w, &cl, c)) {
-            clusters_free(&cl);
+        if ((double)cc_hg_clusters_triangles(&cl) <= w->o.max_ratio * (double)c->original_triangles && proxy_of(h, w, &cl, c)) {
+            cc_hg_clusters_free(&cl);
             return fail(err, "out of memory");
         }
         w->cl[ci] = cl;
