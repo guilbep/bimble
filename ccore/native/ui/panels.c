@@ -174,7 +174,7 @@ static void json_rows(App *a, const char *key, const JrVal *v, int depth, int *r
     }
     char val[256];
     if (v->type == JR_STR) snprintf(val, sizeof val, "%s", v->s);
-    else if (v->type == JR_NUM) snprintf(val, sizeof val, "%.*s", (int)(v->n < 60 ? v->n : 60), v->s);
+    else if (v->type == JR_NUM) snprintf(val, sizeof val, "%.10g", v->num); /* the token points into the answer, freed */
     else if (v->type == JR_BOOL) snprintf(val, sizeof val, "%s", v->b ? "true" : "false");
     else snprintf(val, sizeof val, "—");
     float s = a->scale;

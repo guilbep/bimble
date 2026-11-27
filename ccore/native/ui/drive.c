@@ -229,6 +229,18 @@ static int run_step(App *a, Step *s, double now) {
     }
     if (!strcmp(op, "action")) { a->input_t = app_now(), snprintf(a->input_what, sizeof a->input_what, "action %.30s", arg); tool_run_action(a, arg); return 1; }
     if (!strcmp(op, "open")) { app_open(a, arg); return 1; }
+    if (!strcmp(op, "view")) { a->input_t = app_now(), snprintf(a->input_what, sizeof a->input_what, "view"); view_set(a, *arg ? arg : NULL); return 1; }
+    if (!strcmp(op, "show")) { /* show perf|keys|settings|file_menu|links|none: a panel or dialog as its control opens it */
+        a->input_t = app_now(), snprintf(a->input_what, sizeof a->input_what, "show %.20s", arg);
+        if (!strcmp(arg, "perf")) a->dialog = DLG_PERF;
+        else if (!strcmp(arg, "keys")) a->dialog = DLG_KEYS;
+        else if (!strcmp(arg, "settings")) tool_run_action(a, "settings");
+        else if (!strcmp(arg, "file_menu")) a->file_menu = 1;
+        else if (!strcmp(arg, "links")) a->links_panel = 1;
+        else if (!strcmp(arg, "link_dialog")) tool_run_action(a, "link_folder");
+        else a->dialog = DLG_NONE, a->file_menu = 0, a->links_panel = 0;
+        return 1;
+    }
     if (!strcmp(op, "call")) { /* call <op> <name> <json>: a core call as the page makes it (a test's setup) */
         char cop[24] = "", cname[64] = "";
         int used = 0;

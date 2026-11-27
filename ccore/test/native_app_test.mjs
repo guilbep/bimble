@@ -159,6 +159,14 @@ wait complete
 frames 3
 expect_parts 5
 shot links6.png
+drag 0.3 0.5 0.6 0.45 800
+wheel 0.5 0.5 2
+wheel 0.5 0.5 -1
+rdrag 0.5 0.5 0.55 0.55 300
+click 0.5 0.5
+frames 3
+key f
+frames 2
 report report.txt
 quit
 `, null, [], { BIMBLE_LINK_CACHE_MIN: "0" });
@@ -180,7 +188,7 @@ shot linkpick.png
 quit
 `, null, [], { BIMBLE_LINK_CACHE_MIN: "0" });
   check("linkpick: exits 0", r3.code === 0 && !r3.signal, `${r3.code} ${r3.signal ?? ""}`);
-  inputs("links", r3, software);
+  inputs("links6", r2, software);
 
   // ---- 4. malformed files: the core's error, never a crash ----
   const bad = join(tmp, "bad");

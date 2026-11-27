@@ -266,7 +266,7 @@ static void frame(App *a) {
             SDL_GPUTexture *t3d = a->r ? nv_render_color(a->r) : NULL; /* none yet: nothing drawn (a NULL texture crashes the backend) */
             ImTextureRef_c ref = {NULL, (ImTextureID)(uintptr_t)t3d};
             if (t3d) ImDrawList_AddImage(bg, ref, V2(a->vx, a->vy), V2(a->vx + a->vw, a->vy + a->vh), V2(0, 0), V2(1, 1), 0xFFFFFFFFu);
-            ImDrawList *fg = igGetForegroundDrawList_Nil();
+            ImDrawList *fg = bg; /* the overlays under every window (a dialog or a menu covers them) */
             tool_box_draw(a, fg);
             tool_measure_draw(a, fg);
             ImVec2 mp = igGetIO_Nil()->MousePos;
