@@ -79,12 +79,33 @@ make native-test                  # = ccore/ci/run.sh native (the CI job ccore-n
   the app's work done, event → the GPU's fence), `memory.csv`, `summary.md` and the shots; the steps
   are listed at the top of `ccore/native/ui/drive.c`. `--shot f.png --quit-after n` for one picture.
 - Under ASan and UBSan: `ccore/native/build.sh asan` → `ccore/out/app-asan/bimble`.
+- **The session log** (NUI2, local only): each windowed session writes `session.log` (versions, GPU, the window's
+  and swapchain's sizes at each change, settings, files opened and their times, SDL errors and assertions, a crash's
+  stack addresses), `frames.csv` (a row a second), `inputs.csv` (inputs over 100 ms) and `report.txt` (every 10 s)
+  under `$XDG_STATE_HOME/bimble/sessions/<UTC time>-<pid>/` (default `~/.local/state/…`; `BIMBLE_LOG_DIR`
+  overrides, and turns it on offscreen); the last 20 kept; `bimble --last-log` prints the newest folder; off:
+  Settings › Local session log (`native.json` `session_log`). An SDL assertion is logged and the session goes on.
+- `--resize-script 1280x720,640x400,…` (offscreen): a size every 3 frames, the window first and the target a frame
+  later, as a tiling compositor on Wayland does; every size of a frame comes from the target acquired that frame.
+- `--set key=value`: one of the app's own settings (`native.json`) for this run only.
 - The shell's data (ribbon, keys, strings, themes, the machine's shape) comes from the TypeScript:
   after a change there, `node web-ui/scripts/export-shell-data.mjs` and commit
   `ccore/native/ui/data/` (`ccore/ci/run.sh unit` checks it).
 - Its own environment: `BIMBLE_NATIVE_LOADERS` (link loader threads, default 2), `BIMBLE_LINK_GPU_MB`
   (the links' GPU budget for one run; else the setting), and the host's `BIMBLE_CONFIG_DIR`,
   `BIMBLE_CACHE_DIR`, `BIMBLE_LINK_CACHE_BESIDE=0`, `BIMBLE_LINK_CACHE_MIN`.
+- **The tile path** (NUI2, ADR 0084 amendment): `--set renderer_path=tiles` draws every link with a section `TILE`
+  (and the open model) by tiles, with exact two-pass occlusion; its settings `draw_visible`, `occlusion_groups`,
+  `error_px`, `lod`, `still_px`, `cull_back` (`--set key=value` for a run; Settings › Optimisations).
+  `--truth` draws each 3D frame without then with occlusion and compares the id and depth buffers (summary.md:
+  frames, frames with ids missing, ids missing, coplanar ties). `--compare k=v,k=v --compare …` runs the same
+  script once per set and prints the summaries side by side (`<out>/compare.md`). Driver steps for tiles:
+  `look_box fx fy fz tx ty tz` (a camera inside the scene's box), `check_tiles` (every leaf's elements inside
+  its box). `BIMBLE_TILES_DEBUG=1`: one line a frame (walk, commands, tests, tiles loaded and wanted);
+  `BIMBLE_TILES_SURPLUS=1`: at each `shot`, where the leaves' triangles went (of elements shown, pass 1, pass 2,
+  and of elements not shown by cause). `frames_in_flight` (2): the next frame recorded while the GPU draws this one.
+- A crash: `ccore/native/symbolize.sh [session folder]` turns the session log's raw stack into functions and
+  lines with `ccore/out/app/debug/<build id>.debug` (kept by `native/build.sh app`, the last 20 builds).
 
 ## 3. Tests
 

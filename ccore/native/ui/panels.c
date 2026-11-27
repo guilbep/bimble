@@ -57,7 +57,7 @@ static void link_count(App *a, const JrVal *L, char *cnt, size_t n) {
     else if (!strcmp(st, "ready")) {
         snprintf(cnt, n, "%.0f", jnum(L, "elements", 0));
         for (int i = 0; i < a->nlinks; i++) /* NUI1: proxies until its detail is drawn */
-            if (!strcmp(a->links_s[i].name, js(L, "name")) && !a->links_s[i].detail && a->links_s[i].detail_state != 3 && a->links_s[i].nelem)
+            if (!strcmp(a->links_s[i].name, js(L, "name")) && !a->links_s[i].detail && !a->links_s[i].ts && a->links_s[i].detail_state != 3 && a->links_s[i].nelem)
                 snprintf(cnt, n, "%s", a->links_s[i].proxy ? T(a, "links.proxiesOnly") : T(a, "native.loading"));
     } else {
         char key[64];

@@ -78,6 +78,9 @@ typedef struct {
     int has_box;
     uint64_t tris;
     double t_ready, t_proxy, t_detail, load_ms;
+    nv_tileset *ts;      /* NUI2: drawn by tiles (its cache's section TILE); NULL: as parts */
+    char (*ids)[22];     /* its elements' GlobalIds (tiles: no part holds them) */
+    int tiles_inflight;
 } SLink;
 
 typedef struct App App;
@@ -91,6 +94,8 @@ typedef struct {
 } Step;
 
 typedef struct { double t; double ms; char what[48]; } InputTime;
+/* NUI2: a frame submitted, finished at the next frame (frames in flight) */
+typedef struct { SDL_GPUFence *f; int drew3d, pick, moving; double t_ui, t_recui, input_t; char input_what[48]; int pick_add; double st[5]; } Pend; /* st: that frame's logic, acquire, UI build, 3D record, UI record */
 
 struct App {
     /* the process */
@@ -161,6 +166,9 @@ struct App {
     float lx, ly, dx0, dy0;
     int drag_moved;
     int pick_pending, pick_x, pick_y, pick_add;
+    uint32_t msel[256];        /* NUI2, Ctrl-click: the other selected elements (global + 1), the last picked is `selected` */
+    int nmsel;
+    int drive_ctrl;            /* the driver's Ctrl held for the next click */
     uint32_t selected;         /* global element + 1, 0 none */
     char sel_id[23], sel_link[256];
     int box_on, box_drag;      /* the section box (scene mm) and its handle held */
@@ -216,6 +224,36 @@ struct App {
     double next_mem;
     int quit_after;            /* --quit-after N frames once complete */
     int fails;
+    /* NUI2: the window's sizes as acquired, the session log, SDL's assertions */
+    uint32_t swap_w, swap_h;     /* the target acquired this frame (the swapchain's; offscreen: the virtual one) */
+    int session_log;             /* native.json session_log (default on in a window) */
+    unsigned sdl_asserts;
+    char *resize_script;         /* offscreen: "WxH,WxH,..." one every 3 frames, the swapchain a frame after the window */
+    int resize_i, resize_wait;
+    uint32_t resize_w, resize_h; /* the virtual swapchain's next size (applied a frame after the window's) */
+    char notice_path[1200];      /* the last report saved (Performance) */
+    /* NUI2: the last frame's time by stage (ms): the app's logic (core, loader results, the walk), the swapchain's
+     * wait, the UI's build, the 3D frame's recording (CPU), the UI's recording, the GPU (submit -> fence) */
+    double st_logic, st_acquire, st_ui, st_rec3d, st_recui, st_gpu;
+    unsigned bench_skip;
+    /* NUI2: the tile path (renderer_path=tiles), its options, the tile jobs on their way */
+    int use_tiles;
+    nv_tiles_opts topts;
+    int tile_jobs;
+    nv_tileset *model_ts;        /* the open model's pyramid (built by a loader job after the open) */
+    int model_tiles;             /* 0 none, 1 building, 2 drawn by tiles, 3 failed (drawn as a part) */
+    const void *model_ident;     /* the session's scene the pyramid was asked for */
+    double model_off[3];
+    char (*model_ids)[22];       /* a view file opened (no mesh answer): its elements' ids for the tiles */
+    uint32_t model_elem0, model_nE;
+    uint64_t tri_live;           /* the moving budget's triangles for the walker (0: none) */
+    double tiles_checked;
+    Pend pend;
+    int in_flight;               /* frames_in_flight: 2 (the next frame recorded while the GPU draws this one) or 1 */
+    double interval_ms;          /* the time between the last two 3D frames done */
+    int truth;                   /* --truth: each 3D frame drawn with and without occlusion, the id buffers compared */
+    char settings_line[600];     /* the optimisations in force (the report's line, for the summary) */
+    int truth_missing, truth_ties, truth_small; /* truth_small: of the missing, those with 8 pixels or fewer (edge-on slivers) */           /* the truth test: element ids missing from this frame with occlusion (-1: not tested) */
 };
 
 /* core.c */
@@ -237,6 +275,7 @@ const char *T(App *a, const char *key);                       /* the string for 
 const char *Tf(App *a, char *out, size_t n, const char *key, const char *var, const char *val);
 int data_load(App *a);
 void core_select(App *a, uint32_t elem1);
+void core_select_add(App *a, uint32_t elem1); /* Ctrl-click: added, or removed when it was selected */
 void core_visibility(App *a);
 int core_key(App *a, SDL_Keycode k, SDL_Keymod mod, int typing);
 void json_str(Buf *b, const char *s);                         /* a JSON string literal */
@@ -250,6 +289,7 @@ int scene_complete(App *a);
 int scene_box(App *a, double lo[3], double hi[3]);
 void scene_ids(App *a);
 uint32_t scene_find(App *a, const char *id, size_t n);
+void tiles_check(App *a);
 int scene_elem(App *a, uint32_t elem, char id[23], char *link, size_t nlink);
 /* icons.c */
 int icons_build(App *a);
@@ -275,6 +315,8 @@ void home_screen(App *a);
 void dialogs(App *a);
 void fs_open(App *a, const char *dir, const char *purpose);
 void perf_report(App *a, Buf *b);
+void perf_copy(App *a);              /* Performance › Copy (also to a file) */
+void perf_save_as(App *a);           /* Performance › Save report… */
 void optimisations_apply(App *a);   /* the settings' optimisations into the renderer (at open) */
 void optimisations_ui(App *a);      /* the "Optimisations" group (Settings, Performance) */
 /* tools.c */
@@ -295,6 +337,25 @@ void drive_frame(App *a, double now, int drew3d);
 void drive_finish(App *a);
 void app_shot(App *a, const char *path);
 void app_input_done(App *a, double now);
+void app_finish_frame(App *a);
+/* slog.c: the local session log */
+int slog_open(App *a);
+void slog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void slog_sdl_hooks(App *a);
+void slog_frame(App *a, double now, int drew3d, double frame_ms);
+void slog_input(App *a, const char *what, double app_ms, double ms);
+void slog_report(App *a, const char *name);
+void slog_close(App *a);
+const char *slog_dir(void);
+int slog_last(void);
+int slog_save_report(App *a, char *path, size_t n);
+/* nset.c: the native app's own settings (native.json) */
+void nset_load(App *a);
+const char *nset_get(const char *key);
+double nset_num(const char *key, double dflt);
+void nset_set(const char *key, const char *json, int run);
+/* compare.c */
+int compare_main(int argc, char **argv);
 /* app.c */
 void app_fit(App *a);
 double app_now(void);

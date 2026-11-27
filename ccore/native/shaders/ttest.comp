@@ -1,0 +1,44 @@
+#version 450
+// NUI2: each selected tile's box against the depth pyramid of pass 1. Hidden when its nearest point (reverse Z: the
+// largest depth) is behind the farthest depth over every texel its screen rectangle covers (the level where that
+// rectangle spans at most 2 x 2 texels); a box reaching behind the near plane is never hidden. Writes its gate (its
+// draws in pass 2, its answer read back) and, when it is visible and not loaded, its stand-in's gate. The level is the
+// finest where the rectangle spans at most 4 x 4 texels (16 reads).
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, r32f) uniform readonly image2D hiz;
+struct Test { vec4 lo; vec4 hi; uvec4 g; }; // g.x own gate, g.y its stand-in's gate (0 none)
+layout(std430, set = 0, binding = 1) readonly buffer Tests { Test test[]; };
+layout(std430, set = 1, binding = 0) buffer Gates { uint gate[]; };
+layout(set = 2, binding = 0) uniform U { mat4 vp; vec4 px; ivec4 n; ivec4 lv[16]; }; // px: W, H, near; n: tests, levels; lv: x offset, w, h
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(n.x)) return;
+    Test t = test[i];
+    bool vis = false;
+    float zmax = 0.0;
+    vec2 mn = vec2(3.0e38), mx = vec2(-3.0e38);
+    for (int k = 0; k < 8; k++) {
+        vec3 c = vec3((k & 1) != 0 ? t.hi.x : t.lo.x, (k & 2) != 0 ? t.hi.y : t.lo.y, (k & 4) != 0 ? t.hi.z : t.lo.z);
+        vec4 q = vp * vec4(c, 1.0);
+        if (q.w <= px.z) { vis = true; break; }
+        vec3 d = q.xyz / q.w;
+        zmax = max(zmax, d.z);
+        vec2 s = vec2((d.x * 0.5 + 0.5) * px.x, (0.5 - 0.5 * d.y) * px.y);
+        mn = min(mn, s), mx = max(mx, s);
+    }
+    if (!vis) {
+        if (mx.x < 0.0 || mx.y < 0.0 || mn.x > px.x || mn.y > px.y) vis = false; // off screen
+        else {
+            int B = int(px.w); // pixels a level-0 texel side
+            ivec2 a = ivec2(clamp(floor(mn), vec2(0.0), px.xy - 1.0)) / B, b = ivec2(clamp(floor(mx), vec2(0.0), px.xy - 1.0)) / B;
+            int L = 0;
+            while (L < n.y - 1 && max((b.x >> L) - (a.x >> L), (b.y >> L) - (a.y >> L)) > 3) L++; // NUI2: up to 4 x 4 texels (tighter than 2 x 2)
+            float far = 3.0e38;
+            for (int y = a.y >> L; y <= (b.y >> L); y++)
+                for (int x = a.x >> L; x <= (b.x >> L); x++) far = min(far, imageLoad(hiz, ivec2(lv[L].x + min(x, lv[L].y - 1), min(y, lv[L].z - 1))).r);
+            vis = !(zmax * 1.00001 < far);
+        }
+    }
+    gate[t.g.x] = vis ? 1u : 0u;
+    if (vis && t.g.y != 0u) gate[t.g.y] = 1u;
+}

@@ -94,10 +94,16 @@ void tool_measure_draw(App *a, ImDrawList *dl) {
 int tool_box_input(App *a, const char *what, float mx, float my) {
     char body[512];
     ray_json(a, mx, my, 14, body, sizeof body);
+    /* NUI2: the box tool takes the rays only (session/visibility.c box_args): "tol_px" made every press a 400, so no handle
+     * ever moved (the owner: "can't seem to redimension the section box") */
+    char *tp = strstr(body, ",\"tol_px\"");
+    if (tp) tp[0] = '}', tp[1] = 0;
     Buf out;
     buf_init(&out);
     int st = core_call(a, "tool", what, body, &out);
     int active = 0;
+    if (st != CC_OK) slog("section box: %s refused (%d): %.*s", what, st, (int)(out.len < 200 ? out.len : 200), out.p ? out.p : "");
+    if (getenv("BIMBLE_DEBUG_TOOLS")) fprintf(stderr, "tool %s %s -> %d %.*s\n", what, body, st, (int)(out.len < 400 ? out.len : 400), out.p ? out.p : "");
     if (st == CC_OK) {
         Json j = {0};
         json_parse(&j, out.p ? out.p : "null", out.len ? out.len : 4);

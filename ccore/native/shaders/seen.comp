@@ -1,0 +1,13 @@
+#version 450
+// NUI2: the elements this frame shows (the id buffer): seen[element] = the frame's number. Read back, it splits the next
+// frame's tiles: the elements seen are drawn in pass 1, the others tested in groups against pass 1's depth (exact).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform usampler2D ids;
+layout(std430, set = 1, binding = 0) buffer Seen { uint seen[]; };
+layout(set = 2, binding = 0) uniform U { uvec4 a; }; // W, H, the frame's number, elements
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= a.x || p.y >= a.y) return;
+    uint id = texelFetch(ids, ivec2(p), 0).r;
+    if (id > 8u && id - 1u < a.w) seen[id - 1u] = a.z;
+}

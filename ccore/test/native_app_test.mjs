@@ -190,6 +190,169 @@ quit
   check("linkpick: exits 0", r3.code === 0 && !r3.signal, `${r3.code} ${r3.signal ?? ""}`);
   inputs("links6", r2, software);
 
+  // ---- 3b. NUI2: a tiling compositor's sizes (the window resized right after it maps, then smaller than the last
+  // frame, then tiny), the target a frame after the window as on Wayland: no SDL assertion (SDL's own checks: the
+  // viewport and scissor within the target), exit 0; the session log written (BIMBLE_LOG_DIR), --last-log names it;
+  // Copy writes the report to a file too ----
+  const logs = join(tmp, "sessions");
+  const r5 = run("resize", `
+wait complete
+frames 25
+shot resized.png
+copy_report
+frames 2
+quit
+`, fixture, ["--resize-script", "1280x720,1600x900,640x400,373x198,1920x1080,800x600,1280x720"], { BIMBLE_LOG_DIR: logs });
+  check("resize: exits 0, no signal", r5.code === 0 && !r5.signal, `${r5.code} ${r5.signal ?? ""} ${r5.err.trim().split("\n").slice(-2).join(" | ")}`);
+  check("resize: no SDL assertion (viewport and scissor within the target at every size)", !/SDL assertion/.test(r5.err), (r5.err.match(/SDL assertion.*/g) ?? []).slice(0, 2).join(" | "));
+  expectations("resize", r5);
+  const last = spawnSync(BIN, ["--last-log"], { env: { ...env, BIMBLE_LOG_DIR: logs }, encoding: "utf8" });
+  const sdir = (last.stdout ?? "").trim();
+  const slog = sdir && existsSync(join(sdir, "session.log")) ? readFileSync(join(sdir, "session.log"), "utf8") : "";
+  check("session log: --last-log names the folder, session.log has the GPU, the sizes and the open", last.status === 0 && /GPU /.test(slog) && /sizes: swapchain 373x198/.test(slog) && /opened .*frame\.json/.test(slog),
+    `${sdir} ${slog.split("\n").length} lines`);
+  check("session log: frames.csv, report.txt and the copied report's file", existsSync(join(sdir, "frames.csv")) && existsSync(join(sdir, "report.txt")) && /drive: copy_report: .*report-.*\.txt/.test(r5.err),
+    (r5.err.match(/drive: copy_report: .*/) ?? [""])[0].slice(0, 200));
+  // the same sizes with no session log (the offscreen default) and with a folder it cannot write: no crash, no assertion
+  // (a fault of the logging path at exit, found by ASan before 25d96e7, is what these guard)
+  const ro = join(tmp, "readonly");
+  mkdirSync(ro), execFileSync("chmod", ["0500", ro]);
+  for (const [name, envx] of [["resize-nolog", {}], ["resize-rolog", { BIMBLE_LOG_DIR: join(ro, "sessions") }]]) {
+    const rr = run(name, "wait complete\nframes 25\nreport report.txt\nquit\n", fixture, ["--resize-script", "1280x720,1600x900,640x400,373x198,1920x1080,800x600,1280x720"], envx);
+    check(`${name}: exits 0, no signal, no SDL assertion`, rr.code === 0 && !rr.signal && !/SDL assertion/.test(rr.err), `${rr.code} ${rr.signal ?? ""} ${rr.err.trim().split("\n").slice(-2).join(" | ")}`);
+  }
+  execFileSync("chmod", ["0700", ro]);
+  const small = spawnSync(BIN, ["--offscreen", "--size", "373x198", "--quit-after", "2", "--config-dir", conf, fixture], { env, encoding: "utf8", timeout: 60000 });
+  check("--size 373x198 works (a window smaller than the panels)", small.status === 0, `${small.status} ${(small.stderr ?? "").trim().split("\n").slice(-1)}`);
+
+  // ---- 3c. NUI2: the pointer tools at scale 1 and 2, after resizes, the view offset by the panels: the section box's
+  // handles dragged (found where they are drawn: the owner could not size the box; every press was refused), Box to
+  // selection, a pick, Measure, the view cube ----
+  const pointer = `
+wait complete
+frames 3
+action section_box
+frames 5
+expect_box on
+box_handle 5 0 -60 400
+frames 5
+expect_box_moved 5 100
+box_handle 1 80 0 400
+frames 5
+expect_box_moved 1 100
+action section_box
+frames 3
+click_world 9000 5000 5780
+frames 3
+expect_selected ${TOP}
+action box_to_selection
+frames 3
+expect_box on
+key escape
+frames 2
+action measure
+frames 2
+click_world -100 -100 5780
+frames 2
+click_world 18100 -100 5780
+frames 3
+expect_measure 18300 1.5
+key escape
+frames 2
+click_cube
+frames 3
+expect_view_changed
+quit
+`;
+  for (const [name, extra] of [["pointer-s1", ["--scale", "1"]], ["pointer-s2", ["--scale", "2", "--size", "900x560"]], ["pointer-resized", ["--resize-script", "1280x720,1600x900,1100x700"]]]) {
+    const rp = run(name, pointer, fixture, extra);
+    check(`${name}: exits 0, no signal`, rp.code === 0 && !rp.signal, `${rp.code} ${rp.signal ?? ""} ${rp.err.trim().split("\n").slice(-2).join(" | ")}`);
+    expectations(name, rp);
+  }
+  const rpl = run("pointer-links", `
+open :new
+wait 300
+link_folder ${join(tmp, "links")}
+wait complete
+frames 3
+action fit
+frames 3
+action section_box
+frames 5
+expect_box on
+box_handle 5 0 -60 400
+frames 5
+expect_box_moved 5 50
+quit
+`, null, ["--scale", "2", "--size", "900x560"], { BIMBLE_LINK_CACHE_MIN: "0" });
+  check("pointer-links: exits 0", rpl.code === 0 && !rpl.signal, `${rpl.code} ${rpl.signal ?? ""}`);
+  expectations("pointer-links", rpl);
+
+  // ---- 3c'. NUI2: Ctrl-click grows the selection (three elements), Hide hides the three ----
+  const rms = run("ctrl-select", `
+wait complete
+frames 3
+click_world 9000 5000 5780
+frames 3
+expect_nselected 1
+ctrl_click_world 18150 10150 0
+frames 3
+expect_nselected 2
+ctrl_click_world 18150 -150 0
+frames 3
+expect_nselected 3
+action hide_now
+frames 3
+expect_hidden 3
+quit
+`, fixture);
+  check("ctrl-select: exits 0", rms.code === 0 && !rms.signal, `${rms.code} ${rms.signal ?? ""}`);
+  expectations("ctrl-select", rms);
+
+  // ---- 3d. NUI2: the tile path (renderer_path=tiles) with occlusion, its truth test on (--truth: every 3D frame drawn
+  // without, then with occlusion, the id and depth buffers compared: an element whose pixel shows something farther is
+  // missing): the open model by tiles (a pick, hide), six links by tiles (a pick in a link, orbit, zoom); 0 missing ----
+  const rt = run("tiles-fixture", `
+wait complete
+frames 3
+click_world 9000 5000 5780
+frames 3
+expect_selected ${TOP}
+action hide_now
+frames 3
+expect_hidden 1
+action show_all
+drag 0.3 0.5 0.6 0.45 600
+wheel 0.5 0.5 2
+frames 3
+report report.txt
+quit
+`, fixture, ["--truth", "--set", "renderer_path=tiles"]);
+  check("tiles-fixture: exits 0, no signal", rt.code === 0 && !rt.signal, `${rt.code} ${rt.signal ?? ""} ${rt.err.trim().split("\n").slice(-2).join(" | ")}`);
+  expectations("tiles-fixture", rt);
+  const truthOf = (r) => (/\| truth test: frames, with ids missing, ids missing \| (\d+) \/ (\d+) \/ (\d+) \|/.exec(existsSync(join(r.out, "summary.md")) ? readFileSync(join(r.out, "summary.md"), "utf8") : "") ?? []).slice(1).map(Number);
+  const [tf, tmf, tmi] = truthOf(rt);
+  check(`tiles-fixture: the truth test ran on every 3D frame and found nothing missing (${tf} frames, ${tmi} missing)`, tf > 5 && tmf === 0 && tmi === 0);
+  const rtl = run("tiles-links", `
+open :new
+wait 300
+link_folder ${join(tmp, "links")}
+wait complete
+frames 3
+expect_parts 5
+drag 0.3 0.5 0.6 0.45 800
+wheel 0.5 0.5 2
+wheel 0.5 0.5 -1
+frames 3
+report report.txt
+quit
+`, null, ["--truth", "--set", "renderer_path=tiles"], { BIMBLE_LINK_CACHE_MIN: "0" });
+  check("tiles-links: exits 0, no signal", rtl.code === 0 && !rtl.signal, `${rtl.code} ${rtl.signal ?? ""} ${rtl.err.trim().split("\n").slice(-2).join(" | ")}`);
+  expectations("tiles-links", rtl);
+  const [lf, lmf, lmi] = truthOf(rtl);
+  const rep3 = existsSync(join(rtl.out, "report.txt")) ? readFileSync(join(rtl.out, "report.txt"), "utf8") : "";
+  check(`tiles-links: drawn by tiles, the truth test found nothing missing (${lf} frames, ${lmi} missing)`, /detail loaded by tiles/.test(rep3) && lf > 5 && lmf === 0 && lmi === 0);
+
   // ---- 4. malformed files: the core's error, never a crash ----
   const bad = join(tmp, "bad");
   mkdirSync(bad);

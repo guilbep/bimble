@@ -12,6 +12,7 @@
 #include "links.h"
 #include "meshcodec.h"
 #include "session.h"
+#include "mesh.h"
 #include "viewfile.h"
 
 struct nv_loader {
@@ -194,8 +195,99 @@ static uint64_t scene_bytes(const nv_scene *sc) {
     return b;
 }
 
+/* NUI2: one tile of a link's pyramid: its bytes taken under the session's read lock (a proxy's TPX1 copied from the
+ * mapped cache; a leaf's TLF1 gathered from its elements' blocks), made into GPU buffers out of it. */
+static void run_tile(nv_loader *L, nv_job *j) {
+    Src x;
+    memset(&x, 0, sizeof x);
+    x.L = L, x.j = j;
+    Buf b;
+    buf_init(&b);
+    cc_tile t;
+    const cc_tiles_toc *toc = nv_tileset_toc(j->ts);
+    cc_tiles_get(toc, j->tile, &t);
+    int kind = 0;
+    pthread_rwlock_rdlock(&L->ses);
+    if (j->model) { /* the open model's: its proxies from the copy of the section; a leaf from the session's scene */
+        const cc_session *s = j->ses;
+        if (t.flags & CC_TILE_PROXY) {
+            const uint8_t *sec;
+            size_t sn;
+            nv_tileset_section(j->ts, &sec, &sn);
+            uint64_t at = (uint64_t)toc->blob_at + t.off;
+            if (!sec || at > sn || t.len > sn - at) snprintf(j->err, sizeof j->err, "tiles: a proxy out of the section");
+            else buf_append(&b, (const char *)sec + at, t.len), kind = 2;
+        } else if ((!s->open && !s->view) || s->tiles_scene != j->ident || s->tiles_status != 200) x.gone = 1;
+        else {
+            cc_tiles_src src = {s->tiles_scene, NULL};
+            cc_error e;
+            if (cc_tiles_leaf_answer(&src, toc, j->tile, &b, &e)) snprintf(j->err, sizeof j->err, "%s", e.msg);
+            else kind = 1;
+        }
+        pthread_rwlock_unlock(&L->ses);
+        goto built;
+    }
+    find(&x);
+    const cc_viewfile *vf = x.k ? x.k->vf : NULL;
+    if (!vf || !vf->has_tiles || !vf->lazy || !vf->base || vf->tiles_off > vf->base_len || vf->tiles_len > vf->base_len - vf->tiles_off) {
+        if (!x.gone) snprintf(j->err, sizeof j->err, "tiles: the link's cache has none");
+    } else if (t.flags & CC_TILE_PROXY) {
+        uint64_t at = (uint64_t)toc->blob_at + t.off;
+        if (at > vf->tiles_len || t.len > vf->tiles_len - at) snprintf(j->err, sizeof j->err, "tiles: a proxy out of the section");
+        else buf_append(&b, (const char *)vf->base + vf->tiles_off + at, t.len), kind = 2;
+    } else if (t.flags & CC_TILE_LEAF) {
+        cc_tiles_src src = {NULL, vf};
+        cc_error e;
+        if (cc_tiles_leaf_answer(&src, toc, j->tile, &b, &e)) snprintf(j->err, sizeof j->err, "%s", e.msg);
+        else kind = 1;
+    } else snprintf(j->err, sizeof j->err, "tiles: tile %u has no content", j->tile);
+    pthread_rwlock_unlock(&L->ses);
+built:
+    if (x.gone) j->cancelled = 1, kind = 0;
+    if (b.oom) kind = 0, snprintf(j->err, sizeof j->err, "out of memory");
+    j->bytes_in = b.len;
+    if (kind == 1) j->gt = nv_gtile_leaf(L->dev, j->ts, j->tile, (const uint8_t *)b.p, b.len, j->err, sizeof j->err);
+    else if (kind == 2) j->gt = nv_gtile_proxy(L->dev, j->ts, j->tile, (const uint8_t *)b.p, b.len, j->err, sizeof j->err);
+    j->peak_bytes = b.cap;
+    buf_free(&b);
+}
+
+/* NUI2: the open model's pyramid built in steps (the session's own builder, cc_mesh_tiles: each step under the session's
+ * lock as the writer, about 100,000 triangles: the UI waits at most one step), then its section copied out */
+static void run_model_tiles(nv_loader *L, nv_job *j) {
+    for (int guard = 0; guard < 100000; guard++) {
+        if (job_cancelled(L, j)) { j->cancelled = 1; return; }
+        const char *p;
+        size_t n;
+        uint32_t rev;
+        pthread_rwlock_wrlock(&L->ses);
+        cc_session *s = j->ses;
+        int st = s->open || s->view ? cc_mesh_tiles(s, 100000, "toc", 3, &p, &n, &rev) : 404;
+        if (st == 200 && s->tiles && s->tiles_scene) {
+            if (s->tiles_scene != j->ident) j->cancelled = 1;
+            else if ((j->section = malloc(s->tiles->out.len + 1))) {
+                memcpy(j->section, s->tiles->out.p, s->tiles->out.len), j->section_n = s->tiles->out.len;
+                j->nelements = (uint32_t)s->tiles_scene->nelements;
+            } else snprintf(j->err, sizeof j->err, "out of memory");
+        } else if (st != 202) snprintf(j->err, sizeof j->err, "the model's tiles: %d %.*s", st, (int)(n < 200 ? n : 200), p ? p : "");
+        pthread_rwlock_unlock(&L->ses);
+        if (st != 202) return;
+    }
+}
+
 static void run(nv_loader *L, nv_job *j) {
     double t0 = nv_now_ms();
+    if (j->kind == NV_JOB_MODEL_TILES) {
+        run_model_tiles(L, j);
+        j->ms = nv_now_ms() - t0;
+        return;
+    }
+    if (j->kind == NV_JOB_TILE) {
+        if (!job_cancelled(L, j)) run_tile(L, j);
+        else j->cancelled = 1;
+        j->ms = nv_now_ms() - t0;
+        return;
+    }
     Src x;
     memset(&x, 0, sizeof x);
     x.L = L, x.j = j;
@@ -298,6 +390,9 @@ nv_loader *nv_loader_new(SDL_GPUDevice *dev, int threads) {
 void nv_job_free(SDL_GPUDevice *dev, nv_job *j) {
     if (!j) return;
     if (j->part) nv_part_free(dev, j->part);
+    if (j->gt) nv_gtile_free(dev, j->gt);
+    if (j->ts) nv_tileset_unref(dev, j->ts);
+    free(j->section);
     free(j);
 }
 
