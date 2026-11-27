@@ -20,7 +20,8 @@ import { cutProxies, fitProxies, standIns, usableCells } from "../gl/proxies";
 import { perfFrame, perfWaits, renderer as perfRenderer } from "../perf";
 import { GpuCull } from "./cull";
 import { BU, TU, type GpuDevice } from "./device";
-import { DEPTH, Pipelines, type PipeKey } from "./pipelines";
+import { DEPTH, DRAW_BYTES, Pipelines, type PipeKey } from "./pipelines";
+import { xfRows, type ModelXf } from "../gl/cull";
 import { BACKGROUND, BOX, EDGE, GHOST, GHOST_ALPHA, GHOST_EDGE, OUTLINE, REFERENCE_EDGE, Scene, SLOT } from "./scene";
 import { GL_NAMES, type GlArrays, type GpuDb, type GpuLinkPrx, type GpuModels, type GpuRenderer, type GpuView } from "./switch";
 
@@ -88,12 +89,12 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
     return true;
   };
   const bind0 = (): GPUBindGroup => {
-    const key = [scene.states, scene.rows, drawsBuf];
+    const key = [scene.states, drawsBuf];
     if (group0 && key.every((b, i) => b === group0Key[i])) return group0;
     group0Key = key;
     return (group0 = device.createBindGroup({ layout: pipes.layout, entries: [
-      { binding: 0, resource: { buffer: frameU } }, { binding: 1, resource: { buffer: scene.states } }, { binding: 2, resource: { buffer: scene.rows } },
-      { binding: 3, resource: { buffer: drawsBuf, size: 32 } },
+      { binding: 0, resource: { buffer: frameU } }, { binding: 1, resource: { buffer: scene.states } },
+      { binding: 3, resource: { buffer: drawsBuf, size: DRAW_BYTES } },
     ] }));
   };
   /** Model k's copies' bind group (its placements, elements, compacted list), else the empty one. */
@@ -170,17 +171,23 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
     u.set([Math.cos(box?.yaw ?? 0), Math.sin(box?.yaw ?? 0), v.plan ? v.zbias : 0, AMBIENT], 32);
     device.queue.writeBuffer(frameU, 0, u);
   };
-  /** The per-draw uniforms (model, use_list, base, el_col, colour rgba), SLOT apart, written before the submit. */
-  const writeSlots = (slots: number[]) => {
+  /** The per-draw uniforms (model, use_list, base, el_col; colour rgba; the model's rows and plain colour), SLOT apart,
+   *  written before the submit. `rows(k)`: model k's placement and plain colour (sRGB 0..255 or null). */
+  const ROW = new Float32Array(12);
+  const writeSlots = (slots: number[], rows: (k: number) => { xf: ModelXf; plain: readonly number[] | null }) => {
     const n = Math.max(1, slots.length / 8);
     if (n > drawsCap) { scene.drop(drawsBuf); drawsCap = 2 * n; drawsBuf = scene.buf(SLOT * drawsCap, BU.UNIFORM); }
     const sb = new ArrayBuffer(SLOT * n);
     for (let i = 0; i < slots.length / 8; i++) {
       new Uint32Array(sb, SLOT * i, 4).set(slots.slice(8 * i, 8 * i + 4));
-      new Float32Array(sb, SLOT * i + 16, 4).set(slots.slice(8 * i + 4, 8 * i + 8));
+      const f = new Float32Array(sb, SLOT * i + 16, 20), r = rows(slots[8 * i]!);
+      f.set(slots.slice(8 * i + 4, 8 * i + 8), 0);
+      f.set(xfRows(r.xf, ROW), 4);
+      if (r.plain) f.set([r.plain[0]! / 255, r.plain[1]! / 255, r.plain[2]! / 255, 1], 16);
     }
     device.queue.writeBuffer(drawsBuf, 0, sb);
   };
+  const IDENT: ModelXf = { c: 1, s: 0, t: [0, 0, 0] };
 
   /** One frame: `kind` moving (the budget), slice (the fill's next part, into the kept picture), edges
    *  (the fill's last pass) or whole. */
@@ -470,7 +477,7 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
       if (ghost.nm) { use({ kind: "ghostLine", depthTest: false }, slotOf(0, 0, 0, 0, GHOST_EDGE, 0.9), 0); pass.setVertexBuffer(0, ghost.marks); pass.draw(ghost.nm), draws++; }
     }
     pass.end();
-    writeSlots(slots);
+    writeSlots(slots, (k) => ({ xf: M.xf[k] ?? IDENT, plain: M.plain[k] ?? null }));
     enc.copyTextureToTexture({ texture: color! }, { texture: ctx.getCurrentTexture() }, [color!.width, color!.height]);
     device.queue.submit([enc.finish()]);
     scene.flushOld();
@@ -517,7 +524,6 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
   const drawPreview = (v: GpuView, M: GpuModels) => {
     const planes = frustumPlanes(v.mvp);
     frameUniform(v, null);
-    scene.setRows([{ c: 1, s: 0, t: [0, 0, 0] }, ...M.prePrx.map((q) => q.xf)], []);
     const enc = device.createCommandEncoder();
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: color!.createView(), loadOp: "clear", storeOp: "store", clearValue: [BACKGROUND[0] / 255, BACKGROUND[1] / 255, BACKGROUND[2] / 255, 1] }],
@@ -539,7 +545,7 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
       for (const cell of cells) for (const part of q.x.p.cells[cell]!.parts) if (part.ni) pass.drawIndexed(part.ni, 1, part.i0, 0, 0), draws++, tris += part.ni / 3;
     });
     pass.end();
-    writeSlots(slots);
+    writeSlots(slots, (k) => ({ xf: k > 0 ? M.prePrx[k - 1]?.xf ?? IDENT : IDENT, plain: null }));
     enc.copyTextureToTexture({ texture: color! }, { texture: ctx.getCurrentTexture() }, [color!.width, color!.height]);
     device.queue.submit([enc.finish()]);
     scene.flushOld();
@@ -567,7 +573,6 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
       scene.setProxies(v.prx && m && v.prx.nElements <= m.ids.length ? v.prx : null);
       scene.keepLinkProxies(new Set([...M.linkPrx, ...M.prePrx.map((q) => q.x)].filter((x): x is GpuLinkPrx => !!x).map((x) => x.p)));
       if (!m) { drawPreview(v, M); counters(M); return; }
-      scene.setRows(M.xf, M.plain);
       if (m !== meshNow) {
         meshNow = m;
         let t = 0;

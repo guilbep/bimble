@@ -5,7 +5,7 @@
 // at the cut shade; an edge whose two faces both look away is not drawn while it cuts. The matrices
 // are WebGL's (depth -1..1): the clip z is mapped to WebGPU's 0..1 here, after the plan edges' pull.
 // GPU2 (ADR 0078 amendment 3, as WebGL2 since LNK3D): each model (the open one, each link) in its own
-// buffers, placed by its row of `models` (gl/cull.ts xfRows; a move rewrites 64 bytes); each element's
+// buffers, placed by its rows in the draw's uniforms (gl/cull.ts xfRows; a move changes 48 bytes); each element's
 // state from ONE source shared with WebGL2, the RGBA8 texel of gl/cull.ts packState (colour; a = model
 // << 1 | drawn) read in the vertex stage by the element every vertex (faces AND edges: 4 bytes an edge
 // vertex) or every copy carries; a hidden element's vertices leave the clip volume. A model all shown in
@@ -19,15 +19,14 @@ struct Frame {
   clip_max: vec4f, // xyz; w: the cut shade
   clip_rot: vec4f, // cos, sin of the box's yaw; z: the edges' depth pull (NDC); w: ambient
 }
-// A model's placement's three rows (R row, t) and its plain colour (w = 1: every element shown in it).
-struct Model { m0: vec4f, m1: vec4f, m2: vec4f, plain: vec4f }
 // A draw: its model, whether its copies come from the compacted list (GPU culling) and that list's start,
-// whether faces take the element's colour (1) or `colour` (edges, proxies, lines; w: alpha).
-struct Draw { model: u32, use_list: u32, base: u32, el_col: u32, colour: vec4f }
+// whether faces take the element's colour (1) or `colour` (edges, proxies, lines; w: alpha); its model's
+// placement's three rows (R row, t) and plain colour (w = 1: every element shown in it): uniforms, read by
+// every vertex (a storage buffer read per vertex cost the M1 Pro about twice WebGL2's frame, GPU2).
+struct Draw { model: u32, use_list: u32, base: u32, el_col: u32, colour: vec4f, m0: vec4f, m1: vec4f, m2: vec4f, plain: vec4f }
 
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var<storage, read> states: array<u32>;
-@group(0) @binding(2) var<storage, read> models: array<Model>;
 @group(0) @binding(3) var<uniform> D: Draw;
 // a model's copies: their placements (12 floats: columns x, y, z, t, WebGL2's instMat) and elements
 @group(1) @binding(0) var<storage, read> imat: array<f32>;
@@ -53,14 +52,13 @@ fn gone() -> Out { var o: Out; o.pos = vec4f(2.0, 2.0, 2.0, 1.0); o.world = vec3
 /** The element's colour and whether it is drawn (w): its state texel, the model's plain colour, or the draw's. */
 fn el_colour(el: u32) -> vec4f {
   if (el == NONE) { return vec4f(D.colour.rgb, 1.0); }
-  let M = models[D.model];
-  if (M.plain.w > 0.5) { return vec4f(select(D.colour.rgb, M.plain.rgb, D.el_col == 1u), 1.0); }
+  if (D.plain.w > 0.5) { return vec4f(select(D.colour.rgb, D.plain.rgb, D.el_col == 1u), 1.0); }
   let s = states[el];
   if (((s >> 24u) & 1u) == 0u) { return vec4f(0.0); }
   return vec4f(select(D.colour.rgb, unpack(s), D.el_col == 1u), 1.0);
 }
-fn in_model(p: vec3f) -> vec3f { let M = models[D.model]; return vec3f(dot(M.m0.xyz, p) + M.m0.w, dot(M.m1.xyz, p) + M.m1.w, dot(M.m2.xyz, p) + M.m2.w); }
-fn turn_model(n: vec3f) -> vec3f { let M = models[D.model]; return vec3f(dot(M.m0.xyz, n), dot(M.m1.xyz, n), dot(M.m2.xyz, n)); }
+fn in_model(p: vec3f) -> vec3f { return vec3f(dot(D.m0.xyz, p) + D.m0.w, dot(D.m1.xyz, p) + D.m1.w, dot(D.m2.xyz, p) + D.m2.w); }
+fn turn_model(n: vec3f) -> vec3f { return vec3f(dot(D.m0.xyz, n), dot(D.m1.xyz, n), dot(D.m2.xyz, n)); }
 fn copy_of(ii: u32) -> u32 { return select(ii, visible[D.base + ii], D.use_list == 1u); }
 fn col_of(i: u32, c: u32) -> vec3f { return vec3f(imat[12u * i + 3u * c], imat[12u * i + 3u * c + 1u], imat[12u * i + 3u * c + 2u]); }
 fn place(i: u32, p: vec3f) -> vec3f { return col_of(i, 0u) * p.x + col_of(i, 1u) * p.y + col_of(i, 2u) * p.z + col_of(i, 3u); }

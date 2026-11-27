@@ -4,10 +4,9 @@
 // the same thing by construction. A model's buffers are TAKEN OVER from WebGL2's (read back once with
 // getBufferSubData, WebGL2's emptied: never both on the GPU), and given back when WebGL2 draws again; a model
 // the memory budget releases is released here too. Per element the state texel (gl/cull.ts packState, the
-// viewport's array) is one storage buffer; per model its placement's rows and plain colour, one row of
-// `models`. The open model's HLOD proxies and each link's baked proxies are uploaded from the page's copies.
+// viewport's array) is one storage buffer; a model's placement's rows and plain colour are each draw's
+// uniforms (render.ts). The open model's HLOD proxies and each link's baked proxies are uploaded from the page's copies.
 import type { Proxies } from "../gl/proxies";
-import { xfRows, type ModelXf } from "../gl/cull";
 import { BU } from "./device";
 import { GL_NAMES, type GlArrays, type GlName, type GpuLinkPrx } from "./switch";
 
@@ -43,7 +42,6 @@ export class Scene {
   models: (GModel | undefined)[] = [];
   /** The state texels (an u32 an element) and each model's row; the dummy copies' bind group. */
   states: GPUBuffer; statesFor: unknown = null; statesLen = 0;
-  rows: GPUBuffer; rowsLen = 0;
   empty: GPUBuffer; emptyGroup: GPUBindGroup | null = null;
   prx: Proxies | null = null;
   prxPos: GPUBuffer | null = null; prxCol: GPUBuffer | null = null; prxIdx: GPUBuffer | null = null;
@@ -55,7 +53,6 @@ export class Scene {
   constructor(device: GPUDevice) {
     this.device = device;
     this.states = this.buf(16, BU.STORAGE);
-    this.rows = this.buf(64, BU.STORAGE);
     this.empty = this.buf(64, BU.STORAGE);
   }
 
@@ -103,19 +100,6 @@ export class Scene {
     this.statesLen = t.length;
     if (t.byteLength) this.device.queue.writeBuffer(this.states, 0, t.buffer, t.byteOffset, t.byteLength - (t.byteLength % 4));
   }
-  /** Each model's row: its placement and its plain colour (sRGB 0..255 or null). */
-  setRows(xf: ModelXf[], plain: (readonly number[] | null)[]): void {
-    const n = Math.max(1, xf.length), a = new Float32Array(16 * n);
-    for (let k = 0; k < n; k++) {
-      xfRows(xf[k] ?? { c: 1, s: 0, t: [0, 0, 0] }, a, 16 * k);
-      const p = plain[k];
-      if (p) a.set([p[0]! / 255, p[1]! / 255, p[2]! / 255, 1], 16 * k + 12);
-    }
-    if (this.rows.size < a.byteLength) { this.drop(this.rows); this.rows = this.buf(a.byteLength, BU.STORAGE); }
-    this.rowsLen = n;
-    this.device.queue.writeBuffer(this.rows, 0, a);
-  }
-
   /** The open model's proxies' faces (a colour per vertex from its part's family). */
   setProxies(p: Proxies | null): void {
     if (p === this.prx) return;
@@ -149,7 +133,7 @@ export class Scene {
 
   /** The bytes WebGPU holds for the scene: the models', the states, the rows, the proxies. */
   get bytes(): number {
-    let n = this.states.size + this.rows.size + this.prxBytes;
+    let n = this.states.size + this.prxBytes;
     for (const g of this.models) if (g) n += g.bytes;
     for (const e of this.lprx.values()) n += e.bytes;
     return n;
@@ -159,7 +143,7 @@ export class Scene {
     for (let k = 0; k < this.models.length; k++) this.release(k);
     for (const e of this.lprx.values()) this.drop(e.pos), this.drop(e.idx);
     this.lprx.clear();
-    this.drop(this.states), this.drop(this.rows), this.drop(this.empty), this.drop(this.prxPos), this.drop(this.prxCol), this.drop(this.prxIdx);
+    this.drop(this.states), this.drop(this.empty), this.drop(this.prxPos), this.drop(this.prxCol), this.drop(this.prxIdx);
     this.flushOld();
   }
 }

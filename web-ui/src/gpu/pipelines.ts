@@ -1,6 +1,6 @@
 // The render pipelines of the WebGPU renderer (ticket GPU1, ADR 0083), made on first use and kept:
-// one shader module (shaders.wgsl), two bind group layouts (0: the frame, the states, the models' rows,
-// the draw's dynamic uniform; 1: a model's copies), and a pipeline per (what is drawn, face culling,
+// one shader module (shaders.wgsl), two bind group layouts (0: the frame, the states, the draw's dynamic
+// uniform with its model's rows; 1: a model's copies), and a pipeline per (what is drawn, face culling,
 // front face, depth bias). WebGL2's polygonOffset(factor, units) is WebGPU's depthBiasSlopeScale and
 // depthBias (whole units), set per pipeline instead of per draw.
 import SHADERS from "./shaders.wgsl?raw";
@@ -10,6 +10,8 @@ export type Kind = "merged" | "inst" | "proxy" | "lprx" | "edge" | "edgeInst" | 
 export interface PipeKey { kind: Kind; cull?: GPUCullMode; front?: GPUFrontFace; slope?: number; bias?: number; depthTest?: boolean }
 
 export const DEPTH: GPUTextureFormat = "depth24plus";
+/** The per-draw uniform (shaders.wgsl Draw): 4 u32, the colour, the model's three rows, its plain colour. */
+export const DRAW_BYTES = 112;
 const F3: GPUVertexFormat = "float32x3";
 
 export class Pipelines {
@@ -28,8 +30,7 @@ export class Pipelines {
     this.layout = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: VF, buffer: { type: "uniform" } },
       { binding: 1, visibility: V, buffer: { type: "read-only-storage" } },
-      { binding: 2, visibility: V, buffer: { type: "read-only-storage" } },
-      { binding: 3, visibility: VF, buffer: { type: "uniform", hasDynamicOffset: true, minBindingSize: 32 } },
+      { binding: 3, visibility: VF, buffer: { type: "uniform", hasDynamicOffset: true, minBindingSize: DRAW_BYTES } },
     ] });
     this.copies = device.createBindGroupLayout({ entries: [0, 1, 2].map((b) => ({ binding: b, visibility: V, buffer: { type: "read-only-storage" as const } })) });
     this.pipeLayout = device.createPipelineLayout({ bindGroupLayouts: [this.layout, this.copies] });
