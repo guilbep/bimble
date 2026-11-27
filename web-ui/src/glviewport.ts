@@ -709,7 +709,9 @@ interface GlStats {
   navEye?: () => number[] | null;
   elementBox?: (id: string) => { min: number[]; max: number[] } | null;
   /** Q2: the ribbon's switches as drawn: edges on, the 3D camera orthographic, edge segments drawn last frame. */
-  q2?: { edges: boolean; ortho: boolean; edgeSegs: number };
+  q2?: { edges: boolean; ortho: boolean; edgeSegs: number;
+    /** VIS1: how the edges were drawn: "screen" (found on screen: no segments), "lines" (edgeSegs counts them), "none". */
+    edgeMode?: "screen" | "lines" | "none" };
   /** BUG1: frame loops run (each one takes the page's state and draws it when it changed), and what the last
    *  draw drew: its frame number, the mesh's rev, the buffer size. A test reads the pixels after a loop that
    *  began after its action, with the state's rev drawn at the canvas's layout size (no fixed sleep). */
@@ -3112,7 +3114,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       useModel(hostGl), setModel(0), gl.bindVertexArray(edgeVao);
     }
     stats.screenEdges = scrEdges ? "on" : tgt ? "off" : "no target";
-    stats.q2 = { edges: edgesOn0, ortho: ortho3d(), edgeSegs: edgesOn ? segs + instSegs : 0 };
+    stats.q2 = { edges: edgesOn0, ortho: ortho3d(), edgeSegs: edgesOn ? segs + instSegs : 0, edgeMode: !edgesOn0 ? "none" : scrEdges ? "screen" : "lines" };
     if (unfinished.length) drawOutlines(unfinished), fDraws++;
     stats.frameTris = fTris, stats.frameDraws = fDraws; // 3D1
     stats.moving.tris = fTris;
