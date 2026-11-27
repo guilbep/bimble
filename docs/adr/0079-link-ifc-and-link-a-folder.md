@@ -217,8 +217,9 @@ same delegation.
     the carrier's tick, and the freed memory given back to the system (platform `trim`: glibc's `malloc_trim`).
     Decoding and dropping are logged with their size and time. A call that needs ONE element's geometry (the element
     query's volume, Box to selection around a linked element) decodes that element's block alone (its own mesh or its
-    shape, `cc_link_element_scene`), not the link. A link not loaded, or no longer there, answers its mesh and rows
-    with 204 (a page's request races its unload or removal). **Alternative:** decode per element on demand (every
+    shape, `cc_link_element_scene`), not the link. Its mesh and its rows answer follow ONE rule (SIZE2FIX's): a
+    request that names the link or carries the heads' key is never a 404 (gone, renamed, of another key, unloaded:
+    204 superseded); a bare index of no such link is a 404. **Alternative:** decode per element on demand (every
     consumer walks the scene's arrays directly: a rewrite of measure, plans, sections and paper).
 22. **A link refused for memory is retried when the host is idle too** (`cc_links_wants_tick`): the carrier looked at its
     links only while one was queued or converting, so a refused last link stayed refused (decision 16 did not hold).
@@ -250,7 +251,9 @@ file pages, which the kernel may drop); after the page's requests (the lazy mesh
 375 MB RSS (1,173 → 148 MB anonymous); in the browser run, after the open, 319 MB RSS, 92 MB anonymous. The slowest
 link's mesh served in 890 → 137 ms. A measure over every link decodes all 17 (1.1 GB, 0.86 s; anonymous 1.72 GB at its
 peak) and they are dropped down to the budget 10 s later (392 MB anonymous); a pointer whose ray meets no link's box
-decodes none (2 ms). The synthetic set (17 links, converted by the same host): 102 → 66 MB anonymous at rest. A cold
+decodes none (2 ms). Right after a fresh conversion of the 17 in the same host (the heap given back after each
+job): 199 MB anonymous when drawn (35.9 s), 240 MB anonymous once indexed (51.0 s), 468 MB RSS with the caches' file
+pages; before that trim, 1,090 MB anonymous. The synthetic set (17 links, converted by the same host): 102 → 66 MB anonymous at rest. A cold
 link's decode, per link of the local folder: 0.7-307 MB in 0-333 ms (the largest: 307 MB in 220 ms, 87 MB in 333 ms):
 what a measure pays when its ray meets that link's box; the element query and Box to selection decode one block.
 Found, not caused here: a plan through the 17 links (`view_svg`) took 12.6 s and 6.5 GB (8.5 GB at its peak):
