@@ -97,12 +97,16 @@ async function main() {
   if (sweep) for (const k of ["far", "close", "inside"]) console.log(`  ${k}: submitted ${sum[k][0].toLocaleString("en-US")} -> ${sum[k][1].toLocaleString("en-US")} triangles; the seen elements' ${sum[k][2].toLocaleString("en-US")}`);
   // the far view with its proxies (1 px, still) against its full detail: a picture within a stated bound (proxies are 3D2's,
   // not this ticket's; the culling's truth is the sweep above, without them)
+  // (VIS2: each picture once settled: every link's detail back on the GPU (under load a link's detail may still be on its
+  // way, then its coarsest proxies stand for it) and two frames in a row the same, at most 60 frames)
   const prx = await d.ev(`(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r)); b.snap(0, 0);
-    g.noProxies = true; for (let i = 0; i < 3; i++) { await raf(); b.frame(0, false); } const a = b.read().rgba;
-    delete g.noProxies; for (let i = 0; i < 3; i++) { await raf(); b.frame(0, false); } const c = b.read().rgba; let n = 0, ink = 0;
+    const settled = async () => { let last = null, px = null; for (let i = 0; i < 60; i++) { await raf(); b.frame(0, false); px = b.read().rgba; const all = (g.linkDetail || []).every((l) => l.detail);
+      if (i >= 2 && all && last && px.length === last.length && px.every((v, k) => v === last[k])) break; last = px; } return px; };
+    g.noProxies = true; const a = await settled();
+    delete g.noProxies; const c = await settled(); let n = 0, ink = 0;
     for (let k = 0; k < a.length; k += 4) { if (Math.max(Math.abs(a[k] - c[k]), Math.abs(a[k + 1] - c[k + 1]), Math.abs(a[k + 2] - c[k + 2])) > 40) n++; if (a[k] < 235) ink++; }
-    return { changed: n, ink, cells: (g.linkProxies || []).reduce((t, x) => t + x.drawnCells, 0) }; })()`);
-  check("the far view with its proxies differs from its full detail on at most 5 % of the drawn pixels (measured 2.3 % on 27 Nov: 3D2's 1 px proxies)", prx.changed <= 0.05 * Math.max(1, prx.ink), `${prx.changed} of ${prx.ink} drawn pixels over 40 levels, ${prx.cells} proxy cells`);
+    return { changed: n, ink, cells: (g.linkProxies || []).reduce((t, x) => t + x.drawnCells, 0), detail: (g.linkDetail || []).map((l) => (l.detail ? 1 : 0)).join("") }; })()`);
+  check("the far view with its proxies differs from its full detail on at most 5 % of the drawn pixels (measured 2.3 % on 27 Nov: 3D2's 1 px proxies)", prx.changed <= 0.05 * Math.max(1, prx.ink), `${prx.changed} of ${prx.ink} drawn pixels over 40 levels, ${prx.cells} proxy cells, links' detail ${prx.detail}`);
   if (sweep) check("far and close cameras submit fewer triangles with culling", sum.far[1] < 0.8 * sum.far[0] && sum.close[1] < 0.5 * sum.close[0], `far ${sum.far[1]}/${sum.far[0]}, close ${sum.close[1]}/${sum.close[0]}`);
 
   // the setting off from the Settings dialog (File › Settings): nothing left out; on again
