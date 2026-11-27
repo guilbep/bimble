@@ -116,7 +116,7 @@ let g = await A.get("link=0&name=a.ifc&tiles=toc");
 check("while it indexes: its tiles answer 202 indexing", r?.indexing === true && g.status === 202 && text(g.bytes) === "indexing", `${g.status} ${text(g.bytes)}`);
 r = await until(async () => { const m = await A.row("a.ifc"); return m && !m.indexing ? m : null; });
 const cache = readFileSync(cacheOf("a.ifc"));
-check("indexed: its cache holds a section TILE, complete, format 8", text(cache).includes("TILE") && /"complete":true/.test(text(cache)) && text(cache).includes("bimble-link-cache 7"));
+check("indexed: its cache holds a section TILE, complete, format 8", text(cache).includes("TILE") && /"complete":true/.test(text(cache)) && text(cache).includes("bimble-link-cache 8"));
 g = await A.get("link=0&name=a.ifc&tiles=toc");
 let toc;
 try { toc = T.parseToc(g.bytes, 72); } catch (e) { toc = null; console.log(e.message); }
