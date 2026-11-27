@@ -334,14 +334,19 @@ int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, u
 }
 
 /* ---- SIZE2: a link's mesh on its own, BMSH version 4 (mesh.h) ---- */
-int cc_link_mesh(cc_session *s, uint64_t k, const char **p, size_t *n) {
+int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n) {
     Buf *out = &s->link_mesh_out;
     buf_free(out); /* the last answer's bytes go (a link's mesh is large: none is kept between calls) */
     buf_init(out);
     const cc_link *l = k < s->nlinks ? &s->links[k] : NULL;
     int st = 200;
     cc_error err;
-    if (!l || !l->kind) st = 404, buf_puts(out, "no such link");
+    /* SIZE2FIX: the link asked is the one the page saw: its name and the mesh key of the heads it read (a
+     * link removed, replaced or read again since: superseded, 204, not an error: the page asks again) */
+    if (l && name && (strlen(l->name) != nname || memcmp(l->name, name, nname))) l = NULL;
+    if (l && has_key && key != (uint32_t)s->links_mesh_gen) l = NULL;
+    if (!l && (name || has_key)) st = 204;
+    else if (!l || !l->kind) st = 404, buf_puts(out, "no such link");
     else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
         buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
     *p = out->p ? out->p : "", *n = out->len;

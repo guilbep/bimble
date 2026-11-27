@@ -123,7 +123,7 @@ async function onPage(cdp, mode) {
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   const S = (m, p) => cdp.send(m, p, sessionId);
-  const consoleLog = [], exceptions = [];
+  const consoleLog = [], exceptions = [], meshResponses = []; // SIZE2FIX: every /mesh answer (url, status)
   const downloads = new Map();
   let chooser = null;
   cdp.on((msg) => {
@@ -136,6 +136,8 @@ async function onPage(cdp, mode) {
     } else if (msg.method === "Runtime.exceptionThrown") {
       const d = msg.params.exceptionDetails;
       exceptions.push(d.exception?.description ?? d.text);
+    } else if (msg.method === "Network.responseReceived" && /\/mesh\?/.test(msg.params.response.url)) {
+      meshResponses.push({ url: msg.params.response.url.replace(/^.*\/mesh\?/, "").replace(/t=[^&]*&?/, ""), status: msg.params.response.status });
     } else if (msg.method === "Log.entryAdded") {
       consoleLog.push({ level: `log.${msg.params.entry.level}`, text: `${msg.params.entry.text} ${msg.params.entry.url ?? ""}`.trim() });
     }
@@ -240,6 +242,32 @@ async function onPage(cdp, mode) {
   await click("[data-bb=link-row][data-name='f2.ifc'] [data-bb=link-remove]");
   await waitFor(`${mode}: f2 removed`, 10000, async () => (await gl()).links.length === 1).catch(() => null);
   check(`${mode}: remove: the row and the link go`, (await rows()).map((r) => r.name).join() === "m1.ifc" && (await gl()).links.length === 1);
+
+  // ---- SIZE2FIX: links removed, unloaded, loaded and read again while their meshes are in flight (each request
+  // 250 ms late): a link's mesh is asked by its name and the heads' key; one asked after the links changed is
+  // superseded (204), dropped quietly, the heads asked again: no 404, no console error (checked at the end) ----
+  if (mode === "native") {
+    const m0 = meshResponses.length, c0 = consoleLog.length;
+    await S("Network.emulateNetworkConditions", { offline: false, latency: 250, downloadThroughput: -1, uploadThroughput: -1 });
+    const f2 = JSON.stringify(join(work, "f2.ifc"));
+    for (let i = 0; i < 4; i++) {
+      for (const body of [`b.actionBody("link_model", { path: ${f2} })`, `b.actionBody("manage_links", { op: "unload", name: "m1.ifc" })`,
+        `b.actionBody("manage_links", { op: "load", name: "m1.ifc" })`, `b.actionBody("manage_links", { op: "remove", name: "f2.ifc" })`,
+        `b.manageLink("reload", "m1.ifc")`]) {
+        await B(`${body}; return 1;`);
+        await sleep(90 + 70 * (i % 3));
+      }
+    }
+    await S("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    const lastLink = () => meshResponses.slice(m0).filter((r) => /(^|&)link=/.test(r.url)).pop();
+    const settled = await waitFor(`${mode}: the links settled`, 20000, async () => { const g = await gl(); return g.links.length === 1 && g.links[0].name === "m1.ifc" && g.linkTris > 0 &&
+      lastLink()?.status === 200 && (await rows()).map((r) => r.name).join() === "m1.ifc" ? g : null; }).catch(() => null);
+    const asked = meshResponses.slice(m0), links = asked.filter((r) => /(^|&)link=/.test(r.url)), bad = asked.filter((r) => r.status >= 400);
+    const said = consoleLog.slice(c0).filter((m) => /error|warn/.test(m.level)).map((m) => m.text);
+    check(`${mode}: links changed while their meshes were in flight: no /mesh answer of 400 or more, nothing in the console, the page settles on the links as they are`,
+      bad.length === 0 && said.length === 0 && links.length > 0 && settled !== null,
+      `${asked.length} /mesh answers (${links.length} of a link: ${[...new Set(links.map((r) => r.status))].join(", ")}; the last ${links.at(-1)?.status}), bad ${JSON.stringify(bad.slice(0, 3))}, console ${JSON.stringify(said.slice(0, 2))}, superseded ${settled?.linkSuperseded ?? 0}, links ${JSON.stringify(settled?.links?.map((l) => l.name))}`);
+  }
 
   // ---- a DXF in the ground plan: move by numbers, rotate, undo ----
   const plan = await B("return b.openViews.value.views.find((v) => v.type === 'plan' && v.look === 'down');");

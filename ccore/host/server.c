@@ -594,8 +594,15 @@ static void handle_one(Conn *c, int *again) {
         /* SIZE2: ?link=k, link k's mesh on its own (BMSH version 4, mesh.h cc_link_mesh), asked by a page that
          * fetched ?shapes=1&lazy=1 */
         if (query_param(query, "link", &prx) && parse_u64(prx, &budget)) {
-            int st = cc_link_mesh(cfg->session, budget, &mp, &mn);
-            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, NULL, mp, mn, keep);
+            Str nm, ky; /* SIZE2FIX: the link's name and the heads' mesh key, when the page sends them */
+            Buf nb;
+            buf_init(&nb);
+            uint64_t key = 0;
+            int has_name = query_param(query, "name", &nm) && percent_decode(nm, &nb) == 1;
+            int has_key = query_param(query, "key", &ky) && parse_u64(ky, &key);
+            int st = cc_link_mesh(cfg->session, budget, has_name ? (nb.p ? nb.p : "") : NULL, has_name ? nb.len : 0, has_key, key, &mp, &mn);
+            buf_free(&nb);
+            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 204 ? "X-Superseded: 1\r\nAccess-Control-Expose-Headers: X-Superseded\r\n" : NULL, mp, mn, keep);
             buf_free(&cfg->session->link_mesh_out), buf_init(&cfg->session->link_mesh_out); /* copied into the answer: none kept */
             goto mesh_done;
         }

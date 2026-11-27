@@ -319,6 +319,9 @@ const EMPTY_PART_BMSH: Bmsh = { rev: 0, origin: [0, 0, 0], ids: [], cats: new Ui
  *  model's (indices from 0) and each link's (indices from the link's first vertex: its own BMSH's). A link's
  *  are dropped once its buffers are on the GPU (null) and fetched again when its detail comes back. */
 export interface MeshPart { pos: Float32Array; idx: Uint32Array; edges: Float32Array; normals: Int8Array }
+/** SIZE2FIX: a link's mesh asked after the links changed (the host answers 204): that fetch is dropped, the heads
+ *  are asked again; nothing is logged. */
+export class Superseded extends Error { constructor(name: string) { super(`link ${name}: superseded`); } }
 /** SIZE2: a link's head in the LNKS trailer (version 3: its mesh asked on its own, GET /mesh?link=k). */
 interface LinkHead { name: string; visible: boolean; c: number; s: number; at: number[] | null; colour: number; m: Bmsh | null; nE: number; key: number }
 
@@ -698,6 +701,8 @@ interface GlStats {
   farLinks?: { name: string; km: number }[];
   linkDetail?: { name: string; detail: boolean; bytes: number; loads: number }[];
   linkReloadMs?: number;
+  /** SIZE2FIX: links' meshes found superseded (the links changed while asked): dropped and asked again, no error. */
+  linkSuperseded?: number;
   /** SIZE2: the mesh bytes served to this page in all (/mesh and each link's /mesh?link=k, refetches too). */
   meshBytesServed?: number;
   /** SIZE2: links' meshes asked again (a released link's detail back), the last one's ms; picks read back from the GPU. */
@@ -736,7 +741,7 @@ export interface MeshSource {
   linkProxies?(k: number): Promise<{ status: number; bytes: ArrayBuffer }>;
   /** SIZE2: link k's mesh on its own (GET /mesh?link=k, BMSH version 4 read back as version 3 by gl/bmsh4.ts),
    *  with the bytes served. Present: `mesh()` answers the links' heads only (LNKS version 3). */
-  linkMesh?(k: number): Promise<{ bytes: ArrayBuffer; served: number }>;
+  linkMesh?(k: number, name: string, key: number): Promise<{ bytes: ArrayBuffer; served: number }>;
 }
 
 /** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
@@ -811,8 +816,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (!r.ok) throw new Error(`mesh: HTTP ${r.status} ${await r.text()}`);
       return r.arrayBuffer();
     },
-    linkMesh: async (k: number) => { // SIZE2
-      const r = await fetch(`${base}/mesh?t=${t}&link=${k}`, { cache: "no-store" });
+    linkMesh: async (k: number, name: string, key: number) => { // SIZE2; SIZE2FIX: the link by its name and the heads' key
+      const r = await fetch(`${base}/mesh?t=${t}&link=${k}&name=${encodeURIComponent(name)}&key=${key}`, { cache: "no-store" });
+      if (r.status === 204) throw new Superseded(name); // removed, replaced or read again since the heads: not an error
       if (!r.ok) throw new Error(`mesh of link ${k}: HTTP ${r.status} ${await r.text()}`);
       const ab = await r.arrayBuffer();
       return { bytes: await bmsh4ToBmsh3(ab, 2 ** 31, () => new Promise<void>((res) => setTimeout(res, 0))), served: ab.byteLength };
@@ -1686,7 +1692,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     x.fetching = true;
     const t0 = performance.now();
     try {
-      const r = await ask(x.k - 1);
+      const name = m.links?.[x.k - 1]?.name ?? "";
+      const r = await ask(x.k - 1, name, linkKeys[x.k - 1] ?? 0);
       const lm = parseBmsh(r.bytes, 0, true);
       stats.meshBytesServed = (stats.meshBytesServed ?? 0) + r.served;
       if (mesh !== m || lm.ids.length !== x.e1 - x.e0 || lm.rev !== linkKeys[x.k - 1]) return; // another mesh since (it is asked again whole)
@@ -1696,7 +1703,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       stats.linkRefetches = (stats.linkRefetches ?? 0) + 1, stats.linkRefetchMs = performance.now() - t0;
       dirty = true;
     } catch (e) {
-      console.warn("gl viewport: a link's mesh:", e);
+      if (e instanceof Superseded) stats.linkSuperseded = (stats.linkSuperseded ?? 0) + 1; // SIZE2FIX: the mesh follows (links_mesh)
+      else console.warn("gl viewport: a link's mesh:", e);
     } finally { x.fetching = false; }
   };
   /** What the GPU holds: each model's buffers (lists included), the state texture, the proxies (3D2's, the links'). */
@@ -1891,10 +1899,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
           const h = heads[k]!;
           keys.push(h.key);
           if (!h.nE) continue;
-          const r = await source.linkMesh(k);
+          const r = await source.linkMesh(k, h.name, h.key);
           served += r.served;
           const lm = parseBmsh(r.bytes, 0, true);
-          if (lm.ids.length !== h.nE || lm.rev !== h.key) throw new Error(`link ${h.name}: its mesh changed while it was asked (retried)`);
+          if (lm.ids.length !== h.nE || lm.rev !== h.key) throw new Superseded(h.name); // (the host checks it too)
           h.m = lm;
         }
       }
@@ -1918,6 +1926,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       stats.loadSteps = { parse: tu - tp, upload: performance.now() - tu, lists: 0, colours: 0 }; // 3D2 (step 5)
       void loadProxies(m); // 3D2: after the first frame, in steps
     } catch (e) {
+      if (e instanceof Superseded) { // SIZE2FIX: the links changed while their meshes were asked: asked again, quietly
+        stats.linkSuperseded = (stats.linkSuperseded ?? 0) + 1;
+        await new Promise((res) => setTimeout(res, 50));
+        wantRev = null;
+        return;
+      }
       stats.error = e instanceof Error ? e.message : String(e);
       console.warn("gl viewport:", stats.error);
       await new Promise((res) => setTimeout(res, 1000)); // the host may be restarting: retry
