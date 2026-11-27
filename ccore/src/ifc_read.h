@@ -101,6 +101,18 @@ typedef struct {
     int cancel;
 } cc_ifc_progress;
 int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg);
+/* TESS1 (ADR 0085): how finely curves become triangles. EXACT: Rust's reader (arcs within 0.5 mm,
+ * 15 degrees per chord): the goldens of Rust. STANDARD (the default of cc_ifc_read,
+ * cc_ifc_read_progress and opts NULL): arcs within 2 mm, 18 degrees per chord (20 per circle: no
+ * crease line along a cylinder). LIGHT: arcs within 10 mm, 30 degrees per chord. Given meshes
+ * (faceted breps, face sets) are kept as the file gives them at every level. */
+typedef enum { CC_IFC_DETAIL_EXACT = 0, CC_IFC_DETAIL_STANDARD = 1, CC_IFC_DETAIL_LIGHT = 2 } cc_ifc_detail;
+typedef struct {
+    cc_ifc_detail detail;
+} cc_ifc_read_opts;
+/* cc_ifc_read_progress with options (NULL: the defaults); an unknown detail reads as STANDARD. */
+int cc_ifc_read_with(const char *text, size_t n, const cc_ifc_read_opts *opts, cc_ifc_scene *out, cc_error *err,
+                     cc_ifc_progress *pg);
 void cc_ifc_scene_free(cc_ifc_scene *s);
 
 /* serde_json of the Georef ("{}" when default), appended. */

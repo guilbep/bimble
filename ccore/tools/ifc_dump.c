@@ -2,12 +2,13 @@
  * examples/ccore_golden.rs), for comparing the C core with Rust on any IFC file (files that are
  * not goldens). Same formats, same file names, nothing masked.
  *
- *   ifc_dump read <in.ifc> <outdir>
+ *   ifc_dump read <in.ifc> <outdir> [--detail exact|standard|light]
  *       cc_ifc_read: scene.txt, meshes.txt (per element "<k> <bytes> <FNV-1a 64 hex>" of its
  *       <k>.txt text), <k>.txt when the scene has at most 20000 triangles (the golden rule),
  *       time.txt ("read_ms <ms>": the read alone), counts.txt (products with a body, entities
  *       parsed, elements drawn, triangles, "empty <ENTITY> <n>" per class of the products drawn
- *       empty: C only, for bench/corpus.sh).
+ *       empty: C only, for bench/corpus.sh). --detail: the reader's detail (ifc_read.h, ticket
+ *       TESS1; default standard; exact is Rust's reader).
  *   ifc_dump import <in.ifc> <outdir> [<export.ifc>]
  *       cc_ifc_import: report.txt (the report's lines, the C-only "unsupported: " lines
  *       included, or "error <text>"), model.size.txt, model.json (at most 1 GiB), time.txt.
@@ -81,13 +82,14 @@ static void put_time(const char *dir, const char *what, double ms) {
     put(dir, "time.txt", t, (size_t)n);
 }
 
-static int dump_read(const char *in, const char *out) {
+static int dump_read(const char *in, const char *out, int detail) {
     size_t n;
     char *text = slurp_path(in, &n);
     cc_ifc_scene s;
     cc_error err;
     double t0 = now_ms();
-    int rc = cc_ifc_read(text, n, &s, &err);
+    cc_ifc_read_opts opts = {(cc_ifc_detail)detail};
+    int rc = cc_ifc_read_with(text, n, &opts, &s, &err, NULL);
     double ms = now_ms() - t0;
     free(text);
     Buf b, m, lines;
@@ -224,9 +226,15 @@ int main(int argc, char **argv) {
 #define mkdir(path, mode) mkdir(path) /* WIN1: no mode argument there */
 #endif
         if (mkdir(argv[3], 0755) && errno != EEXIST) { fprintf(stderr, "%s: %s\n", argv[3], strerror(errno)); return 2; }
-        if (!strcmp(argv[1], "read") && argc == 4) return dump_read(argv[2], argv[3]);
+        if (!strcmp(argv[1], "read") && argc == 4) return dump_read(argv[2], argv[3], CC_IFC_DETAIL_STANDARD);
+        if (!strcmp(argv[1], "read") && argc == 6 && !strcmp(argv[4], "--detail")) { /* TESS1 */
+            const char *d = argv[5];
+            int detail = !strcmp(d, "exact") ? CC_IFC_DETAIL_EXACT : !strcmp(d, "standard") ? CC_IFC_DETAIL_STANDARD
+                         : !strcmp(d, "light") ? CC_IFC_DETAIL_LIGHT : -1;
+            if (detail >= 0) return dump_read(argv[2], argv[3], detail);
+        }
         if (!strcmp(argv[1], "import") && argc <= 5) return dump_import(argv[2], argv[3], argc == 5 ? argv[4] : NULL);
     }
-    fprintf(stderr, "usage: ifc_dump read <in.ifc> <outdir> | import <in.ifc> <outdir> [<export.ifc>]\n");
+    fprintf(stderr, "usage: ifc_dump read <in.ifc> <outdir> [--detail exact|standard|light] | import <in.ifc> <outdir> [<export.ifc>]\n");
     return 2;
 }

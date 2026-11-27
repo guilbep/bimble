@@ -203,6 +203,14 @@ static void ixmap_free(IxMap *m) {
 #define NOINLINE
 #endif
 
+/* How arcs and circles become chords (ticket TESS1, ADR 0085): `tol` the largest distance from a
+ * chord to its arc (the sagitta), in file units; `step` the largest angle one chord spans;
+ * `legacy` Rust's clamp (at least 8 chords for any sweep). tess_for() gives the detail levels. */
+typedef struct {
+    double tol, step;
+    int legacy;
+} Tess;
+
 /* Placement cache: open addressing on the entity index (key ix + 1; 0 empty). */
 typedef struct {
     size_t key;
@@ -217,7 +225,7 @@ typedef struct {
                        * the count does not depend on which thread met it first) */
     Tallies warnings; /* Reader warnings (BTreeMap with counts) */
     Tallies unsup;    /* outside the C subset */
-    double arc_tol;     /* arc tessellation tolerance, file units */
+    Tess arc_tol;       /* arc tessellation: tolerance (file units) and step (ticket TESS1) */
     double angle_scale; /* plane angle unit -> radians */
     uint64_t stack[MAX_NESTING + 8]; /* representation maps being expanded */
     size_t nstack;
@@ -527,12 +535,27 @@ static const double TAU = 6.283185307179586;
 
 /* ---- arcs */
 
-/* arc_segments: chords within tol of a circle of radius r over sweep, at most 15° each. */
-static size_t arc_segments(double r, double sweep, double tol) {
-    const double MAX_STEP = 3.141592653589793 / 12.0;
-    double step = tol > 0.0 && tol < r ? fmin_rs(2.0 * cc_acos(1.0 - tol / r), MAX_STEP) : MAX_STEP;
-    double q = (sweep < 0 ? -sweep : sweep) / fmax_rs(step, 1e-3);
-    /* .ceil() as usize, saturating; NaN -> 0; then clamp(8, 1024) */
+/* The reader's detail levels (cc_ifc_detail, ifc_read.h) for a file whose length unit is `scale`
+ * mm. Standard: sagitta 2 mm, 18° per chord (20 per circle: under scene.c's 20° crease angle, so
+ * a cylinder's side keeps no edge line); light: 10 mm, 30° (12 per circle: facet edges drawn);
+ * exact: Rust's 0.5 mm, 15°, at least 8 chords for any sweep (read.rs ARC_TOLERANCE_MM). */
+static Tess tess_for(int detail, double scale) {
+    const double DEG = 3.141592653589793 / 180.0;
+    Tess t = {0.5 / scale, 15.0 * DEG, 1}; /* exact (0) and anything unknown */
+    if (detail == 1) t.tol = 2.0 / scale, t.step = 18.0 * DEG, t.legacy = 0;
+    else if (detail == 2) t.tol = 10.0 / scale, t.step = 30.0 * DEG, t.legacy = 0;
+    return t;
+}
+
+/* arc_segments: chords within ts->tol of a circle of radius r over sweep, at most ts->step each,
+ * at most 1024. The count depends on r, the sweep and the detail only: copies of one shape get the
+ * same count and are still found as copies. */
+static size_t arc_segments(double r, double sweep, const Tess *ts) {
+    double tol = ts->tol, max_step = ts->step;
+    double step = tol > 0.0 && tol < r ? fmin_rs(2.0 * cc_acos(1.0 - tol / r), max_step) : max_step;
+    double as = sweep < 0 ? -sweep : sweep;
+    double q = as / fmax_rs(step, 1e-3);
+    /* .ceil() as usize, saturating; NaN -> 0; then clamp(lo, 1024) */
     size_t n;
     if (!(q > 0)) n = 0;
     else if (q >= 1e18) n = (size_t)-1;
@@ -540,11 +563,16 @@ static size_t arc_segments(double r, double sweep, double tol) {
         uint64_t t = (uint64_t)q;
         n = (size_t)((double)t < q ? t + 1 : t);
     }
-    return n < 8 ? 8 : n > 1024 ? 1024 : n;
+    size_t lo = 8; /* legacy: 8 for any sweep */
+    if (!ts->legacy) { /* 8 for a full turn, in proportion for an arc, at least 1 */
+        double m = 8.0 * as / TAU;
+        lo = !(m > 1.0) ? 1 : m >= 8.0 ? 8 : (size_t)m + ((double)(size_t)m < m);
+    }
+    return n < lo ? lo : n > 1024 ? 1024 : n;
 }
 
 /* arc: points from a through b to c (inclusive), within tol. Appends to out. */
-static int arc2(const double *a, const double *b, const double *c, double tol, Loop *out) {
+static int arc2(const double *a, const double *b, const double *c, const Tess *tol, Loop *out) {
     double d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
     if ((d < 0 ? -d : d) < 1e-12) {
         if (loop_push(out, a[0], a[1]) || loop_push(out, b[0], b[1]) || loop_push(out, c[0], c[1])) return -1;
@@ -571,7 +599,7 @@ static int arc2(const double *a, const double *b, const double *c, double tol, L
 
 /* arc3: the arc through three 3D points, in its own plane. Appends to out, skipping the first
  * `skip` points. */
-static int arc3(const double *a, const double *b, const double *c, double tol, size_t skip, P3 *out) {
+static int arc3(const double *a, const double *b, const double *c, const Tess *tol, size_t skip, P3 *out) {
     double ba[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, ca[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
     double nn[3], e1[3], n[3], e2[3];
     cross(ba, ca, nn);
@@ -600,7 +628,7 @@ static int arc3(const double *a, const double *b, const double *c, double tol, s
 }
 
 /* fillet: the given corners replaced with arcs of radius r. */
-static int fillet(const double (*poly)[2], size_t n, const size_t *corners, size_t nc, double r, double tol,
+static int fillet(const double (*poly)[2], size_t n, const size_t *corners, size_t nc, double r, const Tess *tol,
                   Loop *out) {
     for (size_t i = 0; i < n; i++) {
         const double *c = poly[i];
@@ -764,7 +792,7 @@ static int trimmed_curve(R *r, const cc_step_entity *e, int depth, P3 *out) {
             double s = rem_euclid(a1 - a2, TAU);
             sweep = -(s < 1e-12 ? TAU : s);
         }
-        size_t n = arc_segments(fmax_rs(r1, r2), sweep, r->arc_tol);
+        size_t n = arc_segments(fmax_rs(r1, r2), sweep, &r->arc_tol);
         size_t start = out->n;
         for (size_t i = 0; i <= n; i++) {
             double a = a1 + sweep * (double)i / (double)n;
@@ -834,7 +862,7 @@ static int curve3(R *r, const cc_sv *v, int depth, P3 *out) {
                 if (ok == ni) {
                     if (!out->n && p3_push(out, coords.p[at[0]])) rc = -1;
                     if (rc == 1 && !strcmp(segs[s].u.typed.name, "IFCARCINDEX") && ni == 3) {
-                        if (arc3(coords.p[at[0]], coords.p[at[1]], coords.p[at[2]], r->arc_tol, 1, out)) rc = -1;
+                        if (arc3(coords.p[at[0]], coords.p[at[1]], coords.p[at[2]], &r->arc_tol, 1, out)) rc = -1;
                     } else
                         for (size_t k = 1; rc == 1 && k < ni; k++)
                             if (p3_push(out, coords.p[at[k]])) rc = -1;
@@ -867,7 +895,7 @@ static int curve3(R *r, const cc_sv *v, int depth, P3 *out) {
         if (is(e, "IFCELLIPSE")) {
             if (!cc_sv_as_f64(arg(e, 2), &r2)) return 0;
         } else r2 = r1;
-        size_t n = arc_segments(fmax_rs(r1, r2), TAU, r->arc_tol);
+        size_t n = arc_segments(fmax_rs(r1, r2), TAU, &r->arc_tol);
         for (size_t i = 0; i < n && rc == 1; i++) {
             double a = (double)i / (double)n * TAU;
             double p[3] = {r1 * cc_cos(a), r2 * cc_sin(a), 0.0}, q[3];
@@ -948,7 +976,7 @@ static int push_rect(Loops *ls, double a, double b) {
  * slope too). */
 
 /* fillet_r: corner i replaced with an arc of radius rad[i] (0: sharp); fillet()'s arithmetic. */
-static int fillet_r(const double (*poly)[2], size_t n, const double *rad, double tol, Loop *out) {
+static int fillet_r(const double (*poly)[2], size_t n, const double *rad, const Tess *tol, Loop *out) {
     for (size_t i = 0; i < n; i++) {
         const double *c = poly[i];
         double r = rad[i];
@@ -975,7 +1003,7 @@ static int fillet_r(const double (*poly)[2], size_t n, const double *rad, double
  * IFC3: the sloped profiles' corners are not right angles). The arc is tangent to both edges at
  * rad / tan(half the corner angle) from the corner; a radius whose tangent points pass an edge's
  * length, or a straight or folded-back corner, leaves the corner sharp. */
-static int fillet_g(const double (*poly)[2], size_t n, const double *rad, double tol, Loop *out) {
+static int fillet_g(const double (*poly)[2], size_t n, const double *rad, const Tess *tol, Loop *out) {
     for (size_t i = 0; i < n; i++) {
         const double *c = poly[i], *p = poly[(i + n - 1) % n], *q = poly[(i + 1) % n];
         double r = rad[i];
@@ -1157,7 +1185,7 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
             warn(r, "invalid profile ", e->name, " (skipped)");
             return 0;
         }
-        size_t m = arc_segments(fmax_rs(v[0], v[1]), TAU, r->arc_tol);
+        size_t m = arc_segments(fmax_rs(v[0], v[1]), TAU, &r->arc_tol);
         Loop l = {0};
         for (size_t i = 0; i < m; i++) {
             double a = (double)i / (double)m * TAU;
@@ -1172,7 +1200,7 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
         return 0;
     }
     Loop l = {0};
-    if ((sloped ? fillet_g : fillet_r)((const double(*)[2])c, n, rad, r->arc_tol, &l) || loops_push(out, l)) {
+    if ((sloped ? fillet_g : fillet_r)((const double(*)[2])c, n, rad, &r->arc_tol, &l) || loops_push(out, l)) {
         free(l.p);
         return -1;
     }
@@ -1294,12 +1322,12 @@ static int profile(R *r, const cc_sv *v, int depth, Loops *out) {
         double rad;
         if (!cc_sv_as_f64(arg(e, 3), &rad)) return 0;
         Loop l = {0};
-        if (ring(&l, rad, arc_segments(rad, TAU, r->arc_tol)) || loops_push(out, l)) free(l.p), bad = 1;
+        if (ring(&l, rad, arc_segments(rad, TAU, &r->arc_tol)) || loops_push(out, l)) free(l.p), bad = 1;
         if (!bad) loops_place(r, out, arg(e, 2));
     } else if (is(e, "IFCCIRCLEHOLLOWPROFILEDEF")) {
         double rad, t;
         if (!cc_sv_as_f64(arg(e, 3), &rad) || !cc_sv_as_f64(arg(e, 4), &t)) return 0;
-        size_t n = arc_segments(rad, TAU, r->arc_tol);
+        size_t n = arc_segments(rad, TAU, &r->arc_tol);
         Loop l = {0};
         if (ring(&l, rad, n) || loops_push(out, l)) free(l.p), bad = 1;
         if (!bad && t > 0.0 && t < rad) {
@@ -1332,10 +1360,10 @@ static int profile(R *r, const cc_sv *v, int depth, Loops *out) {
             c[3][1] = c[10][1] = -h + tf + dy, c[4][1] = c[9][1] = h - tf - dy;
             double rr[12] = {0};
             if (cc_sv_as_f64(arg(e, 7), &rad) && finite(rad) && rad > 0.0) rr[3] = rr[4] = rr[9] = rr[10] = rad;
-            if (fillet_g((const double(*)[2])c, 12, rr, r->arc_tol, &l)) bad = 1;
+            if (fillet_g((const double(*)[2])c, 12, rr, &r->arc_tol, &l)) bad = 1;
         } else if (cc_sv_as_f64(arg(e, 7), &rad) && finite(rad) && rad > 0.0) {
             static const size_t corners[4] = {3, 4, 9, 10};
-            if (fillet((const double(*)[2])c, 12, corners, 4, rad, r->arc_tol, &l)) bad = 1;
+            if (fillet((const double(*)[2])c, 12, corners, 4, rad, &r->arc_tol, &l)) bad = 1;
         } else
             for (int k = 0; k < 12 && !bad; k++) bad = loop_push(&l, c[k][0], c[k][1]);
         if (bad || loops_push(out, l)) free(l.p), bad = 1;
@@ -1709,7 +1737,7 @@ static void revolved_of(R *r, const cc_step_entity *e, const cc_sv *prof, const 
             rmax = fmax_rs(rmax, norm3(rv));
         }
     if (!(rmax > 0.0) || !finite(rmax)) goto out;
-    size_t n = arc_segments(rmax, ang, r->arc_tol), nr = full ? n : n + 1;
+    size_t n = arc_segments(rmax, ang, &r->arc_tol), nr = full ? n : n + 1;
     rings = calloc(ls.n, sizeof *rings); /* loop i: nr rings of ls.v[i].n points */
     if (!rings) { out->mb->oom = 1; goto out; }
     for (size_t i = 0; i < ls.n; i++)
@@ -1829,7 +1857,7 @@ static int csg_primitive(R *r, const cc_step_entity *e, const Aff *tf, Emit *out
     } else if (is(e, "IFCRIGHTCIRCULARCYLINDER") || is(e, "IFCRIGHTCIRCULARCONE")) {
         /* Cylinder (Position, Height, Radius); cone (Position, Height, BottomRadius). */
         bad = !num(e, 1, &v[0]) || !num(e, 2, &v[1]) || !(v[0] > 0 && v[1] > 0);
-        if (!bad && ring(&l, v[1], arc_segments(v[1], TAU, r->arc_tol))) t.oom = 1;
+        if (!bad && ring(&l, v[1], arc_segments(v[1], TAU, &r->arc_tol))) t.oom = 1;
         double apex[3] = {0, 0, v[0]};
         if (!bad && !t.oom) {
             if (is(e, "IFCRIGHTCIRCULARCONE")) loc_cone(&t, &l, apex);
@@ -1837,7 +1865,7 @@ static int csg_primitive(R *r, const cc_step_entity *e, const Aff *tf, Emit *out
         }
     } else if (is(e, "IFCSPHERE")) {
         bad = !num(e, 1, &v[0]) || !(v[0] > 0);
-        size_t nl = bad ? 0 : arc_segments(v[0], TAU, r->arc_tol), nb = nl / 2 < 4 ? 4 : nl / 2;
+        size_t nl = bad ? 0 : arc_segments(v[0], TAU, &r->arc_tol), nb = nl / 2 < 4 ? 4 : nl / 2;
         /* Rings from the north pole down; each pole one point. */
         for (size_t k = 0; !bad && k < nb && !t.oom && local_room(&t, out); k++) {
             double f0 = TAU / 2.0 * (double)k / (double)nb, f1 = TAU / 2.0 * (double)(k + 1) / (double)nb;
@@ -2191,7 +2219,7 @@ static void swept_disk(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) 
     if (!cc_sv_as_f64(arg(e, 1), &rad) || !finite(rad) || !(rad > 0)) { p3_free(&path); return; }
     if (cc_sv_as_f64(arg(e, 2), &ri) && ri > 0) warn(r, "hollow swept disk drawn solid (inner radius ignored)", 0, 0);
     for (size_t i = 0; i < path.n; i++) aff_apply(tf, path.p[i], path.p[i]);
-    tube(&path, rad, arc_segments(rad, TAU, r->arc_tol), out);
+    tube(&path, rad, arc_segments(rad, TAU, &r->arc_tol), out);
     p3_free(&path);
 }
 

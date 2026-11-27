@@ -59,7 +59,7 @@ static cc_str a_str(Arena *a, const char *s, size_t n, int *oom) {
     return r;
 }
 
-static void r_init(R *r, const cc_step_file *f, double arc_tol, double angle_scale) {
+static void r_init(R *r, const cc_step_file *f, Tess arc_tol, double angle_scale) {
     memset(r, 0, sizeof *r);
     r->f = f;
     r->pl_no_warned = 1;
@@ -410,7 +410,8 @@ static long shape_find(const Shape *v, size_t n, uint64_t id) {
 
 typedef struct {
     const cc_step_file *f;
-    double scale, arc_tol, angle_scale;
+    double scale, angle_scale;
+    Tess arc_tol;
     /* Openings (IfcRelVoidsElement): (host entity index, opening id) pairs sorted by host, then
      * opening id. */
     const size_t *void_host;
@@ -703,7 +704,8 @@ static void pg_set(cc_ifc_progress *pg, size_t v) {
 }
 static int pg_cancelled(cc_ifc_progress *pg) { return pg && cc_atomic_load(&pg->cancel); }
 
-static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg) {
+static int read_parsed(cc_step_file *f, const char *text, size_t n, int detail, cc_ifc_scene *out, cc_error *err,
+                       cc_ifc_progress *pg) {
     cc_scene *s = &out->scene;
     Arena *a = &s->arena;
     int rc = -1, oom = 0;
@@ -712,7 +714,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     Ctx c;
     memset(&c, 0, sizeof c);
     c.f = f;
-    r_init(&r, f, 0.5, 1.0);
+    r_init(&r, f, tess_for(detail, 1.0), 1.0);
     Conts cont = {0};
     ElMats em = {0};
     VoidPair *vp = NULL;
@@ -747,7 +749,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         buf_free(&b);
     }
     double scale = length_scale_to_mm(&r);
-    r.arc_tol = 0.5 / scale; /* ARC_TOLERANCE_MM / scale */
+    r.arc_tol = tess_for(detail, scale); /* exact: ARC_TOLERANCE_MM / scale (TESS1: the detail) */
     r.angle_scale = plane_angle_to_radians(&r);
     c.scale = scale, c.arc_tol = r.arc_tol, c.angle_scale = r.angle_scale;
     containers(&r, &cont);
@@ -1112,10 +1114,17 @@ done:
 }
 
 int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
-    return cc_ifc_read_progress(text, n, out, err, NULL);
+    return cc_ifc_read_with(text, n, NULL, out, err, NULL);
 }
 
 int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg) {
+    return cc_ifc_read_with(text, n, NULL, out, err, pg);
+}
+
+int cc_ifc_read_with(const char *text, size_t n, const cc_ifc_read_opts *opts, cc_ifc_scene *out, cc_error *err,
+                     cc_ifc_progress *pg) {
+    int detail = opts ? (int)opts->detail : CC_IFC_DETAIL_STANDARD;
+    if (detail < CC_IFC_DETAIL_EXACT || detail > CC_IFC_DETAIL_LIGHT) detail = CC_IFC_DETAIL_STANDARD;
     memset(out, 0, sizeof *out);
     arena_init(&out->scene.arena, 0);
     out->schema.p = "";
@@ -1164,7 +1173,7 @@ int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error
         cc_step_free(&f);
         return -1;
     }
-    int rc = pg_cancelled(pg) ? (set_err(err, "cancelled", ""), -1) : read_parsed(&f, text, n, out, err, pg);
+    int rc = pg_cancelled(pg) ? (set_err(err, "cancelled", ""), -1) : read_parsed(&f, text, n, detail, out, err, pg);
     if (!rc) pg_set(pg, 950);
     PROF("geometry+scene total");
     cc_step_free(&f);
