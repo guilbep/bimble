@@ -143,6 +143,8 @@ gate_rest() {
 labs() {
     suite build-tcc ./build.sh tcc
     suite build-wasm ./build.sh wasm # lab_wasm, lab_pages
+    # URL1: lab_open_url serves the page as Pages does, with the viewer-only wasm (the lab job alone has not built it)
+    [[ -f out/wasm/ccore-view.wasm ]] || suite build-wasm-view-lab ./build.sh wasm-view
     for f in test/lab_*.mjs; do
         t=$(basename "${f%.mjs}")
         [[ $t == lab_boot ]] && continue # host.sh
