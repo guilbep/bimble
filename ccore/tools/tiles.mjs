@@ -298,7 +298,7 @@ async function shellCompare(label, files, cache, place) {
     await H.call("action", "link_model", { paths: files });
     for (let i = 0; i < 24000; i++) {
       const r = JSON.parse((await H.call("query", "links_panel", {})).text).models;
-      if (r.length >= files.length && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed" || m.state === "refused")) break;
+      if (r.length >= files.length && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed") || (i > 3000 && r.some((m) => m.state === "refused"))) break;
       await sleep(100);
     }
     const ext = [];
@@ -339,7 +339,7 @@ async function crossCompare(label, nlinks, bounds) {
     if (!CUR.project) { await H.call("action", "new"); await H.call("action", "link_model", { paths: CUR.files }); }
     for (let i = 0; i < 24000; i++) {
       const r = JSON.parse((await H.call("query", "links_panel", {})).text).models;
-      if (r.length >= nlinks && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed" || m.state === "refused")) break;
+      if (r.length >= nlinks && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed") || (i > 3000 && r.some((m) => m.state === "refused"))) break;
       await sleep(100);
     }
     if (CUR.place) for (let k = 0; k < nlinks; k++) {
@@ -417,7 +417,7 @@ async function linkedSet(label, files, cache, place, project) {
   const n = files.length;
   for (let i = 0; i < 24000; i++) {
     const r = JSON.parse((await H.call("query", "links_panel", {})).text).models;
-    if (r.length >= n && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed" || m.state === "refused")) break;
+    if (r.length >= n && r.every((m) => m.state === "ready" && !m.indexing) || r.some((m) => m.state === "failed") || (i > 3000 && r.some((m) => m.state === "refused"))) break; // refused: queued again by itself (SIZE2)
     await sleep(100);
   }
   { const r = JSON.parse((await H.call("query", "links_panel", {})).text).models; log(`${label}: links ${r.map((m) => `${m.state}${m.indexing ? "+indexing" : ""}`).join(" ")}`); }

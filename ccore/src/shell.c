@@ -602,7 +602,13 @@ typedef struct {
 static void draw_job(void *ctx, size_t v, size_t worker) {
     cc_shell *s = ((Job *)ctx)->s;
     (void)worker;
-    for (size_t t = 0; t < s->soup.nt; t++) cc_shell_draw(&s->zb[v], s->soup.t[t]);
+    /* an element whose box lies behind every block it covers (the buffer as the previous runs left it) would write nothing:
+     * skipped (exact). The pyramid's order draws the large elements (a cell's own leaves) before the cells' small ones. */
+    for (uint32_t i = 0; i < s->nrel; i++) {
+        if (cc_shell_box_hidden(&s->zb[v], s->ebox[s->rel[i]], 0)) continue;
+        for (uint32_t t = s->rng[i][0]; t < s->rng[i][1]; t++) cc_shell_draw(&s->zb[v], s->soup.t[t]);
+    }
+    cc_shell_zb_blocks(&s->zb[v]);
 }
 
 static void blocks_job(void *ctx, size_t v, size_t worker) {
