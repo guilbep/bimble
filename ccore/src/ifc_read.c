@@ -498,9 +498,9 @@ static int cut(R *w, Tris *tris, const Tris *cutters, size_t n, const char *what
     }
     free(refs);
     /* TESS1 (ADR 0085), every detail but exact: openings that remove nothing (no volume, no area:
-     * an opening beside its host) leave the host as the file gives it, not as the kernel splits
-     * it; a kernel result's coplanar triangles are merged. */
-    if (cut_any && !w->arc_tol.legacy && same_solid(&host, tris)) {
+     * an opening beside its host) leave the host as the file gives it, unless the kernel's is
+     * lighter; a kernel result's coplanar triangles are merged. */
+    if (cut_any && !w->arc_tol.legacy && host.n <= tris->n && same_solid(&host, tris)) {
         tris_free(tris);
         *tris = host;
     } else {

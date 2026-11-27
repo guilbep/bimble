@@ -2461,8 +2461,8 @@ static NOINLINE void boolean_finish(R *r, cc_bool_op op, Tris *ap, Tris *bp, int
         /* A clipping half-space that leaves nothing (Revit: a wall's top plane put below its
          * bottom) is an export error: drawn unclipped, as IfcOpenShell does, rather than lost. */
         warn(r, "a clipping plane removed the whole solid; drawn unclipped", 0, 0);
-    else if (rc == 0 && !r->arc_tol.legacy && same_solid(&a, &res))
-        draw = &a; /* nothing taken or added: a as given (TESS1) */
+    else if (rc == 0 && !r->arc_tol.legacy && a.n <= res.n && same_solid(&a, &res))
+        draw = &a; /* nothing taken or added: a as given, when the kernel's is not lighter (TESS1) */
     else if (rc == 0) {
         draw = &res;
         if (r->bool_depth == 1) merge_tris(r, &res); /* the outermost result only (TESS1) */
