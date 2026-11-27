@@ -144,3 +144,45 @@ caches weigh 96 MB on disk for 1.84 GB of IFC (5 %). BLAKE3 (the portable code t
 - Open: Windows' `spawn` and `mem_available` (the Windows host converts in the call and does not
   check the free memory); the grid axes and levels of a placed link (snapping, `views` JSON) are
   still the link's own, unplaced.
+
+## Amendment (27 Nov 2026, ticket SIZE2): the cache small again, the estimate refit, the IFC mapped
+
+The owner's folder (17 IFC files, 3.9 GB): the caches beside the IFCs weighed 1.6 GB (41 %; this ADR measured 232 MB,
+5.5 %, before M1LINKS added `PROP` and LNK3D `HLOD`). One cache of 441 MB for a 709 MB IFC: 72 MB of geometry and
+strings, 227 MB of baked proxies (5.04 M triangles, three times the model's unique triangles they stand for), 142 MB of
+property sets, nothing compressed. And "too large for this machine" refused the 17th file with 2.1 GB free. Choices by
+Claude on ticket SIZE2 under the same delegation.
+
+14. **Cache format 5** (`bimble-link-cache 5`: older caches are converted again):
+    - `HLOD` (ADR 0078 decision 26): one gzip member of the BPRX, within a budget of 15 % of the geometry section (`ELEM`)
+      bounded by 256 KiB and 32 MiB, the coarsest cells kept, 4,096 triangles at most a cell. Inflated when served, at
+      most 64 times its stored size and 64 MiB.
+    - `PRPZ` in place of `PROP` (ADR 0081 amendment): each distinct property set once, the elements pointing to set ids,
+      the sets' texts in gzip blocks of 64 KiB; still read per element from the file (a few small reads, one block
+      inflated to exactly its declared size, at most 1 MiB).
+    - The geometry (`ELEM`) stays as it was (the mesh codec, read at open): compressing it would add an inflate of every
+      byte to every open, and it is already about a third of raw f32 (ADR 0078 decision 23 serves it as it is).
+    - The report (`<file>.ifc.log.txt`) states each section's bytes, the proxies' budget and what it left out, and the
+      property sets' bytes as read.
+    **Alternative:** compress the whole cache (gzip view file): every open inflates everything, and `HLOD` / `PROP` could
+    no longer be read lazily from the file.
+15. **The estimate refit** (`ifc_read.h`): 3 × the file + min(640 MiB, 7 × the file) + 32 MiB, above every peak of the
+    table above (by 5.7 % for the 60 MB file of heavy meshes, 13 % for the 0.87 GB one: 3.3 GB asked for 2.91 GB taken;
+    the old rule asked 4.0 GB); `test/memfit_test.c` holds the table. **Alternative:** a ratio alone (3.5 ×): the small
+    files of heavy meshes peaked at 10 times their size.
+16. **A refused link** has "Convert now" in the Links panel (the link read again), and the host queues it again once by
+    itself when the memory it needs is free (checked every 2 s while nothing converts). **Alternative:** retry on every
+    tick: a file that does not fit would be refused again and again.
+17. **The native carrier maps the IFC** (`cc_platform.map_file`, mmap read-only, the core gets a pointer and a length as
+    before): the text is the page cache's pages, which the kernel can drop and read again, not the heap's. A file whose
+    size is a multiple of the page is read as before (no zero byte after it). The 270 MiB synthetic IFC of
+    `test/link_large_test.mjs` (283 MB): the conversion's anonymous peak 1.32 → 1.05 GB (getrusage's peak counts the
+    mapped pages too: 1.32 GB both). Freeing the STEP entities batch by batch is not done: they are most of what is left.
+18. Not done: freeing other links' detail before a large conversion (the detail is the page's, in another process; the
+    host holds only the light scenes).
+
+Synthetic set (17 links, 272 MB of IFC): the caches 55.4 → 20.2 MB, 20.3 % → 7.4 % of the IFC bytes (`ELEM` 9.37 MB,
+`HLOD` 8.18 → 1.12 MB, `PROP` 37.8 → `PRPZ` 9.71 MB: the synthetic elements' sets are each their own, so only the
+gzip blocks shrink them). A local folder of 17 IFC files (4.18 GB): its caches 1.716 GB (`ELEM` 231 MB, `HLOD` 619 MB,
+`PROP` 865 MB) → 281 MB, 6.7 % of the IFC (`ELEM` 231 MB, `HLOD` 14.8 MB, `PRPZ` 34.5 MB); the 17 converted one after
+the other in 50 s (the machine loaded by two other measuring agents), loaded together from their caches in 0.93 s.
