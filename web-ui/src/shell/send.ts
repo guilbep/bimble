@@ -75,6 +75,7 @@ function runFile(o: Extract<Shell, { at: "opening" }>): void {
     send(err ? { do: "failed", message: err } : { do: o.what === "close" ? "closed" : "opened" });
   };
   const name = o.what === "import" ? "import_ifc" : o.what;
+  if (o.url !== undefined) return pick(o, finish); // URL1: a link, also at start (before `backend` is known)
   if ((o.what === "open" || o.what === "import") && o.path === undefined && backend !== "rust") return pick(o, finish); // FS1: native too
   const body = o.path === undefined ? { discard: o.discard } : { path: o.path, discard: o.discard };
   const err = fileCall(name, body);
@@ -96,7 +97,7 @@ function pick(o: Extract<Shell, { at: "opening" }>, finish: (err: string | null)
   const name = o.what === "import" ? "import_ifc" : "open";
   // A dynamic import: files.ts imports the dialogs and the pages, which import this file.
   import("../files")
-    .then((m) => m.pickFile(name))
+    .then((m) => (o.url !== undefined ? m.pickUrl(o.url, () => shell.value === o) : m.pickFile(name))) // URL1: a link
     .then(async (r) => {
       if (shell.value !== o) return; // cancelled meanwhile
       if (!r) return void send({ do: "cancel" });

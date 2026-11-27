@@ -11,6 +11,7 @@
 web-ui/node_modules/
 web-ui/dist/
 web-ui/public/ccore/
+web-ui/public/samples/
 web-ui/design-check/out/
 # ccore/tools/compile_commands.sh (absolute paths: per machine)
 ccore/compile_commands.json

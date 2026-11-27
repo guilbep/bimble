@@ -89,7 +89,10 @@ fail), collaboration, rebar, steel. See [ROADMAP.md](ROADMAP.md).
 ## Try it
 
 - **In a browser:** <https://guilbep.github.io/bimble/> (the C lab, built from `main`). Files
-  you open stay on your computer.
+  you open stay on your computer. A link opens a model with nothing to install:
+  <https://guilbep.github.io/bimble/?open=samples/frame.ifc> (the demo frame, synthetic); any
+  `https://` file whose server allows other sites (CORS) opens with `#open=<url>`, and the page asks
+  before it fetches from another site (ADR 0086).
 - **Desktop (Linux x86_64 and aarch64, macOS arm64 and x86_64):** the archives of the latest
   `ccore-v*` [prerelease](https://github.com/guilbep/bimble/releases). Unpack, then
   `./bimble-ccore open model.ifc`: the lab opens in your browser.
