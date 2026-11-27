@@ -139,6 +139,9 @@ int desk_wheel(App *a, const SDL_MouseWheelEvent *w, float mx, float my) {
     float x = w->x, y = w->y;
     if (w->direction == SDL_MOUSEWHEEL_FLIPPED) x = -x, y = -y;
     int smooth = fabsf(y - roundf(y)) > 1e-3f || fabsf(x - roundf(x)) > 1e-3f || (x != 0 && y == 0);
+    static int said = -1; /* the session log says how the wheel was read (a free-spinning mouse wheel sends fractions too:
+                           * touchpad_pan off then) */
+    if (said != smooth) said = smooth, slog("wheel: %s (dx %.3f dy %.3f%s)", smooth ? "fractional steps: a touchpad's scroll, pans (touchpad_pan)" : "whole steps: a mouse's wheel, zooms", x, y, ctrl ? ", Ctrl" : "");
     if (!ctrl && smooth && nset_num("touchpad_pan", 1) != 0) {
         nv_cam_pan(&a->cam, -x * 24 * a->scale, y * 24 * a->scale, a->vh);
         return 1;
