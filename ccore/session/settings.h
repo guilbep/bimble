@@ -62,6 +62,10 @@ typedef struct {
      * Reload (link_cache.h, the SRCE's "detail"). A link's Reload may name its own (manage_links). */
     char link_detail[10];
     double link_chord_mm, link_max_deg;
+    /* GPU2: `bimble-ccore open` starts a Chromium-family browser in an app window with its own profile and
+     * the flags that give WebGPU (host/main.c, as `open --app`). A lab field as `renderer`: not in
+     * to_json, written only once set; false by default. */
+    int open_app;
 } cc_settings;
 #define CC_LINK_GPU_MB_DEFAULT 768u
 

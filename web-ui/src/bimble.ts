@@ -1008,6 +1008,8 @@ export interface SettingsValues {
   /** TESS1: custom's chord distance (mm, 0.01..1000, 2) and angle per chord (degrees, 1..90, 18). */
   link_chord_mm?: number;
   link_max_deg?: number;
+  /** GPU2: `bimble-ccore open` starts a Chromium-family browser in an app window with the WebGPU flags (native host only). */
+  open_app?: boolean;
 }
 /** `query settings`. */
 export interface UserSettings {

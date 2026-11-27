@@ -142,6 +142,10 @@ const close = () => { currentDialog.value = null; };
             <option v-for="r in ['auto', 'webgl2', 'webgpu']" :key="r" :value="r">{{ tx(`settings.renderer.${r}` as K) }}</option>
           </select></label>
         <p v-if="s?.applies.renderer" class="note" data-bb="settings-renderer-note">{{ tx('settings.rendererNote') }}</p>
+        <!-- GPU2: `bimble-ccore open` in an app window of Chromium with the flags that give WebGPU (the native host's) -->
+        <label v-if="s?.applies.open_app" class="row"><span>{{ tx('settings.openApp') }}</span>
+          <input type="checkbox" :checked="v.open_app ?? false" data-bb="settings-open-app" data-setting="open_app" @change="set({ open_app: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.open_app" class="note" data-bb="settings-open-app-note">{{ tx('settings.openAppNote') }}</p>
         <label v-if="s?.applies.gpu_cull" class="row"><span>{{ tx('settings.gpuCullOn') }}</span>
           <input type="checkbox" :checked="v.gpu_cull" data-bb="settings-gpu-cull-on" data-setting="gpu_cull" @change="set({ gpu_cull: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s && !s.applies.gpu_cull" class="note" data-bb="settings-gpu-cull">{{ tx('settings.gpuCull') }}</p>

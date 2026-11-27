@@ -554,6 +554,43 @@ int main(void) {
         reset_dir();
     }
 
+    /* ---- GPU2: open_app (`bimble-ccore open` in an app window), a lab field as renderer: written only once set ---- */
+    {
+        reset_dir();
+        cc_session *s = session_on_file();
+        free(ask(s, "action", "set_settings", "{\"moving_fps\":60}", &st));
+        size_t n = 0;
+        char *f = read_all(FILE_, &n);
+        check_true("open_app: a file written before it is set has no open_app member", st == CC_OK && f && !strstr(f, "open_app"));
+        free(f);
+        char *q = ask(s, "query", "settings", "", &st);
+        check_true("open_app: false by default, applies with files", q && strstr(q, "\"open_app\":false,\"recent\"") && strstr(q, "\"open_app\":true"));
+        free(q);
+        free(ask(s, "action", "set_settings", "{\"open_app\":true}", &st));
+        f = read_all(FILE_, &n);
+        check_true("open_app: set, written in its sorted place", st == CC_OK && f && strstr(f, "\"moving_proxies\":true,\"open_app\":true,\"recent\""));
+        cc_settings r;
+        check_true("open_app: read back by the host's parse", f && !cc_settings_parse(f, n, &r) && r.open_app == 1);
+        free(f);
+        char *e = ask(s, "action", "set_settings", "{\"open_app\":\"yes\"}", &st);
+        check_true("open_app: not a boolean refused", st != CC_OK && e && strstr(e, "`open_app`: true or false"));
+        free(e);
+        free(ask(s, "action", "set_settings", "{\"open_app\":false}", &st));
+        f = read_all(FILE_, &n);
+        check_true("open_app: back to false, written (the file had it)", st == CC_OK && f && strstr(f, "\"open_app\":false"));
+        free(f);
+        cc_settings d;
+        cc_settings_default(&d);
+        Buf b;
+        buf_init(&b);
+        cc_settings_to_json(&d, NULL, 0, &b);
+        buf_append(&b, "", 1);
+        check_true("open_app: not in Rust's to_json", b.p && !strstr(b.p, "open_app"));
+        buf_free(&b);
+        cc_session_free(s);
+        reset_dir();
+    }
+
     /* ---- the actions, the capabilities, query about ---- */
     {
         cc_session *s = cc_session_new(cc_platform_native());
