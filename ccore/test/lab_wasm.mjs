@@ -289,7 +289,7 @@ async function main() {
   console.log(`undo: ${typeof undoMs === "number" ? undoMs.toFixed(1) + " ms to the frame" : undoMs}`);
   check("undo restores the element count and the picture", count2 === count0 && h2 === h0, `${count2} elements, hash ${h2} (before the place ${h0})`);
 
-  // BUG1, deterministic. Each clear of #bimble records the buffer's size against the canvas's layout
+  // BUG1, deterministic. Each clear of #bimble (VIS1: or of its offscreen target's colour) records the buffer's size against the canvas's layout
   // size. The selection opens and closes the properties panel (the canvas changes height). With frames
   // on time, the frame after a layout change runs before the resize observer (HTML: rAF callbacks, then
   // layout, then observers): no frame may be drawn at the old size. Then each action runs with the
@@ -305,6 +305,12 @@ async function main() {
       const w = Math.max(1, Math.round(c.clientWidth * dpr)), h = Math.max(1, Math.round(c.clientHeight * dpr)); B.clears++;
       if (c.width !== w || c.height !== h) B.stale.push(c.width + 'x' + c.height + ' drawn, ' + w + 'x' + h + ' laid out'); }
       return clear.call(this, m); };
+    // VIS1: the 3D view clears its offscreen target (gl/target.ts) with clearBufferfv: its colour buffer 0 is a frame's clear
+    const cbf = p.clearBufferfv;
+    p.clearBufferfv = function (buf, i, v, o) { const c = this.canvas; if (c && c.id === 'bimble' && buf === this.COLOR && i === 0) { const dpr = window.devicePixelRatio || 1;
+      const w = Math.max(1, Math.round(c.clientWidth * dpr)), h = Math.max(1, Math.round(c.clientHeight * dpr)); B.clears++;
+      if (c.width !== w || c.height !== h) B.stale.push(c.width + 'x' + c.height + ' drawn, ' + w + 'x' + h + ' laid out'); }
+      return cbf.call(this, buf, i, v, o); };
     return 1; })()`);
   const slab = await bb("b.query('elements', { limit: 500 }).find((e) => e.class === 'IfcSlab')?.id ?? null");
   await bb(`b.select([${JSON.stringify(slab)}])`);

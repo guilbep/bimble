@@ -136,6 +136,10 @@ const close = () => { currentDialog.value = null; };
             <option v-for="mb in linkGpuChoices" :key="mb" :value="mb">{{ tx('settings.linkGpu.mb', { mb }) }}</option>
           </select></label>
         <p v-if="s?.applies.link_gpu_mb" class="note" data-bb="settings-link-gpu-note">{{ tx('settings.linkGpuNote') }}</p>
+        <!-- VIS1 (ADR 0078 amendment 5): draw only what can be seen (draw_visible, not Rust's) -->
+        <label v-if="s?.applies.draw_visible" class="row"><span>{{ tx('settings.visible') }}</span>
+          <input type="checkbox" :checked="v.draw_visible !== false" data-bb="settings-draw-visible" data-setting="draw_visible" @change="set({ draw_visible: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.draw_visible" class="note" data-bb="settings-visible-note">{{ tx('settings.visibleNote') }}</p>
         <!-- GPU1 (ADR 0083): the 3D renderer (automatic is WebGL2 for now); GPU culling of copies applies with WebGPU -->
         <label v-if="s?.applies.renderer" class="row"><span>{{ tx('settings.renderer') }}</span>
           <select class="inp" :value="v.renderer ?? 'auto'" data-bb="settings-renderer" data-setting="renderer" @change="set({ renderer: ($event.target as HTMLSelectElement).value as 'auto' | 'webgl2' | 'webgpu' })">

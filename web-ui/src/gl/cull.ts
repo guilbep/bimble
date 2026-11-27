@@ -209,3 +209,63 @@ export function batchShown(b: Batch, items: ArrayLike<number>, shown: Uint8Array
   for (let i = 0; i < b.n; i++) { const e = items[i]!, on = shown[e]! > 0; v[i + 1] = v[i]! + (on ? tris(e) : 0); if (on) n++; }
   b.vcum = v, b.shown = n;
 }
+
+// ---- VIS1 (ADR 0078 amendment 5, P0-c): the budget's cut for tens of thousands of batches. budgetCut bisects the
+// threshold 60 times, each time over every batch (a binary search in each): on a project of 17 links (46,800
+// batches) that is millions of searches a moving frame. Here each batch's items are counted once per state in
+// buckets of their size (a sixteenth of an octave), a frame adds the buckets shifted by the batch's distance, the
+// threshold is read from that histogram (a sixteenth of an octave: each batch placed within a bucket), then checked
+// exactly (one search a batch) and raised a bucket at a time while over the budget. The same answer's kind: everything at least t big, at most `budget` triangles, never empty. ----
+const BPO = 16, B0 = -512, NB = 1536; // buckets per octave (a 4.4 % step); log2(size / dist) from -32 octaves, over 96 octaves
+interface SizeHist { key: string; bucket: Int16Array; tris: Float64Array }
+const hists = new WeakMap<Batch, SizeHist>();
+function histOf(c: Cut, key: string): SizeHist {
+  const b = c.b, h = hists.get(b);
+  if (h && h.key === key) return h;
+  const k = b.vcum ?? b.cum, idx: number[] = [], tr: number[] = [];
+  for (let i = 0; i < b.n; i++) {
+    const t = k[i + 1]! - k[i]!;
+    if (!t) continue;
+    const q = Math.floor(BPO * Math.log2(Math.max(1e-6, b.size[i]!)));
+    if (idx.length && idx[idx.length - 1] === q) tr[tr.length - 1]! += t;
+    else idx.push(q), tr.push(t);
+  }
+  const out = { key, bucket: Int16Array.from(idx), tris: Float64Array.from(tr) };
+  hists.set(b, out);
+  return out;
+}
+/** budgetCut's answer through size buckets (for many batches); `key` changes when what is shown changes. */
+export function budgetCutFast(cs: Cut[], budget: number, key: string): { t: number; tris: number } {
+  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
+  const H = new Float64Array(NB);
+  let all = 0;
+  for (const c of cs) {
+    const shift = Math.floor(BPO * Math.log2(Math.max(c.dist, 1e-9)));
+    if (c.k0 > 0) { // a slice of the fill: its items from k0 on (the smaller ones), counted one by one
+      const b = c.b, k = b.vcum ?? b.cum;
+      for (let i = c.k0; i < b.n; i++) {
+        const t = k[i + 1]! - k[i]!;
+        if (!t) continue;
+        const q = Math.min(NB - 1, Math.max(0, Math.floor(BPO * Math.log2(Math.max(1e-6, b.size[i]!))) - shift - B0));
+        H[q]! += t, all += t;
+      }
+      continue;
+    }
+    const h = histOf(c, key);
+    for (let i = 0; i < h.bucket.length; i++) { const q = Math.min(NB - 1, Math.max(0, h.bucket[i]! - shift - B0)); H[q]! += h.tris[i]!; all += h.tris[i]!; }
+  }
+  if (all <= budget) return { t: 0, tris: at(0) };
+  // from the largest bucket down: the lowest bucket whose sum and those above stay within the budget
+  let sum = 0, q = NB - 1;
+  for (; q >= 0; q--) { if (sum + H[q]! > budget) break; sum += H[q]!; }
+  // each batch is placed within a bucket of its true one: the threshold one bucket up, checked exactly, raised while over
+  let t = Math.pow(2, (q + 2 + B0) / BPO), tris = at(t);
+  for (let i = 0; i < 64 && tris > budget; i++) t *= Math.pow(2, 1 / BPO), tris = at(t);
+  for (let i = 0; i < 2; i++) { const t2 = t / Math.pow(2, 1 / BPO), n2 = at(t2); if (n2 > budget) break; t = t2, tris = n2; } // (and down while within)
+  if (tris === 0) { // one item over the budget: the largest on screen alone (budgetCut's rule)
+    let hi = 0;
+    for (const c of cs) if (c.k0 < c.b.n) hi = Math.max(hi, c.b.size[c.k0]! / Math.max(c.dist, 1e-9));
+    t = hi, tris = at(hi);
+  }
+  return { t, tris };
+}

@@ -116,6 +116,9 @@ function record() {
       <dt>{{ t('perf.draws') }}</dt><dd class="mono" data-bb="perf-draws">{{ num(snap.draws) }}</dd>
       <dt>{{ t('perf.culled') }}</dt><dd class="mono">{{ num(snap.culled) }} / {{ num(snap.batches) }}</dd>
       <dt>{{ t('perf.proxies') }}</dt><dd class="mono">{{ num(snap.proxiesDrawn) }} ({{ num(snap.proxyTris) }})</dd>
+      <!-- VIS1: draw only what can be seen: what the last frame left out; the ground truth taken by Record -->
+      <template v-if="snap.hidden"><dt>{{ t('perf.hidden') }}</dt><dd class="mono" data-bb="perf-hidden">{{ num(snap.hidden.tris) }} △<span v-if="!snap.hidden.used" class="q"> · {{ t('perf.hiddenUnused') }}</span></dd></template>
+      <template v-if="snap.truth"><dt>{{ t('perf.seen') }}</dt><dd class="mono" data-bb="perf-seen">{{ t('perf.seenText', { drawn: num(snap.truth.submitted), seen: num(snap.truth.seenTris), n: num(snap.truth.seen) }) }}</dd></template>
       <template v-if="snap.renderer.using === 'WebGPU'"><dt>{{ t('perf.gpuCull') }}</dt><dd>{{ snap.renderer.gpuCull ? t('perf.on') : t('perf.off') }}</dd></template>
     </dl>
     <div class="sec">{{ t('perf.memory') }}</div>

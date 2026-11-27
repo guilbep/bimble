@@ -212,6 +212,7 @@ export function perfInputs(canvas: HTMLElement): void {
 /** Records every frame and input for 10 s (the GPU waited for meanwhile); `done` when it ends. */
 export function perfRecord(): void {
   if (recording) return;
+  perfTruth(); // VIS1: what the last frame drew against what can be seen (one offscreen pass: only when recording)
   perfWait(true);
   recording = { until: performance.now() + 10000, frames: [], inputs: [] };
   lastRecord = null;
@@ -310,6 +311,9 @@ export interface PerfSnapshot {
   openToFirst: number | null; openToComplete: number | null; links: PerfLink[]; inputs: PerfInput[]; frames: number;
   record: { seconds: number; moving: FrameStats; still: FrameStats; inputs: PerfInput[] } | null; recording: boolean;
   canvas: { w: number; h: number; dpr: number };
+  /** VIS1: what the last frame left out as hidden, and the ground truth taken when a recording started. */
+  hidden: { tris: number; items: number; used: boolean } | null;
+  truth: PerfTruth | null;
 }
 
 export function perfSnapshot(): PerfSnapshot {
@@ -338,6 +342,7 @@ export function perfSnapshot(): PerfSnapshot {
     record: lastRecord ? { seconds: lastRecord.seconds, moving: stats(lastRecord.frames.filter((f) => f.moving)), still: stats(lastRecord.frames.filter((f) => !f.moving)), inputs: lastRecord.inputs } : null,
     recording: recording !== null,
     canvas: { w: c?.width ?? 0, h: c?.height ?? 0, dpr: window.devicePixelRatio || 1 },
+    hidden: g?.vis ? { tris: g.vis.hiddenTris, items: g.vis.hidden, used: g.vis.used } : null, truth,
   };
 }
 
@@ -377,6 +382,8 @@ export function perfReport(names: boolean, file: string | null): string {
   L.push("slowest input -> frame (this session):");
   if (!s.inputs.length) L.push("  none yet");
   s.inputs.forEach((i, k) => L.push(`  ${k + 1}. ${ms(i.ms)} ${i.what}${i.synced ? "" : " (submitted)"}`));
+  if (s.hidden) L.push(`left out as hidden behind the last picture: ${num(s.hidden.tris)} triangles (${num(s.hidden.items)} elements)${s.hidden.used ? "" : " - not used for this frame"}`); // VIS1
+  if (s.truth) L.push(`at the recording's start: drawn ${num(s.truth.submitted)} triangles; ${num(s.truth.seenTris)} belong to the ${num(s.truth.seen)} elements you can see (${num(s.truth.pixels)} pixels)`);
   if (s.record) {
     L.push(`recording (${s.record.seconds} s):`);
     L.push(`  moving: ${fline(s.record.moving)}`);
@@ -399,6 +406,21 @@ export function perfReport(names: boolean, file: string | null): string {
   }
   return L.join("\n") + "\n";
 }
+
+// ---- VIS1 (ADR 0078 amendment 5): the number the owner feels, behind the panel's Record: the triangles the last frame
+// submitted against those of the elements with at least one pixel on screen (the viewport's id pass: every shown
+// element's faces as ids into an offscreen target, read back; one pass, at the recording's start only) ----
+export interface PerfTruth { at: number; submitted: number; seen: number; seenTris: number; pixels: number }
+let truth: PerfTruth | null = null;
+export function perfTruth(): PerfTruth | null {
+  const g = window.__bbGl;
+  const submitted = g?.frameTris ?? 0;
+  const r = g?.bench?.idCount?.();
+  if (!r) return null;
+  truth = { at: performance.now(), submitted, seen: r.elements, seenTris: r.tris, pixels: r.pixels };
+  return truth;
+}
+// ---- end VIS1 ----
 
 declare global {
   interface Window {
