@@ -61,6 +61,12 @@ registerOptimisation(setting("link_gpu_mb", {
   label: { fr: "Mémoire graphique des liens", en: "Links' GPU memory" }, kind: "number", default: 768, off: 65536, min: 64, max: 65536, step: 64, unit: "MB",
   hint: { fr: "Au-delà, les liens lointains rendent leur détail et sont dessinés simplifiés (65 536 : jamais).", en: "Past it, far links give their detail back and are drawn as proxies (65,536: never)." },
 }));
+registerOptimisation(setting("link_detail", { // TESS1 (ADR 0085): off is "exact" (arcs as Rust read them)
+  label: { fr: "Détail des liens (arcs)", en: "Links' detail (arcs)" }, kind: "choice", default: "standard", off: "exact",
+  hint: { fr: "La finesse des arcs à la conversion d'un lien ; « exact » : comme Rust les lisait.", en: "How finely a link's arcs are converted; \u201cexact\u201d: as Rust read them." },
+  choices: [{ value: "exact", label: { fr: "exact", en: "exact" } }, { value: "standard", label: { fr: "standard", en: "standard" } },
+    { value: "light", label: { fr: "léger", en: "light" } }, { value: "custom", label: { fr: "personnalisé", en: "custom" } }],
+}));
 registerOptimisation(setting("gpu_cull", {
   label: { fr: "Tri des copies sur la carte", en: "GPU culling of copies" }, kind: "toggle", default: false, off: false,
   hint: { fr: "Avec WebGPU : les copies d'une forme testées par un compute shader.", en: "With WebGPU: a shape's copies tested by a compute shader." },

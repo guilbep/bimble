@@ -167,7 +167,7 @@ try {
   check("after the comparison the renderer asked before is back (WebGL2)", (await R()).using === "WebGL2" || (await waitFor("WebGL2 back", 30000, async () => (await R()).using === "WebGL2").catch(() => false)));
   // the Optimisations section (the owner's rule: every optimisation a setting, default and off, in the panel and the report)
   const rowsOpt = await L.evalJs("[...document.querySelectorAll('[data-bb^=perf-opt-]')].map((e) => e.dataset.bb)");
-  check("the panel lists the optimisations (renderer, moving_fps, moving_proxies, link_gpu_mb, gpu_cull)", ["renderer", "moving_fps", "moving_proxies", "link_gpu_mb", "gpu_cull"].every((k) => rowsOpt.includes(`perf-opt-${k}`)), rowsOpt.join(" "));
+  check("the panel lists the optimisations (renderer, moving_fps, moving_proxies, link_gpu_mb, link_detail, gpu_cull)", ["renderer", "moving_fps", "moving_proxies", "link_gpu_mb", "link_detail", "gpu_cull"].every((k) => rowsOpt.includes(`perf-opt-${k}`)), rowsOpt.join(" "));
   await L.evalJs("(() => { const e = document.querySelector('[data-bb=perf-opt-moving_proxies] input'); e.scrollIntoView({ block: 'center' }); e.click(); })()");
   await sleep(300);
   await L.evalJs("window.__bbPerfCopied = null, document.querySelector('[data-bb=perf-copy]').click()");
