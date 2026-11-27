@@ -10,7 +10,8 @@ export const label = "perf.title";
 // the frame times are draw-to-pixels. Nothing is sent anywhere; the report goes to the clipboard only.
 import { onMounted, onUnmounted, shallowRef } from "vue";
 import { state } from "../bimble";
-import { t } from "../i18n";
+import { lang, t } from "../i18n";
+import { optimisations, type Optimisation } from "../optimisations"; // the owner's rule: every optimisation a setting, shown here
 import { currentPanel } from ".";
 import { adapterNames, chooseRenderer, gpuSide, warmRenderer, howToWebgpu, perfCompare, perfComparing, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
 import { linkGpu } from "../gl/linkmem"; // SIZE3 (C)
@@ -58,6 +59,15 @@ async function compare() { // GPU2: the same camera path on both renderers; the 
   comparing.value = null;
   note.value = t("perf.compared");
 }
+// the Optimisations section: the registry's rows (other tickets add rows in their own modules)
+const optTick = shallowRef(0);
+const optLabel = (x: { fr: string; en: string }) => (lang.value === "fr" ? x.fr : x.en);
+function setOpt(o: Optimisation, v: boolean | string | number) {
+  const err = o.set(v);
+  if (err) note.value = err;
+  optTick.value++;
+}
+const optValue = (o: Optimisation) => { void optTick.value; void snap.value; return o.get(); };
 function record() {
   perfRecord();
   snap.value = perfSnapshot();
@@ -124,6 +134,21 @@ function record() {
       <div class="sec">{{ t('perf.links') }}</div>
       <div v-for="(l, k) in snap.links" :key="k" class="note mono" data-bb="perf-link">{{ names ? l.name : `${k + 1}` }} · {{ num(l.elements) }} · {{ num(l.triangles) }} △ · {{ l.visible ? t('perf.linkShown') : t('perf.linkHidden') }}<template v-if="l.detail === true"> · {{ t('links.detailLoaded') }} ({{ ((l.gpuBytes ?? 0) / 1048576).toFixed(1) }} MB)</template><template v-else-if="l.detail === false"> · {{ t('links.proxiesOnly') }}</template></div>
     </template>
+    <div class="sec" data-bb="perf-optimisations">{{ t('perf.optimisations') }}</div>
+    <dl class="kv two">
+      <template v-for="o in optimisations()" :key="o.key">
+        <dt :title="o.hint ? optLabel(o.hint) : undefined">{{ optLabel(o.label) }}</dt>
+        <dd :data-bb="`perf-opt-${o.key}`">
+          <span v-if="o.applies && !o.applies()" class="q">{{ t('perf.optNotHere') }}</span>
+          <input v-else-if="o.kind === 'toggle'" type="checkbox" :checked="optValue(o) === true" @change="setOpt(o, ($event.target as HTMLInputElement).checked)">
+          <select v-else-if="o.kind === 'choice'" class="inp" :value="optValue(o)" @change="setOpt(o, typeof o.default === 'number' ? Number(($event.target as HTMLSelectElement).value) : ($event.target as HTMLSelectElement).value)">
+            <option v-for="c in o.choices ?? []" :key="String(c.value)" :value="c.value">{{ optLabel(c.label) }}</option>
+          </select>
+          <input v-else type="number" class="inp" style="width:5em" :min="o.min" :max="o.max" :step="o.step" :value="optValue(o)" @change="setOpt(o, Number(($event.target as HTMLInputElement).value))">
+          <span v-if="optValue(o) === o.off" class="q"> · {{ t('perf.off') }}</span>
+        </dd>
+      </template>
+    </dl>
     <div class="sec">{{ t('perf.inputs') }}</div>
     <ol class="inputs" data-bb="perf-inputs">
       <li v-for="(i, k) in snap.inputs" :key="k" class="mono">{{ ms(i.ms) }} · {{ i.what }}</li>

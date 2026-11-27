@@ -696,6 +696,8 @@ export type PartKey =
   | "perf.openComplete"
   | "perf.openFirst"
   | "perf.openTitle"
+  | "perf.optNotHere"
+  | "perf.optimisations"
   | "perf.paletteNote"
   | "perf.paletteOpen"
   | "perf.paletteWebgl2"

@@ -14,6 +14,7 @@
 import { shallowReactive } from "vue";
 import { linkGpu } from "./gl/linkmem"; // SIZE3 (C)
 import { setSettings, userSettings } from "./bimble";
+import { optimisationLines } from "./optimisations";
 
 /** One frame drawn: when it started (performance.now), what it took (ms), moving or still, what it drew. */
 export interface PerfFrame { at: number; ms: number; moving: boolean; tris: number; draws: number; synced: boolean }
@@ -359,6 +360,8 @@ export function perfReport(names: boolean, file: string | null): string {
     s.links.forEach((l, k) => L.push(`  ${names ? l.name : `link ${k + 1}`}: ${num(l.elements)} elements, ${num(l.triangles)} triangles, ${l.visible ? "shown" : "hidden"}` +
       (l.detail === true ? `, detail loaded (${mb(l.gpuBytes ?? null)})` : l.detail === false ? ", proxies only" : "")));
   }
+  L.push("optimisations (setting: value):"); // the owner's rule: every optimisation a setting, its value in the report
+  L.push(...optimisationLines());
   L.push("slowest input -> frame (this session):");
   if (!s.inputs.length) L.push("  none yet");
   s.inputs.forEach((i, k) => L.push(`  ${k + 1}. ${ms(i.ms)} ${i.what}${i.synced ? "" : " (submitted)"}`));
