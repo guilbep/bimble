@@ -8,8 +8,8 @@
  *     18,300 mm between two slab corners (the chained click);
  *   - the levels read from the links (a plan's cut height is level + its range: f64);
  *   - the section box fitted to a selected linked element (Box to selection) and to the links (the
- *     first section box): KNOWN, printed as "known:" (f32 in the shown scene's frame, 150 mm off here);
- *     MEAS2_BOX=1 makes it a failure.
+ *     first section box), within one f32 step (MEAS3: the box in its own frame, cc_vis.base; 150.6 mm
+ *     off before), and one face dragged 1,000 mm moves 1,000.000 mm.
  * Then the same building with its own coordinates at 2,600 km (the IFC itself, no placement: the
  * native test's case), the measure only. Hostile: a layer offset of 1e15 mm (measured in its own
  * frame: the corner to f64's 0.125 mm), NaN and infinite offsets (not hit, no crash), a map
@@ -29,6 +29,7 @@
 #include "../session/m1links.h"
 #include "../session/measure.h"
 #include "../session/session.h"
+#include "dxf_in.h"
 #include "ifc_math.h"
 #include "check.h"
 
@@ -128,7 +129,8 @@ static void ray_down(char *out, size_t cap, const Place *P, const double org[3],
 
 typedef struct {
     double corner[3], edge[3], face[3], dist, box_sel[6], box_links[6], level1;
-    int kinds_ok, face_hit, nlevels, box_sel_ok, box_links_ok;
+    double drag; /* MEAS3: how far the box's +x face moved for a drag of 1,000 mm */
+    int kinds_ok, face_hit, nlevels, box_sel_ok, box_links_ok, drag_ok;
 } Answers;
 
 /* The answers on link `name` (the only one shown), in the link's own frame (placement removed). */
@@ -195,6 +197,20 @@ static void answers(cc_session *s, const char *name, const double shift[3], Answ
         A->box_sel_ok = 1; /* axis-aligned in the host frame: the lower corner moved back by t only */
         for (int k = 0; k < 3; k++) A->box_sel[k] = mn[k] + org[k] - P.t[k], A->box_sel[3 + k] = mx[k] + org[k] - P.t[k];
     }
+    /* MEAS3: drag the box's +x face by 1,000 mm (box_press on its handle, box_release 1,000 mm further along x) */
+    if (A->box_sel_ok) {
+        double c[3] = {mx[0], 0.5 * (mn[1] + mx[1]), 0.5 * (mn[2] + mx[2])}; /* the face's centre, scene coordinates */
+        for (int step = 0; step < 2; step++) {
+            double x = c[0] + (step ? 1000.0 : 0.0), y = c[1] - 10000.0;
+            snprintf(body, sizeof body, "{\"ray\":[%.17g,%.17g,%.17g,0,1,0],\"ray_tol\":[%.17g,%.17g,%.17g,0,1,0]}", x, y, c[2], x, y, c[2] + 24);
+            int st = call(s, "tool", step ? "box_release" : "box_press", body, &o);
+            if (!step) A->drag_ok = st == CC_OK && strstr(buf_cstr(&o), "\"face\":1") != NULL;
+        }
+        call(s, "query", "visibility", "{}", &o);
+        double mx2[3];
+        if (A->drag_ok && nums_after(buf_cstr(&o), "\"max\":[", mx2, 3)) A->drag = mx2[0] - mx[0];
+        else printf("  %s: the drag: %s\n", name, buf_cstr(&o));
+    }
     call(s, "select", "-", "[]", &o);
     call(s, "action", "section_box", "", &o); /* off */
     s->vis.has_box = 0;
@@ -225,6 +241,82 @@ static void show(cc_session *s, const char *name, int on) {
     buf_free(&o);
 }
 
+/* MEAS3: paper through links. An empty open model with link `path` alone; the plan named `plan`: its DXF's
+ * points (model space, world x y) into `pts` (n points), its SVG into `svg`. 0 when there is none. The plan of
+ * the link's L0: at 0 it merges with the host's Level 0 (within 200 mm), far it is a plan from links, "Plan L0". */
+static size_t paper_case(const char *path, const char *plan, double **pts, Buf *svg, char *first_views, size_t cap) {
+    cc_session *s = cc_session_new(cc_platform_native());
+    cc_error err;
+    size_t n = 0;
+    *pts = NULL;
+    if (!s || cc_session_new_model(s, &err)) return 0;
+    cc_georef *g = &s->model.georef;
+    g->map_rotation_deg = 0, g->east_m = 1000, g->north_m = 1000, g->height_m = 0;
+    g->has_crs = 1, g->crs = (cc_str){"EPSG:2056", 9};
+    Buf o;
+    buf_init(&o);
+    char body[512];
+    snprintf(body, sizeof body, "{\"path\":\"%s\"}", path);
+    call(s, "action", "link_model", body, &o);
+    call(s, "query", "open_views", "", &o);
+    snprintf(first_views, cap, "%.*s", (int)(o.len < cap - 1 ? o.len : cap - 1), buf_cstr(&o));
+    char key[96];
+    snprintf(key, sizeof key, "\"name\":\"%s\"", plan);
+    const char *pv = strstr(buf_cstr(&o), key), *idp = NULL;
+    for (const char *q = buf_cstr(&o); pv && (q = strstr(q, "\"id\":\"")) && q < pv; q += 6) idp = q + 6;
+    if (idp) {
+        char id[23];
+        memcpy(id, idp, 22), id[22] = 0;
+        snprintf(body, sizeof body, "{\"view\":\"%s\"}", id);
+        Buf d;
+        buf_init(&d);
+        int st = call(s, "query", "view_dxf", body, &d);
+        if (st != CC_OK) printf("  %s: view_dxf %d: %.200s\n", path, st, buf_cstr(&d));
+        if (st == CC_OK && getenv("MEAS3_DUMP")) { /* debugging: the DXF beside the test */
+            char fn[256];
+            snprintf(fn, sizeof fn, "%s.dxf", path);
+            FILE *f = fopen(fn, "wb");
+            if (f) fwrite(d.p, 1, d.len, f), fclose(f);
+        }
+        if (st == CC_OK) {
+            cc_dxf x;
+            Buf e;
+            buf_init(&e);
+            if (!cc_dxf_read((const uint8_t *)d.p, d.len, &x, &e)) {
+                *pts = malloc((x.npts ? x.npts : 1) * 2 * sizeof **pts);
+                for (size_t k = 0; *pts && k < x.npolylines; k++) { /* the cut and seen elements (a plan from links also
+                                                                     * draws what is above up to the next link level) */
+                    const char *ln = x.layer[k] < x.nlayers ? x.layers[x.layer[k]].name : "";
+                    if (strstr(ln, "-above")) continue;
+                    for (size_t i = x.start[k]; i < x.start[k + 1]; i++) (*pts)[2 * n] = x.xy[2 * i], (*pts)[2 * n + 1] = x.xy[2 * i + 1], n++;
+                }
+                cc_dxf_free(&x);
+            }
+            buf_free(&e);
+        }
+        buf_free(&d);
+        snprintf(body, sizeof body, "{\"view\":\"%s\",\"bare\":true}", id);
+        call(s, "query", "view_svg", body, svg);
+    }
+    buf_free(&o);
+    cc_session_free(s);
+    return n;
+}
+
+static int cmp_xy(const void *a, const void *b) {
+    const double *p = a, *q = b;
+    return p[0] != q[0] ? (p[0] < q[0] ? -1 : 1) : p[1] < q[1] ? -1 : p[1] > q[1];
+}
+
+/* The point of `pts` nearest to (x, y). */
+static void nearest(const double *pts, size_t n, double x, double y, double out[2]) {
+    double best = 1e300;
+    for (size_t i = 0; i < n; i++) {
+        double dx = pts[2 * i] - x, dy = pts[2 * i + 1] - y, d = dx * dx + dy * dy;
+        if (d < best) best = d, out[0] = pts[2 * i], out[1] = pts[2 * i + 1];
+    }
+}
+
 /* MEAS2, unit: one layer (a scene) moved by `off`, a ray down onto its point w: the snap. */
 static int layer_snap(const cc_scene *sc, const double off[3], const double aim[3], const double w[3], cc_msnap *out) {
     cc_mlayer L;
@@ -232,7 +324,9 @@ static int layer_snap(const cc_scene *sc, const double off[3], const double aim[
     L.sc = sc;
     memcpy(L.off, off, sizeof L.off);
     double org[3] = {0, 0, 0};
-    cc_mview v = {&L, 1, NULL, NULL, org, 0.0f, NULL, 0, NULL};
+    cc_mview v;
+    memset(&v, 0, sizeof v);
+    v.layers = &L, v.nlayers = 1, v.org = org;
     double p[3] = {w[0] - sc->origin[0] + aim[0], w[1] - sc->origin[1] + aim[1], w[2] - sc->origin[2] + aim[2]}; /* the ray: as if moved by `aim` */
     double ray[6] = {p[0], p[1], p[2] + 10000, 0, 0, -1}, tol[6] = {p[0] + 24, p[1], p[2] + 10000, 0, 0, -1};
     memset(out, 0, sizeof *out);
@@ -307,14 +401,14 @@ int main(int argc, char **argv) {
     double gb = gap3(A0.box_sel, AF.box_sel, 6), gl = gap3(A0.box_links, AF.box_links, 6);
     printf("  section box: Box to selection far - at 0 %.6g mm; fitted to the links %.6g mm\n", gb, gl);
     check_true("the section box: answered at 0 and far", A0.box_sel_ok && AF.box_sel_ok && A0.box_links_ok && AF.box_links_ok);
-    /* KNOWN (MEAS2's report): the section box (visibility.h cc_vis min/max) is f32 in the shown scene's frame (Rust's
-     * ClipBox): 256 mm steps at 2,600 km. Declared, not silent: MEAS2_BOX=1 makes it a failure. */
-    const char *strict = getenv("MEAS2_BOX");
-    if (strict && !strcmp(strict, "1")) {
-        check_true("far: Box to selection as at 0 within 0.001 mm", gb <= TOL);
-        check_true("far: the section box fitted to the links as at 0 within 0.001 mm", gl <= TOL);
-    } else if (gb > TOL || gl > TOL)
-        printf("known: the section box is f32 in the shown scene's frame: %.6g mm off at 2,600 km (MEAS2_BOX=1 fails on it)\n", gb > gl ? gb : gl);
+    /* MEAS3: the box in its own frame (cc_vis.base). Its corners stay f32 (Rust's ClipBox), relative to the scene
+     * origin at 0 and to the box's base far away: each is within half an f32 step of the true corner (0.001 mm at
+     * 18 m), so the two agree within one step (0.002 mm). Before MEAS3: 150.6 mm. */
+    check_true("far: Box to selection as at 0 within one f32 step at 18 m (0.002 mm)", gb <= 0.002);
+    check_true("far: the section box fitted to the links as at 0 within 0.002 mm", gl <= 0.002);
+    printf("  drag of 1,000 mm: the +x face moved %.6f mm at 0, %.6f mm far\n", A0.drag, AF.drag);
+    check_true("far: dragging the box's face 1,000 mm moves it 1,000.000 mm (within 0.001), as at 0",
+               A0.drag_ok && AF.drag_ok && dabs(A0.drag - 1000) <= TOL && dabs(AF.drag - 1000) <= TOL);
     /* the building with its own coordinates at 2,600 km (no placement) against the same at 0 */
     for (int k = 0; k < 3; k++) AO.corner[k] -= SH[k], AO.edge[k] -= SH[k], AO.face[k] -= SH[k];
     double oc = gap3(AR.corner, AO.corner, 3), oe = gap3(AR.edge, AO.edge, 3), of = gap3(AR.face, AO.face, 3), od = dabs(AR.dist - AO.dist);
@@ -337,6 +431,35 @@ int main(int argc, char **argv) {
     call(s, "action", "measure", "", &o);
     check_true("hostile: a link 1e15 mm away: no crash, a pointer ray out there refused (400)", PH.t[0] > 9e14 && refused);
 
+    /* MEAS3: paper through links: the plan from the link at 0 and from the one at 2,600 km, alone in an empty model */
+    {
+        double *p0 = NULL, *pf = NULL;
+        Buf s0, sf;
+        buf_init(&s0), buf_init(&sf);
+        char v0[4096], vf[4096];
+        size_t n0 = paper_case(L[0], "Plan Level 0", &p0, &s0, v0, sizeof v0), nf = paper_case(L[1], "Plan L0", &pf, &sf, vf, sizeof vf);
+        if (!n0 || !nf || getenv("MEAS3_VIEWS")) printf("  views at 0: %s\n  views far: %s\n", v0, vf);
+        check_true("paper: a plan from the link at 0 and from the far one, as DXF", n0 > 20 && nf > 20);
+        double gp = n0 == nf ? 0 : 1e300;
+        for (size_t i = 0; i < nf; i++) pf[2 * i] -= PF.t[0], pf[2 * i + 1] -= PF.t[1]; /* the placement removed (no turn: the host's north) */
+        if (n0 == nf) {
+            qsort(p0, n0, 2 * sizeof *p0, cmp_xy), qsort(pf, nf, 2 * sizeof *pf, cmp_xy);
+            for (size_t i = 0; i < 2 * n0; i++)
+                if (dabs(p0[i] - pf[i]) > gp) gp = dabs(p0[i] - pf[i]);
+        }
+        /* the slab's 18,300 mm edge: its two corners R(30)(0, 0) and R(30)(18300, 0) */
+        double c0[2] = {0, 0}, c1[2] = {0, 0}, f0[2] = {0, 0}, f1[2] = {0, 0}, e[2] = {P0.c * 18300, P0.s * 18300};
+        nearest(p0, n0, 0, 0, c0), nearest(p0, n0, e[0], e[1], c1), nearest(pf, nf, 0, 0, f0), nearest(pf, nf, e[0], e[1], f1);
+        double span0 = cc_sqrt((c1[0] - c0[0]) * (c1[0] - c0[0]) + (c1[1] - c0[1]) * (c1[1] - c0[1]));
+        double spanf = cc_sqrt((f1[0] - f0[0]) * (f1[0] - f0[0]) + (f1[1] - f0[1]) * (f1[1] - f0[1]));
+        printf("  paper: DXF %zu / %zu points (cut and seen), far - at 0 %.6g mm; the slab's edge %.4f mm at 0, %.4f mm far; SVG %zu / %zu bytes\n", n0, nf,
+               gp, span0, spanf, s0.len, sf.len);
+        check_true("paper: the far plan's DXF points are the plan at 0's, moved by the placement, within 0.002 mm", gp <= 0.002);
+        check_true("paper: the slab's edge is 18,300 mm on the far plan (within 0.002 mm), as at 0", dabs(spanf - 18300) <= 0.002 && dabs(span0 - 18300) <= 0.002);
+        check_true("paper: the far plan's DXF is in national coordinates (x about 2.6e9 mm)", nf && pf[0] + PF.t[0] > 2.5e9);
+        free(p0), free(pf), buf_free(&s0), buf_free(&sf);
+    }
+
     /* unit: one layer moved by 1e15 mm, NaN, infinity */
     const cc_scene *ref = cc_link_scene(&s->links[3]);
     double w[3] = {12, 9, 200}, z[3] = {0, 0, 0}, big[3] = {1e15, -1e15, 1e12}, nan3[3] = {0.0 / 0.0, 0, 0}, inf3[3] = {0, 1.0 / 0.0, 0};
@@ -358,6 +481,6 @@ int main(int argc, char **argv) {
     buf_free(&o);
     cc_session_free(s);
     for (int i = 0; i < 5; i++) remove(L[i]);
-    rmdir(DIR);
+    if (!getenv("MEAS3_DUMP")) rmdir(DIR);
     return report("measure_geo");
 }

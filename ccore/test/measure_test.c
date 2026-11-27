@@ -214,7 +214,7 @@ static void heavy(const char *dir) {
     arena_free(&a);
     check_true("MEAS1: every placed point and edge end lies in its element's box", in);
     cc_mlayer L = {&sc, {0, 0, 0}, NULL, (const float(*)[6])bx.box, &bx}; /* 3D2: through the box tree */
-    cc_mview v = {&L, 1, NULL, NULL, sc.origin, 0.0f, NULL, 0, NULL}; /* WAVE1B: no work plane */
+    cc_mview v = {&L, 1, NULL, NULL, sc.origin, 0.0f, NULL, 0, NULL, NULL}; /* WAVE1B: no work plane */
     /* One pointer ray along a row of 27 spheres (y 7500, z 400, from x -5000), the ray_tol 24 mm
      * beside: the first sphere's face. */
     const double *o = sc.origin;
@@ -320,7 +320,7 @@ int main(int argc, char **argv) {
             cc_msnap at[2];
             for (int f = 0; f < 2; f++) {
                 cc_mlayer L = {sc, {f ? FAR3[0] : 0, f ? FAR3[1] : 0, f ? FAR3[2] : 0}, NULL, NULL, NULL};
-                cc_mview v = {&L, 1, NULL, NULL, sc->origin, 0.0f, NULL, 0, NULL};
+                cc_mview v = {&L, 1, NULL, NULL, sc->origin, 0.0f, NULL, 0, NULL, NULL};
                 double o[3] = {AIM[i][0] - org[0] + L.off[0], AIM[i][1] - org[1] + L.off[1], AIM[i][2] - org[2] + L.off[2]};
                 double ray[6] = {o[0], o[1], o[2], 1, 0, 0}, tol[6] = {o[0], o[1] + 24, o[2], 1, 0, 0};
                 memset(&at[f], 0, sizeof at[f]);

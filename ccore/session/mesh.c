@@ -837,6 +837,7 @@ static int shell_valid(cc_session *s, const FrameP *f, const cc_scene *rows) {
         if (sc) memcpy(org, sc->origin, sizeof org);
         for (int k = 0; k < 8; k++) { /* the box's corners (its frame turned by yaw about the scene origin), world mm */
             double p[3] = {k & 1 ? v->max[0] : v->min[0], k & 2 ? v->max[1] : v->min[1], k & 4 ? v->max[2] : v->min[2]};
+            for (int j = 0; j < 3; j++) p[j] += v->base[j]; /* MEAS3: the box's frame (0 near the origin) */
             double w3[3] = {cs * p[0] - sn * p[1] + org[0], sn * p[0] + cs * p[1] + org[1], p[2] + org[2]};
             for (int j = 0; j < 3; j++) lo[j] = w3[j] < lo[j] ? w3[j] : lo[j], hi[j] = w3[j] > hi[j] ? w3[j] : hi[j];
         }

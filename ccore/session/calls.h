@@ -62,9 +62,12 @@ enum { CC_OK = 200, CC_ERR = 400 };
  *   box_release {"ray":[…]} or empty: the preview becomes the session's box (one change).
  *   box_cancel  the drag dropped, the box as it was.
  *   box_set     {"min":[x,y,z], "max":[x,y,z], "on"?: bool}: the box (scene coordinates, mm
- *               relative to the scene origin, as query visibility), at least 10 mm per axis.
- * Each answers {"active":bool,"box":null|{"max":[…],"min":[…],"yaw":0.0},"face":null|0..5,"on":bool}
- * (face k: axis k/2, its min side for even k); box: the preview while active.
+ *               relative to the scene origin, as query visibility; within ±1e13 mm), at least 10 mm
+ *               per axis.
+ * Each answers {"active":bool,"box":null|{"base"?:[…],"max":[…],"min":[…],"yaw":0.0},"face":null|0..5,"on":bool}
+ * (face k: axis k/2, its min side for even k); box: the preview while active. MEAS3 (ADR 0087):
+ * "base" is present only for a box more than 1 km from the scene origin (its frame, f64, in the
+ * box's turned frame); min and max are always scene coordinates (base + the f32 corners, f64).
  * The measure tool (op "tool", ticket T1, session/measure.h), on and off with action `measure`
  * (enabled with any scene shown, pressed while on). Session state: no history step, no rev change.
  *   measure_pointer  {"ray":[…], "ray_tol":[…], "tol_px"?: 12, "free"?, "ortho"?, "chain"?: bool}

@@ -140,8 +140,10 @@ static int inside(const cc_mview *v, const double p0[3], double eps) {
         double sn = cc_sin(-(double)v->clip_yaw), cs = cc_cos(-(double)v->clip_yaw);
         p[0] = cs * p0[0] - sn * p0[1], p[1] = sn * p0[0] + cs * p0[1];
     }
-    for (int k = 0; k < 3; k++)
-        if (!(p[k] >= (double)v->clip_min[k] - eps && p[k] <= (double)v->clip_max[k] + eps)) return 0;
+    for (int k = 0; k < 3; k++) {
+        double b = v->clip_base ? v->clip_base[k] : 0.0; /* MEAS3: the box's frame */
+        if (!(p[k] - b >= (double)v->clip_min[k] - eps && p[k] - b <= (double)v->clip_max[k] + eps)) return 0;
+    }
     return 1;
 }
 

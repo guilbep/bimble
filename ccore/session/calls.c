@@ -959,7 +959,7 @@ static int q_open_views(cc_session *s, JsonW *w) {
 static void plan_box(cc_session *s, const cc_scene *sc, const cc_view *v, const double z[4], cc_vis *box) {
     cc_vis_fit_session(s, box, sc, NULL); /* M1LINKS: the links' bounds too (a project of links alone) */
     if (!box->has_box) return;
-    double o = sc->origin[2];
+    double o = sc->origin[2] + box->base[2]; /* MEAS3: in the box's frame (base 0 near the origin) */
     double lo = v->look == CC_LOOK_DOWN ? z[CC_RANGE_DEPTH] : z[CC_RANGE_CUT];
     double hi = v->look == CC_LOOK_DOWN ? z[CC_RANGE_CUT] : z[CC_RANGE_DEPTH];
     if (lo == lo && lo > -1e300 && lo < 1e300 && (float)(lo - o) > box->min[2]) box->min[2] = (float)(lo - o);
@@ -1016,6 +1016,41 @@ static void sec1_section_box(cc_session *s, const cc_scene *sc, const cc_view *v
     const double *d = D[v->facing];
     sec1_rot(d, a, dir);
     if (!box->has_box) return;
+    if (box->base[0] != 0.0 || box->base[1] != 0.0 || box->base[2] != 0.0) { /* MEAS3: a far box, the same steps in f64 */
+        double mn[3], mx[3], ya = (double)(float)a;
+        cc_vis_box_abs(box, 0, mn, mx);
+        if (ya != 0.0) {
+            double lo[2] = {1e300, 1e300}, hi[2] = {-1e300, -1e300};
+            for (int i = 0; i < 4; i++) {
+                double c[2] = {(i & 1) ? mx[0] : mn[0], (i & 2) ? mx[1] : mn[1]}, q[2];
+                sec1_rot(c, -ya, q);
+                for (int j = 0; j < 2; j++) lo[j] = q[j] < lo[j] ? q[j] : lo[j], hi[j] = q[j] > hi[j] ? q[j] : hi[j];
+            }
+            for (int j = 0; j < 2; j++) mn[j] = lo[j], mx[j] = hi[j];
+        }
+        int k = d[0] != 0.0 ? 0 : 1;
+        double sg = d[0] != 0.0 ? d[0] : d[1];
+        double o[2] = {v->origin[0] - sc->origin[0], v->origin[1] - sc->origin[1]}, at[2];
+        sec1_rot(o, -ya, at);
+        double cut = at[k], far = v->depth_mm > 0.0 ? cut + sg * v->depth_mm : sg > 0 ? 1e300 : -1e300;
+        double lo = sg > 0 ? cut : far, hi = sg > 0 ? far : cut;
+        if (lo > mn[k]) mn[k] = lo;
+        if (hi < mx[k]) mx[k] = hi;
+        if (v->has_crop) {
+            double r[2] = {d[1], -d[0]}, rt[2];
+            sec1_rot(r, a, rt);
+            double t0 = rt[0] * sc->origin[0] + rt[1] * sc->origin[1], t1 = sc->origin[2];
+            double l0 = v->crop_min[0] - t0, l1 = v->crop_min[1] - t1, h0 = v->crop_max[0] - t0, h1 = v->crop_max[1] - t1;
+            int kk = r[0] != 0.0 ? 0 : 1;
+            double lo2 = r[kk] > 0 ? l0 : -h0, hi2 = r[kk] > 0 ? h0 : -l0;
+            if (lo2 > mn[kk]) mn[kk] = lo2;
+            if (hi2 < mx[kk]) mx[kk] = hi2;
+            if (l1 > mn[2]) mn[2] = l1;
+            if (h1 < mx[2]) mx[2] = h1;
+        }
+        if (cc_vis_set_box_d(box, mn, mx)) box->has_box = 0;
+        return;
+    }
     float ya = (float)a;
     if (ya != 0.0f) { /* the scene's corners in the turned frame */
         float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
@@ -1091,13 +1126,19 @@ static int q_view_clip(cc_session *s, JsonW *w) {
     if (sec) sec1_section_box(s, sc, &v, &box, dir, &yaw);
     plan = plan || sec;
     /* ---- end SEC1 ---- */
-    if (plan && box.has_box) {
+    if (plan && box.has_box) { /* MEAS3: a box with a base: "base" too, min and max in scene coordinates (f64) */
+        int bfar = box.base[0] != 0.0 || box.base[1] != 0.0 || box.base[2] != 0.0;
         jw_obj_begin(w);
+        if (bfar) {
+            jw_key(w, "base"), jw_arr_begin(w);
+            for (int k = 0; k < 3; k++) jw_f64(w, box.base[k] + 0.0);
+            jw_arr_end(w);
+        }
         jw_key(w, "max"), jw_arr_begin(w);
-        for (int k = 0; k < 3; k++) jw_f64(w, (double)box.max[k]);
+        for (int k = 0; k < 3; k++) jw_f64(w, bfar ? box.base[k] + (double)box.max[k] + 0.0 : (double)box.max[k]);
         jw_arr_end(w);
         jw_key(w, "min"), jw_arr_begin(w);
-        for (int k = 0; k < 3; k++) jw_f64(w, (double)box.min[k]);
+        for (int k = 0; k < 3; k++) jw_f64(w, bfar ? box.base[k] + (double)box.min[k] + 0.0 : (double)box.min[k]);
         jw_arr_end(w);
         jw_obj_end(w);
     } else {
@@ -2276,10 +2317,11 @@ end:
  * model's and a linked model's), in the box's frame, grown by CC_BOX_SELECTION_MARGIN_MM on every
  * side; nothing selected: around everything visible (lib.rs fit_section_box's margin). The box is
  * turned on. */
-/* The selection's bounds in the frame turned by `yaw`; 0: nothing selected. */
-static int iss71_sel_bounds(cc_session *s, const cc_scene *sc, float yaw, float lo[3], float hi[3]) {
-    float inf = 1e30f * 1e30f;
-    for (int k = 0; k < 3; k++) lo[k] = inf, hi[k] = -inf;
+/* The selection's bounds in the frame turned by `yaw`; 0: nothing selected. MEAS3: f64 bounds; a linked element
+ * farther than CC_VIS_FAR_MM moved in f64 (cc_vis_grow_d), else in f32 as before (the same values). */
+static int iss71_sel_bounds(cc_session *s, const cc_scene *sc, float yaw, double dlo[3], double dhi[3]) {
+    float inf = 1e30f * 1e30f, lo[3], hi[3];
+    for (int k = 0; k < 3; k++) lo[k] = inf, hi[k] = -inf, dlo[k] = 1e300, dhi[k] = -1e300;
     static const float zero[3] = {0, 0, 0};
     int any = 0;
     for (size_t k = 0; k < sc->nelements; k++) {
@@ -2296,7 +2338,9 @@ static int iss71_sel_bounds(cc_session *s, const cc_scene *sc, float yaw, float 
             cc_scene one;
             size_t at;
             const cc_scene *ls = cc_link_element_scene(lk, k, &one, &at);
-            if (at < ls->nelements) {
+            double doff[3] = {ls->origin[0] - sc->origin[0], ls->origin[1] - sc->origin[1], ls->origin[2] - sc->origin[2]};
+            if (at < ls->nelements && cc_vis_far(doff)) cc_vis_grow_d(ls, at, doff, yaw, dlo, dhi), any = 1; /* MEAS3 */
+            else if (at < ls->nelements) {
                 float off[3];
                 for (int q = 0; q < 3; q++) off[q] = (float)(ls->origin[q] - sc->origin[q]); /* lib.rs:1499 */
                 cc_vis_grow(ls, at, off, yaw, lo, hi), any = 1;
@@ -2304,6 +2348,8 @@ static int iss71_sel_bounds(cc_session *s, const cc_scene *sc, float yaw, float 
             cc_scene_free(&one);
         }
     }
+    for (int k = 0; any && k < 3; k++) /* MEAS3: the f32 bounds (exact in f64) with the f64 ones */
+        dlo[k] = (double)lo[k] < dlo[k] ? (double)lo[k] : dlo[k], dhi[k] = (double)hi[k] > dhi[k] ? (double)hi[k] : dhi[k];
     return any;
 }
 
@@ -2311,10 +2357,10 @@ static void iss71_box_to_selection(cc_session *s) {
     cc_vis *v = &s->vis;
     const cc_scene *sc = scene_now(s);
     if (!sc) return;
-    float lo[3], hi[3];
+    double lo[3], hi[3];
     v->yaw = iss71_yaw(s, v->true_north); /* in the orientation chosen */
     int any = iss71_sel_bounds(s, sc, v->yaw, lo, hi);
-    if (!any || cc_vis_fit_bounds(v, lo, hi, CC_BOX_SELECTION_MARGIN_MM)) cc_vis_fit_session(s, v, sc, NULL); /* M1LINKS */
+    if (!any || cc_vis_fit_bounds_d(v, lo, hi, CC_BOX_SELECTION_MARGIN_MM)) cc_vis_fit_session(s, v, sc, NULL); /* M1LINKS */
     if (v->has_box) v->section_on = 1;
     v->drag_face = -1;
 }
@@ -2329,10 +2375,10 @@ static int vis_action_do(cc_session *s, const char *name, cc_buf *out) {
         if (!v->has_box) v->yaw = iss71_yaw(s, v->true_north); /* ISS71: the first fit, in the orientation chosen */
         v->section_on = !v->section_on; /* cc_vis_toggle, the links' bounds too (M1LINKS) */
         if (v->section_on && !v->has_box) {
-            float lo[3], hi[3];
+            double lo[3], hi[3];
             const cc_scene *sc = scene_now(s);
             if (!primary && s->link_sel >= 0 && sc && iss71_sel_bounds(s, sc, v->yaw, lo, hi)) /* a linked element selected */
-                cc_vis_fit_bounds(v, lo, hi, 1.0f);
+                cc_vis_fit_bounds_d(v, lo, hi, 1.0);
             else cc_vis_fit_session(s, v, sc, primary);
         }
         v->drag_face = -1;
@@ -2340,7 +2386,8 @@ static int vis_action_do(cc_session *s, const char *name, cc_buf *out) {
     else if (!strcmp(name, "box_north_project") || !strcmp(name, "box_north_true")) { /* ISS71 */
         const cc_scene *sc = scene_now(s);
         v->true_north = !strcmp(name, "box_north_true");
-        float yaw = iss71_yaw(s, v->true_north), lo[3], hi[3];
+        float yaw = iss71_yaw(s, v->true_north);
+        double lo[3], hi[3];
         int any = sc && iss71_sel_bounds(s, sc, yaw, lo, hi);
         cc_vis_orient(v, yaw, any ? lo : NULL, any ? hi : NULL);
     }
@@ -4119,6 +4166,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
     cc_mlayer layers[1 + CC_MAX_LINKS];
     size_t nl = 0;
     float mn[3], mx[3], yaw = 0.0f; /* ISS71: the section box's turn */
+    double cbase[3] = {0, 0, 0};    /* MEAS3: the box's frame */
     int has_box = 0;
     if (sc) {
         memset(layers, 0, sizeof layers);
@@ -4144,15 +4192,15 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
             cc_vis box;
             cc_vis_init(&box);
             plan_box(s, sc, &v, z, &box);
-            if (box.has_box) has_box = 1, memcpy(mn, box.min, sizeof mn), memcpy(mx, box.max, sizeof mx);
+            if (box.has_box) has_box = 1, memcpy(mn, box.min, sizeof mn), memcpy(mx, box.max, sizeof mx), memcpy(cbase, box.base, sizeof cbase);
             cc_vis_free(&box);
         } else if (s->vis.section_on && s->vis.has_box) {
-            has_box = 1, memcpy(mn, s->vis.min, sizeof mn), memcpy(mx, s->vis.max, sizeof mx);
+            has_box = 1, memcpy(mn, s->vis.min, sizeof mn), memcpy(mx, s->vis.max, sizeof mx), memcpy(cbase, s->vis.base, sizeof cbase);
             yaw = s->vis.yaw; /* ISS71 */
         }
         arena_free(&a);
     }
-    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw, NULL, 0, NULL};
+    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw, NULL, 0, NULL, cbase};
     double wplane[6]; /* WAVE1B: the work plane in scene coordinates (a ray that meets nothing ends on it) */
     if (sc && s->open && cc_wplane_frame(&s->wp, &s->model, storey_level(s), wplane, wplane + 3)) {
         for (int k = 0; k < 3; k++) wplane[k] -= sc->origin[k];

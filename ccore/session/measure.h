@@ -117,6 +117,7 @@ typedef struct {
     int brute;      /* MEAS1, tests: every visible element meshed and tested in order (the old way) */
     const double *plane; /* WAVE1B: the work plane (origin, unit normal; scene coordinates): a ray that
                           * meets no element ends on it (a face point); NULL: none */
+    const double *clip_base; /* MEAS3: the box's frame (visibility.h cc_vis.base): min, max are relative to it; NULL: 0 */
 } cc_mview;
 
 void cc_measure_free(cc_measure *m);  /* the measurements; the state is zeroed */
