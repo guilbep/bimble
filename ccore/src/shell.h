@@ -68,6 +68,13 @@ int cc_shell_test(const cc_shell_zb *b, const float t[9], double tol, int conser
  * than tol; 0 when it may show (also when it reaches behind the near plane). An off-screen box is hidden. */
 int cc_shell_box_hidden(const cc_shell_zb *b, const float box[6], double tol);
 
+/* Back-face culling proven, not assumed (the pyramid's element flag 1, "closed and outward"): a mesh's triangles (placed,
+ * their winding as a renderer would cull them: a mirrored copy's already flipped) drawn alone from `views` orthographic
+ * directions of the Fibonacci sphere (no axis: a face exactly edge on is a sliver of rounding) at res x res, once whole and once without the faces turned away from the view; 1 when every view shows the
+ * same pixels at the same depth (within a thousandth of the mesh's size): culling changes nothing. 0 when it does (or out of
+ * memory). `out_view` (may be NULL): the first view that differs. */
+int cc_shell_cull_proof(const float (*t)[9], uint32_t nt, uint32_t views, int res, uint32_t *out_view);
+
 /* ---- the classification of a link ---- */
 typedef struct {
     uint32_t views, res; /* views 0: no shell */

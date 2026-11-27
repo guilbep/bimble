@@ -16,12 +16,16 @@
 #include <string.h>
 #include <time.h>
 
+#include <dirent.h>
+
 #include "../src/arena.h"
+#include "../src/ifc_read.h"
 #include "../src/buf.h"
 #include "../src/jobs.h"
 #include "../src/scene.h"
 #include "../src/shell.h"
 #include "../src/tiles.h"
+#include "../src/viewfile.h"
 #include "check.h"
 
 static double now_ms(void) {
@@ -502,6 +506,115 @@ static void cross(void) {
     cc_scene_free(&a), cc_scene_free(&b);
 }
 
+/* ---- back-face culling proven per element (the pyramid's element flag 1, "closed and outward") ---- */
+static int mirrored(const cc_placement32 *p) {
+    float c[3] = {p->y[1] * p->z[2] - p->y[2] * p->z[1], p->y[2] * p->z[0] - p->y[0] * p->z[2], p->y[0] * p->z[1] - p->y[1] * p->z[0]};
+    return p->x[0] * c[0] + p->x[1] * c[1] + p->x[2] * c[2] < 0.0f;
+}
+static int proof_flagged, proof_failed;
+/* every element of `sc` the pyramid flags closed: its triangles placed as a renderer culls them (a mirrored copy's winding
+ * flipped, the contract's rule) drawn alone from 26 directions with and without culling: the same pixels and depths */
+static void cull_proofs(const char *what, const cc_tiles_src *src) {
+    cc_tiles t;
+    cc_error e;
+    cc_tiles_opts to;
+    cc_tiles_default(&to);
+    to.shell_views = 0;
+    size_t ne = cc_tiles_src_count(src);
+    if (cc_tiles_build(&t, src, &to, &e)) {
+        printf("  %s: %s\n", what, e.msg), cc_tiles_free(&t);
+        return;
+    }
+    cc_tiles_toc toc;
+    Arena ar;
+    arena_init(&ar, 0);
+    if (t.out.len && !cc_tiles_check((const uint8_t *)t.out.p, t.out.len, 1, (uint32_t)ne, &toc, &e))
+        for (uint32_t i = 0; i < toc.nlist; i++) {
+            if (!(cc_tiles_el_flags(&toc, i) & CC_TILES_EL_CLOSED)) continue;
+            uint32_t el = cc_tiles_list(&toc, i);
+            cc_mesh mm;
+            arena_reset(&ar);
+            size_t bl = cc_tiles_src_el_block(src, el);
+            if (bl == SIZE_MAX || cc_tiles_src_block(src, bl, &ar, &mm)) continue;
+            const cc_mesh *m = &mm;
+            const cc_placement32 *pl = cc_tiles_src_place(src, el);
+            int mir = pl && mirrored(pl);
+            float(*tr)[9] = malloc(((size_t)m->ni / 3 + 1) * sizeof *tr);
+            uint32_t n = 0;
+            for (uint32_t k = 0; tr && k + 2 < m->ni; k += 3) {
+                uint32_t ix[3] = {m->idx[k], m->idx[k + (mir ? 2 : 1)], m->idx[k + (mir ? 1 : 2)]};
+                if (ix[0] >= m->nv || ix[1] >= m->nv || ix[2] >= m->nv) continue;
+                for (int c = 0; c < 3; c++) {
+                    const float *q = m->pos[ix[c]];
+                    for (int j = 0; j < 3; j++) tr[n][3 * c + j] = pl ? pl->x[j] * q[0] + pl->y[j] * q[1] + pl->z[j] * q[2] + pl->t[j] : q[j];
+                }
+                n++;
+            }
+            uint32_t v = 0;
+            proof_flagged++;
+            if (tr && !cc_shell_cull_proof((const float(*)[9])tr, n, 26, 96, &v)) {
+                cc_str cls = src->scene ? src->scene->elements[el].class_name : src->vf->elements[el].class_name;
+                if (proof_failed++ < 12)
+                    printf("  %s: element %u (%.*s, %s, %u triangles%s) flagged closed and outward: culling changes view %u\n", what, el, (int)cls.n,
+                           cls.p ? cls.p : "", pl ? "a shape's copy" : "its own mesh", n, mir ? ", mirrored" : "", v);
+            }
+            free(tr);
+        }
+    arena_free(&ar);
+    cc_tiles_free(&t);
+}
+
+static void cull_corpus(void) {
+    /* SHELL_PROOF_DIR=<dir>: its IFC files proven too (tools: the synthetic links, a local folder) */
+    const char *DIRS[3] = {"golden/ifc", "golden/ifc_c/fixtures", getenv("SHELL_PROOF_DIR")};
+    for (int d = 0; d < 3; d++) {
+        if (!DIRS[d]) continue;
+        DIR *dir = opendir(DIRS[d]);
+        if (!dir) continue;
+        struct dirent *de;
+        char *names[256];
+        int nn = 0;
+        while ((de = readdir(dir)) && nn < 256) {
+            size_t l = strlen(de->d_name);
+            if (l > 4 && !strcmp(de->d_name + l - 4, ".ifc")) names[nn] = malloc(l + 1), strcpy(names[nn++], de->d_name);
+        }
+        closedir(dir);
+        for (int k = 0; k < nn; k++) {
+            char path[512];
+            snprintf(path, sizeof path, "%s/%s", DIRS[d], names[k]);
+            FILE *f = fopen(path, "rb");
+            char *txt = NULL;
+            long len = 0;
+            if (f && !fseek(f, 0, SEEK_END) && (len = ftell(f)) > 0 && len < (256l << 20) && !fseek(f, 0, SEEK_SET) && (txt = malloc((size_t)len + 1)) &&
+                fread(txt, 1, (size_t)len, f) == (size_t)len) {
+                txt[len] = 0;
+                cc_ifc_scene sc;
+                cc_error e;
+                if (!cc_ifc_read(txt, (size_t)len, &sc, &e)) {
+                    cc_tiles_src src = {&sc.scene, NULL};
+                    cull_proofs(path, &src); /* the reader's meshes */
+                    cc_viewfile_meta mt; /* and the cache's (BMG1 on its 1/16 mm lattice), read in place as the bake reads them */
+                    Buf vb;
+                    buf_init(&vb);
+                    cc_viewfile vf;
+                    if (!cc_ifc_scene_meta(&sc, &mt) && !cc_viewfile_write_meta(&mt, &sc.scene, 0, &vb) && !cc_viewfile_read_mapped((const uint8_t *)vb.p, vb.len, &vf, &e)) {
+                        cc_tiles_src vs = {NULL, &vf};
+                        char w2[600];
+                        snprintf(w2, sizeof w2, "%s (cache)", path);
+                        cull_proofs(w2, &vs);
+                        cc_viewfile_free(&vf);
+                    }
+                    cc_viewfile_meta_free(&mt);
+                    buf_free(&vb);
+                }
+                cc_ifc_scene_free(&sc);
+            }
+            if (f) fclose(f);
+            free(txt), free(names[k]);
+        }
+    }
+}
+
 int main(void) {
     raster();
     closed_box();
@@ -512,5 +625,8 @@ int main(void) {
     hostile();
     determinism();
     cross();
+    cull_corpus();
+    printf("  culling proofs: %d elements flagged closed and outward, %d where culling changes the picture\n", proof_flagged, proof_failed);
+    check_true("every element flagged closed and outward looks the same culled (26 directions, alone)", proof_flagged > 0 && proof_failed == 0);
     return report("shell");
 }

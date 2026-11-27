@@ -293,6 +293,68 @@ int cc_shell_box_hidden(const cc_shell_zb *b, const float box[6], double tol) {
     return 1;
 }
 
+/* ---- back-face culling proven (shell.h) ---- */
+
+static int front(const cc_shell_cam *c, const float t[9]) { /* the triangle faces the eye (counter-clockwise seen from it) */
+    double u[3], w[3], n[3], d[3];
+    for (int k = 0; k < 3; k++) u[k] = (double)t[3 + k] - t[k], w[k] = (double)t[6 + k] - t[k];
+    cross3(u, w, n);
+    if (c->persp) {
+        for (int k = 0; k < 3; k++) d[k] = (double)t[k] - c->o[k];
+    } else memcpy(d, c->f, sizeof d);
+    return dot3(n, d) < 0;
+}
+
+int cc_shell_cull_proof(const float (*t)[9], uint32_t nt, uint32_t views, int res, uint32_t *out_view) {
+    double lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300};
+    for (uint32_t i = 0; i < nt; i++) {
+        if (!finite9(t[i])) continue;
+        for (int c = 0; c < 3; c++)
+            for (int k = 0; k < 3; k++) {
+                double v = t[i][3 * c + k];
+                lo[k] = v < lo[k] ? v : lo[k], hi[k] = v > hi[k] ? v : hi[k];
+            }
+    }
+    if (!(lo[0] <= hi[0])) return 1; /* nothing drawn either way */
+    double ctr[3], r2 = 0;
+    for (int k = 0; k < 3; k++) ctr[k] = (lo[k] + hi[k]) / 2, r2 += (hi[k] - lo[k]) * (hi[k] - lo[k]) / 4;
+    double radius = cc_sqrt(r2) + 1e-3, eps = radius * 2e-3 + 1e-3;
+    double *dirs = malloc(3 * ((size_t)views + 15) * sizeof *dirs); /* the sphere's directions, not the axes' and diagonals' (a
+                                                                     * face seen exactly edge on is a sliver of rounding) */
+    cc_shell_zb a, b;
+    memset(&a, 0, sizeof a), memset(&b, 0, sizeof b);
+    cc_shell_cam cam;
+    cc_shell_cam_ortho(&cam, (double[3]){1, 0, 0}, ctr, radius, res);
+    int ok = dirs && !cc_shell_zb_init(&a, &cam) && !cc_shell_zb_init(&b, &cam);
+    if (!ok) return free(dirs), cc_shell_zb_free(&a), cc_shell_zb_free(&b), 0;
+    cc_shell_dirs(views + 14, dirs);
+    int same = 1;
+    for (uint32_t v = 0; v < views && same; v++) {
+        cc_shell_cam_ortho(&cam, dirs + 3 * (14 + (size_t)v), ctr, radius, res);
+        a.cam = b.cam = cam;
+        cc_shell_zb_clear(&a), cc_shell_zb_clear(&b);
+        for (uint32_t i = 0; i < nt; i++) {
+            cc_shell_draw(&a, t[i]);
+            if (front(&cam, t[i])) cc_shell_draw(&b, t[i]);
+        }
+        /* a pixel the culled picture shows deeper (a far face where a near one was: the winding inward, a component turned)
+         * fails at once; one it leaves empty is a pixel centre on an edge two faces both left out by rounding (a seam, a
+         * silhouette): at most 1 % of the covered pixels */
+        size_t deep = 0, holes = 0, cov = 0;
+        for (size_t p = 0; p < (size_t)res * (size_t)res; p++) {
+            float x = a.z[p], y = b.z[p];
+            cov += x < 3e38f;
+            if (x == y) continue;
+            if (!(y < 3e38f)) holes++;
+            else if (!(x < 3e38f) || (double)y - (double)x > eps || (double)x - (double)y > eps) deep++;
+        }
+        if (deep || holes * 100 > cov) same = 0;
+        if (!same && out_view) *out_view = v;
+    }
+    free(dirs), cc_shell_zb_free(&a), cc_shell_zb_free(&b);
+    return same;
+}
+
 /* ---- the directions ---- */
 
 void cc_shell_dirs(uint32_t n, double *out) {
