@@ -1147,6 +1147,10 @@ static void elem_test(uint32_t gate, const float lo[3], const float hi[3], const
 static void grow_box(float lo[3], float hi[3], const float a[3], const float b[3]) { /* an element's box, 1 mm wider (f32 slack) */
     for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], a[d] - 1), hi[d] = fmaxf(hi[d], b[d] + 1);
 }
+/* NUI3 seen_step: the elements seen read from one pixel in seen_step a side (1 every pixel): one missed is tested in pass 2
+ * (exact), only drawn a frame later in pass 1 */
+static uint32_t seen_step = 1;
+void nv_tiles_seen_step(uint32_t s) { seen_step = s < 1 ? 1 : s > 4 ? 4 : s; }
 static int tile_gate = 1; /* NUI3 occlusion_tiles: a loaded leaf hidden last frame tested by its box alone */
 void nv_tiles_tile_gate(int on) { tile_gate = on != 0; }
 static uint32_t CLN = 2; /* occlusion_group: elements a group (the A/B: 1, 2, 4, 8, 16, 32, 64) */
@@ -1682,14 +1686,14 @@ void nv_tiles_seen(R *r, SDL_GPUCommandBuffer *cmd) {
         T->seen_down_caps[r->slot] = T->seen_down ? T->seen_cap : 0;
         if (!T->seen_down) return;
     }
-    uint32_t u[4] = {r->W, r->H, (uint32_t)T->frame, r->ncolour};
+    uint32_t u[8] = {r->W, r->H, (uint32_t)T->frame, r->ncolour, seen_step, 0, 0, 0};
     SDL_GPUStorageBufferReadWriteBinding bw = {.buffer = T->seen_buf, .cycle = false};
     SDL_GPUComputePass *p = SDL_BeginGPUComputePass(cmd, NULL, 0, &bw, 1);
     SDL_BindGPUComputePipeline(p, T->seen);
     SDL_GPUTextureSamplerBinding sb = {.texture = r->ids, .sampler = r->nearest};
     SDL_BindGPUComputeSamplers(p, 0, &sb, 1);
     SDL_PushGPUComputeUniformData(cmd, 0, u, sizeof u);
-    SDL_DispatchGPUCompute(p, (r->W + 7) / 8, (r->H + 7) / 8, 1);
+    SDL_DispatchGPUCompute(p, ((r->W + seen_step - 1) / seen_step + 7) / 8, ((r->H + seen_step - 1) / seen_step + 7) / 8, 1);
     SDL_EndGPUComputePass(p);
     T->seen_planned = 1;
 }

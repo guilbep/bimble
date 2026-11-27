@@ -258,6 +258,8 @@ struct App {
     char (*model_ids)[22];       /* a view file opened (no mesh answer): its elements' ids for the tiles */
     uint32_t model_elem0, model_nE;
     uint64_t tri_live;           /* the moving budget's triangles for the walker (0: none) */
+    uint64_t ramp_budget;        /* NUI3 still_ramp: the next still frame's budget (0: none) */
+    int still_ramp;
     double tiles_checked;
     Pend pend;
     int in_flight;               /* frames_in_flight: 2 (the next frame recorded while the GPU draws this one) or 1 */

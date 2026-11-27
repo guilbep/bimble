@@ -520,6 +520,13 @@ static void frame(App *a) {
         nv_render_set_skip(a->r, a->bench_skip);
         nv_tiles_opts to = a->topts;
         to.tri_budget = mv ? a->tri_live : 0;
+        /* NUI3 still_ramp: the still frames after a move start from the last moving frame's budget and double it each
+         * frame until there is none (the full detail in a few frames, no single frame drawing it all at once) */
+        if (!mv && a->still_ramp && a->ramp_budget) {
+            to.tri_budget = a->ramp_budget;
+            a->ramp_budget = a->ramp_budget > (UINT64_MAX >> 2) || a->ramp_budget * 2 > 64000000ull ? 0 : a->ramp_budget * 2;
+        }
+        if (mv) a->ramp_budget = a->tri_live ? a->tri_live : 0;
         if (a->truth && a->use_tiles) { /* the truth test: the same frame without occlusion first, its ids kept */
             to.reference = 1;
             nv_render_tiles_opts(a->r, &to);
@@ -830,7 +837,8 @@ int main(int argc, char **argv) {
         }
     a->bench_skip = (unsigned)nset_num("bench_skip", 0);
     a->in_flight = (int)nset_num("frames_in_flight", 2) > 1 ? 2 : 1; /* NUI2 */
-    a->pace_tiles = nset_num("pace_tiles", 0) != 0;                     /* NUI3: measured worse for still frames: off */
+    a->pace_tiles = nset_num("pace_tiles", 0) != 0;
+    a->still_ramp = nset_num("still_ramp", 0) != 0; /* NUI3: measured below */                     /* NUI3: measured worse for still frames: off */
     { /* the local session log: on in a window unless session_log is false; offscreen only when BIMBLE_LOG_DIR is set */
         const char *ld = getenv("BIMBLE_LOG_DIR");
         a->session_log = (int)nset_num("session_log", a->offscreen ? (ld && *ld) : 1);

@@ -169,7 +169,8 @@ void nv_render_tiles_squeeze(nv_render *r);
 void nv_tiles_group_size(uint32_t n);
 void nv_tiles_surplus_top(void); /* NUI3: BIMBLE_TILES_SURPLUS=2, the largest elements drawn but not shown */
 void nv_tiles_page_grow(uint32_t g); /* NUI3: page_grow, pages at most 2^g times the first (26 MB) */
-void nv_tiles_tile_gate(int on); /* NUI3: occlusion_tiles, a loaded leaf hidden last frame tested by its box alone */
+void nv_tiles_tile_gate(int on);
+void nv_tiles_seen_step(uint32_t s); /* NUI3: seen_step, the elements seen from one pixel in s a side */ /* NUI3: occlusion_tiles, a loaded leaf hidden last frame tested by its box alone */
 void nv_tiles_cluster_tris(uint32_t n); /* NUI3: cluster_tris, a large element's triangles a cluster (0 off); read when a tile loads */
 void nv_tiles_test_mode(int mode, int split, int span, int split_px); /* NUI3: occlusion_test (0 group box, 1 element boxes, 2 + own placed box), occlusion_split, occlusion_span, occlusion_split_px */
 void nv_tiles_hiz_block(nv_render *r, uint32_t b); /* hiz_block: the depth pyramid's level 0, pixels a texel side (1, 2, 4) */
