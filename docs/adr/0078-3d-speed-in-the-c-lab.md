@@ -381,6 +381,12 @@ after 10.5 s. Choices by Claude on ticket SIZE3 under the same delegation.
    it at 8 GiB: 3.2 GB here); 1.62 GB of links never reached it. **Alternative:** keep the automatic share (it cannot know
    the GPU's own memory; the owner asked for a number he can see).
 
+30. **A link's proxies may arrive after it is drawn** (ADR 0079 amendment, decision 23: a link is ready before its
+   proxies are baked): `query link_draw`'s `proxies` counter moves, the page asks that link's proxies, releases its
+   detail and makes its batches again by their leaves (`refreshLinkProxies`); its detail comes back grouped when a frame
+   wants it. **Alternative:** ask the whole mesh again (every link's rows and boxes: 227 MB on the local folder, per
+   link indexed).
+
 ### Evidence (ticket SIZE3)
 
 A local imported model (`.bimble`, 1,749 elements, 2.2 M triangles; `scene.c` before and after, one process):

@@ -187,7 +187,7 @@ gzip blocks shrink them). A local folder of 17 IFC files (4.18 GB): its caches 1
 `PROP` 865 MB) → 281 MB, 6.7 % of the IFC (`ELEM` 231 MB, `HLOD` 14.8 MB, `PRPZ` 34.5 MB); the 17 converted one after
 the other in 50 s (the machine loaded by two other measuring agents), loaded together from their caches in 0.93 s.
 
-## Amendment (27 Nov 2026, ticket SIZE3): one copy in the host, a refused link retried when idle
+## Amendment (27 Nov 2026, ticket SIZE3): one copy in the host, a link ready before its proxies, a refused link retried when idle
 
 After SIZE2 the host still held, for the local folder's 17 links from their caches, each cache's geometry bytes and
 every decoded mesh: 1.15 GB, as much as Rust's whole app with its renderer. Choices by Claude on ticket SIZE3 under the
@@ -220,9 +220,19 @@ same delegation.
 22. **A link refused for memory is retried when the host is idle too** (`cc_links_wants_tick`): the carrier looked at its
     links only while one was queued or converting, so a refused last link stayed refused (decision 16 did not hold).
     `BIMBLE_MEM_AVAILABLE=@<file>` reads the free memory from a file at each call (`test/link_retry_test.mjs`).
-23. Not done: a link ready before its proxies exist (ticket SIZE3 E: geometry and names first, then the proxies appended
-    by the same worker, a "complete" marker in the cache, the Links panel's converting → ready → indexing); the
-    conversion still builds the proxies before "ready" (17.4 of 50.5 s on the local folder).
+23. **A link is ready before its proxies exist** (ticket SIZE3 E, cache format 6): the conversion writes the cache's
+    geometry, names, source and property sets, its SRCE saying `"complete": false`, and the link is drawn; its proxies are
+    baked afterwards by a job of their own, once no conversion is queued (the smallest link first): the cache read again
+    (untrusted: every section checked), rebuilt as its sections, SRCE marked complete, the proxies (HLOD), then the
+    property sets (last: read lazily), written by tmp + rename (a crash leaves the smaller, valid cache, which the next
+    open serves and completes), its report appended ("indexed after the link was ready"), the link switched to it (the
+    same rows: its placement, colour and selection stay). The Links panel says "shown, indexing…" and Cancel stops it
+    (the cache stays incomplete). `query link_draw` gains `proxies`, a counter that moves when a link's proxies arrive:
+    the page then asks that link's proxies and makes its batches again by their leaves (ADR 0078 amendment 5).
+    **Alternative:** read the property sets later too (they need the IFC's entities: a second read of the file, as long
+    as the first); bake the proxies only when the GPU is short, as Rust does (the page's first picture of a large folder
+    is its links' proxies). Left: a proxy of a shared shape instanced, levels coarser than 4,096 triangles a cell, 16-bit
+    positions in a cell's box (SIZE2's list).
 
 Evidence (`link_lazy_test.mjs`, a scratch script reading `/proc/<host>/status`, `frames.mjs`'s folder mode). A local
 folder of 17 IFC files, from caches made by the same build, the SIZE2 host and this one the same hour: host at rest
