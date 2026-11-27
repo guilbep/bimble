@@ -280,6 +280,40 @@ SwiftShader run keeps it. A timing taken without these flags measures the CPU, n
 every report. The page's performance panel shows the adapter's names as the API gives them and the fill
 rate measured when WebGPU opened its device (`web-ui/src/gpu/device.ts`).
 
+### Investigating performance yourself (ticket VIS1, 27 Nov 2026)
+
+`ccore/tools/drive.mjs` opens the lab headless on the machine's GPU (`--gpu vulkan` by default, `gl` for ANGLE on
+OpenGL ES as Chromium on Linux draws by default) and plays real gestures (CDP mouse, wheel and key events at 60 Hz,
+not awaited, as the OS sends them). It records everything into `ccore/out/drive/<name>/` (git-ignored; files may
+hold your file names: never commit them): the performance panel's report, every frame (kind, script ms, GPU ms by
+timer query, draws, triangles, culled batches, proxies, outlines), every input and the frame that showed it, a CPU
+profile with its top 20, memory every 250 ms, the `/mesh` requests, console errors, screenshots and `summary.md`.
+
+```sh
+ccore/build.sh native                                                     # the host it starts
+node ccore/tools/drive.mjs --links 17 --preset orbit-zoom                 # 17 synthetic buildings (kept in ~/.cache/bimble-drive/)
+node ccore/tools/drive.mjs --project <your .bimble of links> --size 1492x790 --dpr 2 --settings '{"moving_fps":0}' --preset orbit-zoom
+node ccore/tools/drive.mjs --model <a model> --do 'wait ready; orbit 400 0 2000; sleep 150; screenshot stop; wait idle; screenshot still'
+DRIVE_UI=<another worktree>/web-ui node ccore/tools/drive.mjs --links 17 --name before   # the page of another tree
+node ccore/tools/drive.mjs --compare ccore/out/drive/before ccore/out/drive/after
+```
+
+The steps (`wait ready|first-picture|complete|idle`, `orbit DX DY MS [pause]`, `pan`, `zoom STEPS MS`, `click X Y |
+element GLOBALID | centre`, `key`, `fit`, `action NAME JSON`, `open panel` / `close panel`, `screenshot`, `sleep`,
+`mark`, `repeat N {a, b}`, `drawcalls`) and the presets (`orbit-zoom`, `open`, `walk-inside`) are listed in the
+tool's header. A project of over 1 GB of files (or `--lock`) waits for `~/.cache/bimble-measure.lock`; a watchdog
+stops Chromium under 2.5 GB available; temp folders go on any exit. `--strip N` takes a screenshot every N moves
+and through the refill after a stop (each costs tens of ms: it changes what it measures).
+
+The same functions as an MCP server (stdio), for an agent that wants to hold one session open and poke at it:
+
+```json
+{ "mcpServers": { "bimble-drive": { "command": "node", "args": ["ccore/tools/drive.mjs", "--mcp"] } } }
+```
+
+Tools: `open {model|project|links, size, dpr, settings, gpu, panel, name}`, `gesture {script: [steps]}`,
+`screenshot {name}`, `report`, `profile {seconds}`, `close`.
+
 ## 7. Common failures
 
 - **`EADDRINUSE`** on a test port: a process outside the tests took the port between the bind test

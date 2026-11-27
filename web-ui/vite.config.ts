@@ -34,4 +34,7 @@ const ccorePreload: Plugin = {
 let commit = "";
 try { commit = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encoding: "utf8" }).trim(); } catch { /* no git */ }
 
-export default defineConfig({ plugins: [vue(), ccorePreload], server: { port: 5173 }, define: { __BB_COMMIT__: JSON.stringify(commit) } });
+// VIS1: ccore/tools/drive.mjs runs the dev server frozen (BIMBLE_VITE_FROZEN=1): no file watching, no hot reload, so an
+// edit in the tree during a measured run does not reload the page under measurement.
+const frozen = process.env["BIMBLE_VITE_FROZEN"] === "1";
+export default defineConfig({ plugins: [vue(), ccorePreload], server: { port: 5173, ...(frozen ? { hmr: false, watch: null } : {}) }, define: { __BB_COMMIT__: JSON.stringify(commit) } });
