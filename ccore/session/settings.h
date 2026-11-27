@@ -81,7 +81,7 @@ typedef struct {
      * outside fetched and drawn first, tiles.h CC_TILES_SEL_PRIORITY) | "off" (plain order) | "filter" (EXPERIMENTAL: the outside
      * walk leaves out what the shell says is inside; can hide visible elements, measured 0 to 1.2 % of the seen elements per
      * frame on a real project). Not Rust's: as `renderer`, written once set. */
-    char shell_mode[8];
+    char shell_mode[12]; /* "priority" needs 9 bytes: 8 let its NUL spill into the next field */
 } cc_settings;
 #define CC_LINK_GPU_MB_DEFAULT 768u
 
