@@ -271,37 +271,7 @@ static void settings_dialog(App *a) {
             igEndCombo();
         }
         igDummy(V2(1, 6 * s));
-        igTextColored(col4(C_STONE), "%s", T(a, "settings.moving"));
-        int fps = (int)jnum(v, "moving_fps", 30);
-        static const int FPS[] = {0, 15, 30, 60};
-        char lab[64], nb[16];
-        for (int k = 0; k < 4; k++) {
-            snprintf(nb, sizeof nb, "%d", FPS[k]);
-            const char *l = FPS[k] ? Tf(a, lab, sizeof lab, "settings.moving.fps", "{fps}", nb) : T(a, "settings.moving.0");
-            if (k) igSameLine(0, 10 * s);
-            if (igRadioButton_Bool(l, fps == FPS[k])) {
-                set_setting(a, "moving_fps", nb);
-                a->adaptive = FPS[k] != 0;
-            }
-        }
-        bool px = jb(v, "moving_proxies");
-        if (igCheckbox(T(a, "settings.proxies"), &px)) {
-            set_setting(a, "moving_proxies", px ? "true" : "false");
-            a->hlod = px, nv_render_set_hlod(a->r, px, 0), a->dirty = 1;
-        }
-        igTextWrapped("%s", T(a, "settings.proxiesNote"));
-        igDummy(V2(1, 6 * s));
-        int mbv = (int)jnum(v, "link_gpu_mb", 768);
-        igSetNextItemWidth(260 * s);
-        if (igSliderInt(T(a, "settings.linkGpu"), &mbv, 64, 16384, "%d MB", ImGuiSliderFlags_Logarithmic) && igIsItemDeactivatedAfterEdit() == 0) {}
-        if (igIsItemDeactivatedAfterEdit()) {
-            char q[32];
-            snprintf(q, sizeof q, "%d", mbv);
-            set_setting(a, "link_gpu_mb", q);
-            a->gpu_budget = (uint64_t)mbv << 20;
-            for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].detail_state == 4) a->links_s[i].detail_state = 0; /* asked again */
-        }
-        igTextWrapped("%s", T(a, "settings.linkGpuNote"));
+        optimisations_ui(a);
         igDummy(V2(1, 6 * s));
         igTextColored(col4(C_STONE), "%s", T(a, "settings.you"));
         static char name[CC_SETTINGS_LINE_BYTES], email[CC_SETTINGS_LINE_BYTES];
@@ -316,6 +286,81 @@ static void settings_dialog(App *a) {
     }
     modal_end();
     if (!open) a->dialog = DLG_NONE;
+}
+
+
+/* ---- the optimisations (the owner's rule, 27 Nov 2026: each one a setting with a good default and an
+ * off value, shown in Settings and Performance and in the report). The SAME keys as the lab's settings
+ * (session/settings.h); only what this renderer has:
+ *   moving_fps      the moving budget: while the view moves, small elements are left out until a frame fits
+ *                   1/fps (default 30; 0: off, every moving frame whole)
+ *   moving_proxies  far parts drawn as their proxies (the links' caches' HLOD; default true; false: off,
+ *                   every link's detail cell drawn)
+ *   link_gpu_mb     the links' detail on the GPU (default 768 MB; 65536: off, no limit): past it the other
+ *                   links keep their proxies
+ *   edges           (the View tab's Edges, the session's `edges` action, not a setting) screen-space edges
+ *                   (default on; off: faces only)
+ * The cull pass (frustum and screen-size cut of every element on the GPU) is how this renderer draws: no
+ * setting, always on (the lab's gpu_cull is WebGPU's culling of copies, not this). ---- */
+#define LINK_GPU_OFF 65536
+void optimisations_apply(App *a) {
+    const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL;
+    a->moving_fps = (int)jnum(v, "moving_fps", 30);
+    a->adaptive = a->moving_fps > 0;
+    a->hlod = !v || !jr_get(v, "moving_proxies") || jb(v, "moving_proxies");
+    nv_render_set_hlod(a->r, a->hlod, 0);
+    const char *g = getenv("BIMBLE_LINK_GPU_MB"); /* a run's own */
+    double mb = g && *g ? atof(g) : jnum(v, "link_gpu_mb", 768);
+    a->gpu_budget = mb >= LINK_GPU_OFF ? 0 : (uint64_t)(mb * 1048576.0);
+    a->dirty = 1;
+}
+
+void optimisations_ui(App *a) {
+    float s = a->scale;
+    if (!a->settings.root) core_query(a, "settings", NULL, &a->settings);
+    const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL;
+    igPushFont(a->f_semi, 14), igTextUnformatted(T(a, "native.optimisations"), NULL), igPopFont();
+    igTextColored(col4(C_STONE), "%s", T(a, "settings.moving"));
+    int fps = (int)jnum(v, "moving_fps", 30);
+    static const int FPS[] = {0, 15, 30, 60};
+    char lab[64], nb[16];
+    for (int k = 0; k < 4; k++) {
+        snprintf(nb, sizeof nb, "%d", FPS[k]);
+        const char *l = FPS[k] ? Tf(a, lab, sizeof lab, "settings.moving.fps", "{fps}", nb) : T(a, "settings.moving.0");
+        if (k) igSameLine(0, 10 * s);
+        if (igRadioButton_Bool(l, fps == FPS[k])) set_setting(a, "moving_fps", nb), optimisations_apply(a);
+    }
+    bool px = !v || !jr_get(v, "moving_proxies") || jb(v, "moving_proxies");
+    if (igCheckbox(T(a, "settings.proxies"), &px)) set_setting(a, "moving_proxies", px ? "true" : "false"), optimisations_apply(a);
+    int mbv = (int)jnum(v, "link_gpu_mb", 768);
+    bool lim = mbv < LINK_GPU_OFF;
+    if (igCheckbox(T(a, "settings.linkGpu"), &lim)) {
+        set_setting(a, "link_gpu_mb", lim ? "768" : "65536"), optimisations_apply(a);
+        for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].detail_state == 4) a->links_s[i].detail_state = 0; /* asked again */
+    }
+    if (lim) {
+        igSameLine(0, 8 * s);
+        igSetNextItemWidth(200 * s);
+        igSliderInt("##linkgpu", &mbv, 64, 16384, "%d MB", ImGuiSliderFlags_Logarithmic);
+        if (igIsItemDeactivatedAfterEdit()) {
+            char q[32];
+            snprintf(q, sizeof q, "%d", mbv);
+            set_setting(a, "link_gpu_mb", q), optimisations_apply(a);
+            for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].detail_state == 4) a->links_s[i].detail_state = 0;
+        }
+    }
+    bool ed = nv_render_edges(a->r) != NV_EDGES_NONE;
+    if (igCheckbox(T(a, "native.edgesScreen"), &ed)) tool_run_action(a, "edges");
+    igTextColored(col4(C_STONE), "%s", T(a, "native.cullAlways"));
+}
+
+static void optimisations_report(App *a, Buf *b) {
+    char t[400];
+    snprintf(t, sizeof t, "optimisations: moving budget (moving_fps) %s; far parts as proxies (moving_proxies) %s; links' GPU budget (link_gpu_mb) %s; edges (action edges) %s; cull pass on the GPU (no setting) on\n",
+             a->moving_fps > 0 ? (snprintf(t + 300, 40, "%d fps", a->moving_fps), t + 300) : "off", a->hlod ? "on" : "off",
+             a->gpu_budget ? (snprintf(t + 340, 40, "%llu MB", (unsigned long long)(a->gpu_budget >> 20)), t + 340) : "off (no limit)",
+             nv_render_edges(a->r) == NV_EDGES_SCREEN ? "screen" : nv_render_edges(a->r) == NV_EDGES_LINES ? "lines" : "off");
+    buf_puts(b, t);
 }
 
 /* ---- Performance (perf.ts perfReport's shape) ---- */
@@ -356,6 +401,7 @@ void perf_report(App *a, Buf *b) {
     buf_puts(b, "Bimble performance report\n");
     snprintf(t, sizeof t, "date: %s; page: native app (bimble %s); system: Linux\n", m1, CC_RELEASE_VERSION), buf_puts(b, t);
     buf_puts(b, "renderer: native (SDL GPU / Vulkan)\n");
+    optimisations_report(a, b);
     snprintf(t, sizeof t, "adapter: %s (%s)\n", a->gpu_name ? a->gpu_name : "unknown", a->gpu_driver ? a->gpu_driver : "?"), buf_puts(b, t);
     snprintf(t, sizeof t, "canvas: %u x %u px, device pixel ratio %.2g\n", a->vpw, a->vph, a->offscreen ? 1.0 : SDL_GetWindowPixelDensity(a->win)), buf_puts(b, t);
     buf_puts(b, "frame time (draw to pixels: record to the GPU's fence), last 2048 frames:\n");
@@ -417,6 +463,7 @@ static void perf_dialog(App *a) {
         a->rec_until = app_now() + 10000, a->rec_done = 0, a->rec_seconds = 10;
         a->rec_move0 = a->nmove, a->rec_still0 = a->nstill, a->rec_inputs0 = a->ninputs, a->rec_slowest = 0;
     }
+    optimisations_ui(a);
     Buf b;
     buf_init(&b);
     perf_report(a, &b);

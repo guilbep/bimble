@@ -71,6 +71,14 @@ menu, no release, no test.
    (`ccore/ci/run.sh native`: the data check, the deps check, the build, `test/native_app_test.mjs`,
    the same under ASan and UBSan). It is not a required check yet.
 
+9. **Every optimisation is a setting with a good default and an off value** (Pierre's rule, 27 Nov 2026),
+   the lab's own keys, shown as "Optimisations" in Settings and in the Performance panel, and in the
+   report's `optimisations:` line: `moving_fps` (the moving budget, 30; 0 off), `moving_proxies` (far
+   parts as their proxies, true; false off), `link_gpu_mb` (the links' detail on the GPU, 768 MB; 65536
+   off: no limit), and the View tab's Edges (the session's `edges` action; screen-space, on). The cull
+   pass on the GPU is how this renderer draws: always on, no setting (the lab's `gpu_cull` is WebGPU's
+   culling of copies, another thing).
+
 ## What is native today, and what is not
 
 Native: Home (recent files from the web lab's settings file, New, Open), the File menu (New, Open, Save,

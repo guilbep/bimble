@@ -137,7 +137,8 @@ struct App {
     nv_render_opts ro;
     nv_camera cam;
     int hlod;            /* links' proxies for far cells (default on) */
-    uint64_t gpu_budget; /* the links' detail on the GPU, bytes (settings link_gpu_mb; 0 none) */
+    uint64_t gpu_budget; /* the links' detail on the GPU, bytes (settings link_gpu_mb; 0: off, no limit) */
+    int moving_fps;      /* settings moving_fps: the moving budget's target (0: off, every frame whole) */
     nv_part *model_part;
     SLink links_s[64];
     int nlinks;
@@ -274,6 +275,8 @@ void home_screen(App *a);
 void dialogs(App *a);
 void fs_open(App *a, const char *dir, const char *purpose);
 void perf_report(App *a, Buf *b);
+void optimisations_apply(App *a);   /* the settings' optimisations into the renderer (at open) */
+void optimisations_ui(App *a);      /* the "Optimisations" group (Settings, Performance) */
 /* tools.c */
 void tool_measure_input(App *a, float mx, float my, int click);
 void tool_measure_draw(App *a, ImDrawList *dl);

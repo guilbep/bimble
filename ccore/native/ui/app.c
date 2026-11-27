@@ -207,11 +207,7 @@ static void opening_tick(App *a) {
     a->screen_kind = SCR_MAIN;
     a->show = SHOW_VIEW;
     a->core_rev++;
-    if (core_query(a, "settings", NULL, &a->settings) == 0) { /* the links' GPU budget (BIMBLE_LINK_GPU_MB: a run's own) */
-        const char *g = getenv("BIMBLE_LINK_GPU_MB");
-        double mb = g && *g ? atof(g) : jnum(jr_get(a->settings.root, "values"), "link_gpu_mb", 768);
-        a->gpu_budget = (uint64_t)(mb * 1048576.0);
-    }
+    if (core_query(a, "settings", NULL, &a->settings) == 0) optimisations_apply(a); /* the same keys as the lab's */
     a->view_name[0] = 0, a->cam.ortho = 0, a->view_clip = 0;
     a->cam.yaw = -55 * NV_PI / 180, a->cam.pitch = 28 * NV_PI / 180;
     json_free(&a->measure), json_free(&a->sel_el);
@@ -286,7 +282,7 @@ static void frame(App *a) {
     if (!cmd) { fprintf(stderr, "bimble: no command buffer: %s\n", SDL_GetError()); a->quit = 1; return; }
     int drew3d = 0, pick = a->pick_pending;
     if ((a->dirty || pick) && a->show == SHOW_VIEW && a->screen_kind == SCR_MAIN && a->r) {
-        nv_render_set_cut(a->r, a->moving ? a->cut_live : a->still_cut);
+        nv_render_set_cut(a->r, a->moving && a->adaptive && a->moving_fps > 0 ? a->cut_live : a->still_cut);
         nv_render_record(a->r, cmd, &a->cam, pick, a->pick_x, a->pick_y);
         drew3d = 1, a->dirty = 0;
     }
@@ -312,9 +308,10 @@ static void frame(App *a) {
     }
     /* the moving budget (the page's idea, ADR 0078): while moving, the screen-size cut grows until a
      * frame fits in ~16 ms, and shrinks back when there is room; still frames are always whole */
-    if (drew3d && a->moving && a->adaptive) {
-        if (a->frame_ms > 20 && a->cut_live < 16) a->cut_live = a->cut_live < 1 ? 1 : a->cut_live * 1.5f;
-        else if (a->frame_ms < 8 && a->cut_live > a->moving_cut) a->cut_live = a->cut_live / 1.5f < a->moving_cut ? a->moving_cut : a->cut_live / 1.5f;
+    if (drew3d && a->moving && a->adaptive && a->moving_fps > 0) { /* the target: settings moving_fps (30: 33 ms) */
+        double target = 1000.0 / a->moving_fps;
+        if (a->frame_ms > target * 0.6 && a->cut_live < 16) a->cut_live = a->cut_live < 1 ? 1 : a->cut_live * 1.5f;
+        else if (a->frame_ms < target * 0.25 && a->cut_live > a->moving_cut) a->cut_live = a->cut_live / 1.5f < a->moving_cut ? a->moving_cut : a->cut_live / 1.5f;
     }
     if (drew3d) {
         uint32_t picked = 0;
@@ -383,7 +380,7 @@ int main(int argc, char **argv) {
     a->scale = 1, a->lw = 1492, a->lh = 790;
     a->ro = (nv_render_opts){.edges = NV_EDGES_SCREEN, .hlod = 1, .hlod_px = 1};
     a->hlod = 1;
-    a->moving_cut = 2, a->still_cut = 0, a->adaptive = 1;
+    a->moving_cut = 2, a->still_cut = 0, a->adaptive = 1, a->moving_fps = 30, a->gpu_budget = (uint64_t)768 << 20;
     a->draw_key = -1, a->links_synced = -1;
     const char *model = NULL, *shot = NULL, *link_folder = NULL, *conf = NULL;
     int loaders = 2, dark = 0, lang = -1;
