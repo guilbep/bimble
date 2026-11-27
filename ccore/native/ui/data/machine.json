@@ -140,5 +140,480 @@
    "failed": "failed",
    "lost": "lost"
   }
+ },
+ "dest": {
+  "home": {
+   "new": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "open": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "import": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "close": [
+    "opening",
+    "confirmClose",
+    "-"
+   ],
+   "opened": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "closed": [
+    "home",
+    "home",
+    "home"
+   ],
+   "failed": [
+    "error",
+    "error",
+    "error"
+   ],
+   "showView": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "showPage": [
+    "model.page",
+    "model.page",
+    "-"
+   ],
+   "showSheet": [
+    "model.sheet",
+    "model.sheet",
+    "-"
+   ],
+   "home": [
+    "home",
+    "home",
+    "home"
+   ],
+   "core": [
+    "home",
+    "home",
+    "home"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ]
+  },
+  "opening": {
+   "opened": [
+    "model.view",
+    "model.view",
+    "model.view"
+   ],
+   "closed": [
+    "home",
+    "home",
+    "home"
+   ],
+   "failed": [
+    "error",
+    "error",
+    "error"
+   ],
+   "cancel": [
+    "model.view",
+    "model.view",
+    "home"
+   ],
+   "core": [
+    "opening",
+    "opening",
+    "opening"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ]
+  },
+  "model.view": {
+   "new": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "open": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "import": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "close": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "opened": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "closed": [
+    "home",
+    "home",
+    "home"
+   ],
+   "failed": [
+    "error",
+    "error",
+    "error"
+   ],
+   "showView": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "showPage": [
+    "model.page",
+    "model.page",
+    "-"
+   ],
+   "showSheet": [
+    "model.sheet",
+    "model.sheet",
+    "-"
+   ],
+   "home": [
+    "home",
+    "home",
+    "home"
+   ],
+   "core": [
+    "model.view",
+    "model.view",
+    "home"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ]
+  },
+  "model.page": {
+   "new": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "open": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "import": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "close": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "opened": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "closed": [
+    "home",
+    "home",
+    "home"
+   ],
+   "failed": [
+    "error",
+    "error",
+    "error"
+   ],
+   "showView": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "showPage": [
+    "model.page",
+    "model.page",
+    "-"
+   ],
+   "showSheet": [
+    "model.sheet",
+    "model.sheet",
+    "-"
+   ],
+   "back": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "home": [
+    "home",
+    "home",
+    "home"
+   ],
+   "core": [
+    "model.page",
+    "model.page",
+    "home"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ]
+  },
+  "model.sheet": {
+   "new": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "open": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "import": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "close": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "opened": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "closed": [
+    "home",
+    "home",
+    "home"
+   ],
+   "failed": [
+    "error",
+    "error",
+    "error"
+   ],
+   "showView": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "showPage": [
+    "model.page",
+    "model.page",
+    "-"
+   ],
+   "showSheet": [
+    "model.sheet",
+    "model.sheet",
+    "-"
+   ],
+   "back": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "home": [
+    "home",
+    "home",
+    "home"
+   ],
+   "core": [
+    "model.sheet",
+    "model.sheet",
+    "home"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ]
+  },
+  "error": {
+   "opened": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "closed": [
+    "home",
+    "home",
+    "home"
+   ],
+   "failed": [
+    "error",
+    "error",
+    "error"
+   ],
+   "back": [
+    "model.view",
+    "model.view",
+    "home"
+   ],
+   "home": [
+    "home",
+    "home",
+    "home"
+   ],
+   "core": [
+    "error",
+    "error",
+    "error"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ]
+  },
+  "confirmClose": {
+   "opened": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "closed": [
+    "home",
+    "home",
+    "home"
+   ],
+   "failed": [
+    "error",
+    "error",
+    "error"
+   ],
+   "cancel": [
+    "model.view",
+    "model.view",
+    "home"
+   ],
+   "discard": [
+    "opening",
+    "opening",
+    "opening"
+   ],
+   "core": [
+    "confirmClose",
+    "confirmClose",
+    "confirmClose"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ]
+  },
+  "disconnected": {
+   "opened": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ],
+   "closed": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ],
+   "failed": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ],
+   "core": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ],
+   "retry": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ],
+   "reconnected": [
+    "model.view",
+    "model.view",
+    "home"
+   ]
+  },
+  "sessionLost": {
+   "new": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "open": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "import": [
+    "opening",
+    "confirmClose",
+    "opening"
+   ],
+   "opened": [
+    "sessionLost",
+    "sessionLost",
+    "sessionLost"
+   ],
+   "closed": [
+    "sessionLost",
+    "sessionLost",
+    "sessionLost"
+   ],
+   "failed": [
+    "error",
+    "error",
+    "error"
+   ],
+   "showView": [
+    "model.view",
+    "model.view",
+    "-"
+   ],
+   "home": [
+    "home",
+    "home",
+    "home"
+   ],
+   "core": [
+    "sessionLost",
+    "sessionLost",
+    "sessionLost"
+   ],
+   "lost": [
+    "disconnected",
+    "disconnected",
+    "disconnected"
+   ]
+  }
  }
 }

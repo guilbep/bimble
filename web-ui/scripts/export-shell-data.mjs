@@ -71,7 +71,26 @@ for (const k of M.KINDS) {
   table[k] = {};
   for (const [e, row] of Object.entries(M.TRANSITIONS[k] ?? {})) table[k][e] = row.name || "row";
 }
-writeFileSync(join(out, "machine.json"), JSON.stringify({ kinds: M.KINDS, events: M.EVENTS, transitions: table }, null, 1) + "\n");
+// NUI1: each row's destination, the rows run on one shell of each kind (its `back` the 3D view) and three
+// sessions: a model saved, a model with unsaved changes, nothing open ("-": refused). The native shell's
+// port (ccore/native/ui/machine.c) is checked against it (ccore/test/native_machine_test.mjs).
+const SHELL = {
+  home: M.HOME, opening: { at: "opening", what: "open", discard: false, back: M.VIEW }, "model.view": M.VIEW,
+  "model.page": { at: "model", show: "page", page: "p" }, "model.sheet": { at: "model", show: "sheet", sheet: "s" },
+  error: { at: "error", message: "m", back: M.VIEW }, confirmClose: { at: "confirmClose", then: "open", back: M.VIEW },
+  disconnected: { at: "disconnected", file: "f", unsaved: false, back: M.VIEW }, sessionLost: { at: "sessionLost", file: "f", unsaved: false },
+};
+const EV = { failed: { message: "m" }, showPage: { page: "p" }, showSheet: { sheet: "s" }, reconnected: { same: true } };
+const CORES = [{ file: "f", unsaved: false, tab: true }, { file: "f", unsaved: true, tab: true }, { file: null, unsaved: false, tab: false }];
+const dest = {};
+for (const k of M.KINDS) {
+  dest[k] = {};
+  for (const e of M.EVENTS) {
+    const to = CORES.map((c) => { const r = M.step(SHELL[k], { do: e, ...(EV[e] ?? {}) }, c); return r ? M.kind(r) : "-"; });
+    if (to.some((x) => x !== "-")) dest[k][e] = to;
+  }
+}
+writeFileSync(join(out, "machine.json"), JSON.stringify({ kinds: M.KINDS, events: M.EVENTS, transitions: table, dest }, null, 1) + "\n");
 
 // strings
 const fr = { ...(await mod("i18n/fr.ts")).fr }, en = { ...(await mod("i18n/en.ts")).en };

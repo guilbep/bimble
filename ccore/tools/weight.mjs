@@ -65,7 +65,7 @@ const FEATURES = [
   ["host server (HTTP, static files, main, platform, fonts)", "server static main platform_native platform_win fonts"],
   ["MCP", "mcp"],
   ["native app: renderer and loader (NUI1: SDL GPU parts, link geometry off the UI thread)", "render scene_load loader"],
-  ["native app: shell (NUI1: Dear ImGui through cimgui, the lab's data)", "app core view3d shell panels home tools page_quantities drive theme icons"],
+  ["native app: shell (NUI1: Dear ImGui through cimgui, the lab's data)", "app core view3d shell panels home tools page_quantities drive theme icons machine"],
   ["files from the page (FS1: the dialog's queries, POST /stage; the settings file, recent files; SET1: the settings, About)", "fs settings_file settings"],
   ["merged string literals (wasm <internal>)", "<internal>"],
   ["kernel manifold (C++, native only)", "lib:manifold lib:manifoldc lib:Clipper2"],

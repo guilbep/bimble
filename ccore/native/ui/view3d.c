@@ -231,7 +231,20 @@ void scene_tick(App *a) {
     /* the next detail: the largest on screen first, once every link's proxies are in (or failed) */
     int proxies_pending = 0;
     for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].proxy_state == 1) proxies_pending = 1;
+    /* the links' GPU budget (settings link_gpu_mb, as the lab's: SIZE3): once the details drawn (and those
+     * on their way, by their triangles) fill it, the other links keep their proxies (state 4) */
+    uint64_t used = 0;
+    for (int i = 0; i < a->nlinks; i++) {
+        const SLink *L = &a->links_s[i];
+        if (L->detail) used += nv_part_gpu_bytes(L->detail);
+        else if (L->detail_state == 1) used += L->tris * 40;
+    }
     while (!proxies_pending && nv_loader_idle(a->loader) > 0) {
+        if (a->gpu_budget && used >= a->gpu_budget) {
+            for (int i = 0; i < a->nlinks; i++)
+                if (!a->links_s[i].detail_state && a->links_s[i].visible) a->links_s[i].detail_state = 4;
+            break;
+        }
         int best = -1;
         double bs = 0;
         for (int i = 0; i < a->nlinks; i++) {
@@ -242,6 +255,7 @@ void scene_tick(App *a) {
         }
         if (best < 0) break;
         submit(a, &a->links_s[best], NV_JOB_DETAIL);
+        used += a->links_s[best].tris * 40;
         if (nv_loader_idle(a->loader) <= 1) break; /* one per idle thread: the queue stays empty */
     }
     /* the visibility of each part: its link's eye */
@@ -264,7 +278,7 @@ int scene_complete(App *a) {
     if (nv_loader_busy(a->loader)) return 0;
     for (int i = 0; i < a->nlinks; i++) {
         const SLink *L = &a->links_s[i];
-        if (L->visible && L->detail_state != 2 && L->detail_state != 3) return 0;
+        if (L->visible && L->detail_state != 2 && L->detail_state != 3 && L->detail_state != 4) return 0;
     }
     return !a->links_busy;
 }

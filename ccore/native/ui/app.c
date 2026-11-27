@@ -207,6 +207,11 @@ static void opening_tick(App *a) {
     a->screen_kind = SCR_MAIN;
     a->show = SHOW_VIEW;
     a->core_rev++;
+    if (core_query(a, "settings", NULL, &a->settings) == 0) { /* the links' GPU budget (BIMBLE_LINK_GPU_MB: a run's own) */
+        const char *g = getenv("BIMBLE_LINK_GPU_MB");
+        double mb = g && *g ? atof(g) : jnum(jr_get(a->settings.root, "values"), "link_gpu_mb", 768);
+        a->gpu_budget = (uint64_t)(mb * 1048576.0);
+    }
     a->view_name[0] = 0, a->cam.ortho = 0, a->view_cut = 0;
     a->cam.yaw = -55 * NV_PI / 180, a->cam.pitch = 28 * NV_PI / 180;
     json_free(&a->measure), json_free(&a->sel_el);

@@ -10,6 +10,7 @@
 #include "embed.h"
 #include "calls.h"
 #include "links.h"
+#include "machine.h"
 
 int core_call(App *a, const char *op, const char *name, const char *body, Buf *out) {
     if (!body) body = "";
@@ -389,9 +390,15 @@ int core_key(App *a, SDL_Keycode k, SDL_Keymod mod, int typing) {
     return 0;
 }
 
-/* ---- File: open, new, close (the unsaved question first: the lab's "Discard changes?") ---- */
+/* ---- File: open, new, close: where the lab's shell machine goes (machine.c, machine.ts's table): the
+ * unsaved question first (confirmClose: "Discard changes?"), else the open ---- */
+static int shell_go(App *a, int ev) {
+    int at = a->screen_kind == SCR_HOME ? SK_HOME : a->screen_kind == SCR_OPENING ? SK_OPENING : a->show == SHOW_PAGE ? SK_PAGE : SK_VIEW;
+    ShellCore c = {a->screen_kind == SCR_MAIN && a->ses->open, a->screen_kind == SCR_MAIN && jb(a->state.root, "unsaved"), 1};
+    return shell_next(at, SK_VIEW, ev, c, 1);
+}
 void app_open(App *a, const char *path) {
-    if (a->screen_kind == SCR_MAIN && jb(a->state.root, "unsaved")) {
+    if (shell_go(a, SE_OPEN) == SK_CONFIRM) {
         snprintf(a->pending_open, sizeof a->pending_open, "%s", path);
         a->dialog = DLG_DISCARD;
         return;
@@ -402,14 +409,16 @@ void app_open(App *a, const char *path) {
     a->open_err[0] = 0;
 }
 void app_new(App *a) {
-    if (a->screen_kind == SCR_MAIN && jb(a->state.root, "unsaved")) { snprintf(a->pending_open, sizeof a->pending_open, ":new"); a->dialog = DLG_DISCARD; return; }
+    if (shell_go(a, SE_NEW) == SK_CONFIRM) { snprintf(a->pending_open, sizeof a->pending_open, ":new"); a->dialog = DLG_DISCARD; return; }
     a->model_path[0] = 0;
     snprintf(a->model_path, sizeof a->model_path, ":new");
     a->screen_kind = SCR_OPENING;
     a->t_open = app_now();
 }
 void app_close(App *a) {
-    if (a->screen_kind == SCR_MAIN && jb(a->state.root, "unsaved")) { snprintf(a->pending_open, sizeof a->pending_open, ":close"); a->dialog = DLG_DISCARD; return; }
+    int to = shell_go(a, SE_CLOSE);
+    if (to == SK_REFUSED) return;
+    if (to == SK_CONFIRM) { snprintf(a->pending_open, sizeof a->pending_open, ":close"); a->dialog = DLG_DISCARD; return; }
     scene_reset(a);
     Buf o;
     buf_init(&o);

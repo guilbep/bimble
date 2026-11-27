@@ -71,7 +71,7 @@ typedef struct {
     int colour, visible;
     unsigned proxies_gen;
     nv_part *proxy, *detail;
-    int proxy_state, detail_state; /* 0 none, 1 queued, 2 drawn, 3 failed */
+    int proxy_state, detail_state; /* 0 none, 1 queued, 2 drawn, 3 failed, 4 left as proxies (the GPU budget) */
     uint32_t elem0, nelem, gen;
     char name[256];
     double lo[3], hi[3];
@@ -137,6 +137,7 @@ struct App {
     nv_render_opts ro;
     nv_camera cam;
     int hlod;            /* links' proxies for far cells (default on) */
+    uint64_t gpu_budget; /* the links' detail on the GPU, bytes (settings link_gpu_mb; 0 none) */
     nv_part *model_part;
     SLink links_s[64];
     int nlinks;

@@ -298,6 +298,8 @@ static void settings_dialog(App *a) {
             char q[32];
             snprintf(q, sizeof q, "%d", mbv);
             set_setting(a, "link_gpu_mb", q);
+            a->gpu_budget = (uint64_t)mbv << 20;
+            for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].detail_state == 4) a->links_s[i].detail_state = 0; /* asked again */
         }
         igTextWrapped("%s", T(a, "settings.linkGpuNote"));
         igDummy(V2(1, 6 * s));
