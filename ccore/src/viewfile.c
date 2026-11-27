@@ -854,7 +854,7 @@ int cc_viewfile_read_mapped(const uint8_t *p, size_t n, cc_viewfile *out, cc_err
     arena_init(&out->arena, 0);
     Arena scratch;
     arena_init(&scratch, 0);
-    out->lazy = 1, out->base = p, out->lazy_scratch = &scratch;
+    out->lazy = 1, out->base = p, out->base_len = n, out->lazy_scratch = &scratch;
     /* the sections HLOD and PROP after the others stay out of the read (cc_viewfile_read's cut) */
     size_t cut = n, at = 12, lazy = 0, pset = 0, hlod = 0;
     while (n >= 12 && at + 12 <= n) {

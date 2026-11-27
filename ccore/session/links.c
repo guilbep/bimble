@@ -1056,6 +1056,7 @@ int cc_links_tick(cc_session *s) {
             else ch = 1;
             cc_link_job_free(j);
             s->link_job = NULL, s->link_job_uid = 0;
+            if (s->pf->trim) s->pf->trim(s->pf->ctx); /* SIZE3: a conversion's freed heap given back (it peaks at GBs) */
         }
     }
     if (!s->link_job && s->pf->mem_available && s->pf->stat_path) { /* SIZE2: a link refused for memory, queued again once

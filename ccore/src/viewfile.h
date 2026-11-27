@@ -115,6 +115,7 @@ typedef struct {
     int lazy;
     float box[6]; /* SIZE3: a lazy read's scene box (lo, hi; scene coordinates: placed shapes' boxes' corners placed) */
     const uint8_t *base;
+    size_t base_len; /* SIZE3: the bytes at `base` (the whole mapped file: a later section's byte range is base + off) */
     cc_viewfile_ref *shape_refs; /* malloc, lazy only */
     Arena *lazy_scratch;         /* during the read only */
 } cc_viewfile;

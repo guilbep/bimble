@@ -368,10 +368,12 @@ after 10.5 s. Choices by Claude on ticket SIZE3 under the same delegation.
 28. **A folder opens with bounded page memory, its detail on demand.** Each link's mesh (BMSH version 4) is read in a
    Web Worker (`gl/bmsh4.worker.ts`, the bytes transferred both ways), one link at a time, the smallest first. A link
    whose version 3 bytes fit what is left of 128 MB (`OPEN_KEEP_BYTES`) is decoded whole and uploaded with the open;
-   any other is read as its rows and its elements' boxes only (`bmsh4Rows`: one block decoded at a time into a scratch,
-   the boxes in `upload`'s arithmetic, `bake`'s rows), never its whole arrays: its rows, boxes and batches stand without
+   the first that does not is read as its rows and its elements' boxes only (`bmsh4Rows`: one block decoded at a time
+   into a scratch, the boxes in `upload`'s arithmetic, `bake`'s rows), and every later one is asked as the host's rows
+   answer (`GET /mesh?link=k&rows=1`, `cc_link_rows_answer`: version 4 with no block, then each element's box computed
+   by the host in the page's f32 arithmetic: no mesh moves), never their whole arrays: its rows, boxes and batches stand without
    them (`Bmsh.dropped`, `preBox`). Its detail is asked again only when a frame wants it (its batches in view and not
-   replaced by its proxies), one link at a time, the largest on screen first (`wantScore`), then uploaded and dropped
+   replaced by its proxies), two links at most at a time, the largest on screen first (`wantScore`), then uploaded and dropped
    from the page (amendment 4); until then its proxies stand for it, by their normal cut when the frame does not want its
    detail (`wantedLast`), else by its coarsest. **Alternative:** a pipeline of 2 (twice the transient memory for little:
    the fetch is not the slow part); decode on the page's thread in slices (25 ms slices: over a frame).

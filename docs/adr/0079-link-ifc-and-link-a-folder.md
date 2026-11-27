@@ -215,7 +215,10 @@ same delegation.
     decoded meshes across links (`link_mesh_budget`, `BIMBLE_LINK_MESH_BUDGET_MB`), least recently used first, never one
     used in the last 10 s (a measure over every link keeps them while it runs; `BIMBLE_LINK_KEEP_MS` for the tests), at
     the carrier's tick, and the freed memory given back to the system (platform `trim`: glibc's `malloc_trim`).
-    Decoding and dropping are logged with their size and time. **Alternative:** decode per element on demand (every
+    Decoding and dropping are logged with their size and time. A call that needs ONE element's geometry (the element
+    query's volume, Box to selection around a linked element) decodes that element's block alone (its own mesh or its
+    shape, `cc_link_element_scene`), not the link. A link not loaded, or no longer there, answers its mesh and rows
+    with 204 (a page's request races its unload or removal). **Alternative:** decode per element on demand (every
     consumer walks the scene's arrays directly: a rewrite of measure, plans, sections and paper).
 22. **A link refused for memory is retried when the host is idle too** (`cc_links_wants_tick`): the carrier looked at its
     links only while one was queued or converting, so a refused last link stayed refused (decision 16 did not hold).
