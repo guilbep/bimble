@@ -8,9 +8,11 @@
 //     leaf), every tile asked in one request decodes (leaves: TLF1, their triangles the table's; proxies: TPX1 in their
 //     box), the stale-request rule (another name: 204 X-Superseded), bad ids 400, the report says the pyramid;
 //   - the walker's frame (GET /mesh?tiles_frame): the links' world box, a far view drawing the coarsest tile alone, a
-//     close one drawing every leaf;
+//     close one drawing every leaf; levels of detail off (lod=0): every leaf even far;
 //   - a format 6 cache (the previous format, complete, no TILE): linked from it (the IFC not read) and re-indexed:
 //     format 7 with its TILE;
+//   - the bake settings (BIMBLE_TILES) recorded in SRCE; another setting (occluders off, leaves of 20,000): indexed again
+//     from the cache, not converted;
 //   - a small link without a cache (an IFC under 1 MiB read as it is): its pyramid built at once;
 //   - the open model (bench/mesh_heavy_model.py 160 x 600: several leaves): GET /mesh?tiles=toc&step=N answers 202
 //     "done total" (a run of leaves a call), then its table; its tiles decode;
@@ -144,6 +146,8 @@ const bounds = JSON.parse(text(g.bytes)).bounds;
 const c = [0, 1, 2].map((k) => (bounds[k] + bounds[3 + k]) / 2), size = Math.max(bounds[3] - bounds[0], bounds[4] - bounds[1], 1);
 const view = async (d, err = 1) => JSON.parse(text((await A.get(`tiles_frame=1&eye=${c[0] - d * size},${c[1] - d * size},${c[2] + d * size / 2}&at=${c.join(",")}&fov=60&w=1600&h=1000&err=${err}&leaf_bytes=1`)).bytes));
 const far = await view(200), close = await view(0.7);
+const farOff = JSON.parse(text((await A.get(`tiles_frame=1&eye=${c[0] - 200 * size},${c[1] - 200 * size},${c[2] + 100 * size}&at=${c.join(",")}&fov=60&w=1600&h=1000&err=1&lod=0`)).bytes));
+check("levels of detail off (lod=0, a setting's off value): every leaf even from afar", farOff.triangles === farOff.detail && farOff.links[0].proxies === 0, `${farOff.triangles} of ${farOff.detail}`);
 check("the walker's frame: far, the coarsest tile alone; close, every leaf", g.status === 200 && far.tiles === 1 && far.links[0].proxies + far.links[0].leaves === 1 &&
   close.triangles === close.detail && close.leaf_bytes > 0, `bounds ${bounds.map(Math.round)}; far ${far.triangles} tris ${far.bytes} B; close ${close.triangles} tris ${close.bytes} B`);
 
@@ -163,8 +167,24 @@ const c7 = text(readFileSync(cacheOf("a.ifc")));
 g = await B.get("link=0&tiles=toc");
 check("then re-indexed: format 7, complete, its TILE served", c7.includes("bimble-link-cache 7") && /"complete":true/.test(c7) && g.status === 200);
 
+// ---- the bake settings (BIMBLE_TILES): recorded in SRCE; a cache baked otherwise is indexed again, not converted ----
+check("its source record names the bake settings", /"tiles":"leaf=40000 proxy=16384 root=512 res=64 occ=64"/.test(c7), c7.match(/"tiles":"[^"]*"/)?.[0] ?? "none");
+B.h.kill("SIGKILL");
+const D = await startHost("link_tiles_test_4", { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_TILES: "leaf=20000 occ=0" });
+await D.call("action", "new");
+await D.call("action", "link_model", JSON.stringify({ path: join(tmp, "a.ifc") }));
+r = await until(async () => { const m = await D.row("a.ifc"); return m?.state === "ready" ? m : null; });
+const reidx = r?.from_cache === true && r.indexing === true;
+r = await until(async () => { const m = await D.row("a.ifc"); return m && !m.indexing ? m : null; });
+g = await D.get("link=0&tiles=toc");
+let dt = null;
+try { dt = T.parseToc(g.bytes, 72); } catch { /* below */ }
+const c8 = text(readFileSync(cacheOf("a.ifc")));
+check("other bake settings: the cache indexed again from itself (not converted), occluders off, recorded", reidx && dt && dt.nocc === 0 && dt.leafTarget === 20000 &&
+  /"tiles":"leaf=20000 proxy=16384 root=512 res=64 occ=0"/.test(c8), `${dt?.nocc} occluders, leaf target ${dt?.leafTarget}`);
+D.h.kill("SIGKILL");
+
 // ---- a small link read as it is (no cache): its pyramid built at once ----
-await B.call("action", "link_model", JSON.stringify({ path: join(tmp, "small.ifc") }));
 // the open model: bench/mesh_heavy_model.py's (golden/frame.json and 160 closed meshes of 600 triangles: several leaves)
 execFileSync("python3", [join(CCORE, "bench/mesh_heavy_model.py"), "160", "600", join(tmp, "heavy.json")]);
 const C = await startHost("link_tiles_test_3", {}, [join(tmp, "heavy.json")]);
@@ -195,8 +215,8 @@ if (ot) {
 
 // ---- tiles.ts on damaged bytes ----
 {
-  const goodToc = (await B.get("link=0&tiles=toc")).bytes;
-  const tb = toc ? (await B.get(`link=0&tile=${[...Array(T.parseToc(goodToc).ntiles).keys()].join(",")}`)).bytes : new Uint8Array(0);
+  const goodToc = (await C.get("link=0&tiles=toc")).bytes;
+  const tb = toc ? (await C.get(`link=0&tile=${[...Array(T.parseToc(goodToc).ntiles).keys()].join(",")}`)).bytes : new Uint8Array(0);
   let thrown = 0, read = 0, seed = 7;
   const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) >>> 8;
   for (let i = 0; i < 2000; i++) {

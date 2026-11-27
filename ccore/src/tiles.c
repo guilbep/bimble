@@ -20,6 +20,38 @@ void cc_tiles_default(cc_tiles_opts *o) {
     o->proxy_tris = CC_TILES_PROXY_TRIS;
     o->root_tris = CC_TILES_ROOT_TRIS;
     o->res = CC_TILES_RES;
+    o->occ = CC_TILES_OCC;
+}
+
+void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n) {
+    Buf b;
+    buf_init(&b);
+    buf_puts(&b, "leaf="), buf_u64(&b, o->leaf_tris), buf_puts(&b, " proxy="), buf_u64(&b, o->proxy_tris);
+    buf_puts(&b, " root="), buf_u64(&b, o->root_tris), buf_puts(&b, " res="), buf_u64(&b, o->res), buf_puts(&b, " occ="), buf_u64(&b, o->occ);
+    size_t k = b.oom || !b.p ? 0 : (b.len < n ? b.len : n - 1);
+    if (n) memcpy(out, b.p ? b.p : "", k), out[k] = 0;
+    buf_free(&b);
+}
+
+void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t) {
+    cc_tiles_default(o);
+    static const struct { const char *k; uint32_t lo, hi; } K[] = {{"leaf", 1000, 10000000}, {"proxy", 64, 1000000}, {"root", 16, 1000000}, {"res", 4, 1024}, {"occ", 0, CC_TILES_OCC_MAX}};
+    for (const char *p = t; p && *p;) {
+        while (*p == ' ') p++;
+        for (size_t i = 0; i < sizeof K / sizeof *K; i++) {
+            size_t kl = strlen(K[i].k);
+            if (strncmp(p, K[i].k, kl) || p[kl] != '=') continue;
+            uint64_t v = 0;
+            const char *q = p + kl + 1;
+            int d = 0;
+            while (*q >= '0' && *q <= '9' && d < 10) v = v * 10 + (uint64_t)(*q++ - '0'), d++;
+            if (d && v >= K[i].lo && v <= K[i].hi) {
+                uint32_t x = (uint32_t)v;
+                if (i == 0) o->leaf_tris = x; else if (i == 1) o->proxy_tris = x; else if (i == 2) o->root_tris = x; else if (i == 3) o->res = x; else o->occ = x;
+            }
+        }
+        while (*p && *p != ' ') p++;
+    }
 }
 
 static int fail(cc_error *err, const char *msg) {
@@ -177,8 +209,8 @@ typedef struct { /* a worker's leaf state (leaves are read in parallel: cc_jobs)
     Key *keys;
     uint8_t *has;
     size_t cwpos;
-    Occ occ[CC_TILES_OCC];
-    uint32_t nocc;
+    Occ occ[CC_TILES_OCC_MAX];
+    uint32_t nocc, maxocc;
     uint64_t leaf_verts;
     double (*lsmp)[4];        /* the leaf's samples */
     uint32_t nlsmp, clsmp;
@@ -317,6 +349,7 @@ int cc_tiles_start(cc_tiles *t, const cc_tiles_src *src, const cc_tiles_opts *o,
     if (!w->o.leaf_tris) w->o.leaf_tris = 1;
     if (!w->o.proxy_tris) w->o.proxy_tris = 1;
     if (!w->o.res) w->o.res = 1;
+    if (w->o.occ > CC_TILES_OCC_MAX) w->o.occ = CC_TILES_OCC_MAX;
     arena_init(&w->arena, 0);
     buf_init(&w->blobs);
     size_t ne = src_n(src), ns = src_nshapes(src);
@@ -526,8 +559,9 @@ done:
 
 /* ---- per leaf: its elements' triangles clustered (for its parent), its counts, its occluders ---- */
 
-static void occ_keep(Occ *set, uint32_t *n, const Occ *c) {
-    if (*n < CC_TILES_OCC) {
+static void occ_keep(Occ *set, uint32_t *n, uint32_t max, const Occ *c) {
+    if (!max) return;
+    if (*n < max) {
         set[(*n)++] = *c;
         return;
     }
@@ -624,6 +658,97 @@ static int closed_outward(const cc_mesh *m, Arena *a) {
 }
 
 /* element el's triangles into the leaf's grid; returns -1 on a decode or memory failure */
+/* An opaque element's occluder candidates: its triangles grouped by plane; a plane's triangles that fill their rectangle
+ * exactly (a face cut in a grid, not a face with a window) stand as that rectangle (two triangles), the others as
+ * themselves; each kept when its area reaches `amin`. Positions are L->wpos (placed). */
+typedef struct {
+    int64_t k[4]; /* the plane: normal x 4096, offset (mm) */
+    uint32_t t;
+    double area;
+} PlaneT;
+static int planet_cmp(const void *a, const void *b) {
+    const PlaneT *x = a, *y = b;
+    for (int i = 0; i < 4; i++)
+        if (x->k[i] != y->k[i]) return x->k[i] < y->k[i] ? -1 : 1;
+    return x->t < y->t ? -1 : x->t > y->t;
+}
+
+static int occ_element(LW *L, const cc_mesh *m, int mir, uint32_t el, double amin) {
+    uint32_t nt = m->ni / 3;
+    PlaneT *pt = arena_alloc_n(&L->tmp, (size_t)nt + 1, sizeof *pt, 8);
+    if (!pt) return -1;
+    uint32_t n = 0;
+    for (uint32_t t = 0; t < nt; t++) {
+        uint32_t a = m->idx[3 * t], b = m->idx[3 * t + (mir ? 2 : 1)], c = m->idx[3 * t + (mir ? 1 : 2)];
+        if (a >= m->nv || b >= m->nv || c >= m->nv || !finite3(L->wpos[a]) || !finite3(L->wpos[b]) || !finite3(L->wpos[c])) continue;
+        double u[3], v[3], q[3];
+        for (int k = 0; k < 3; k++) u[k] = (double)L->wpos[b][k] - L->wpos[a][k], v[k] = (double)L->wpos[c][k] - L->wpos[a][k];
+        q[0] = u[1] * v[2] - u[2] * v[1], q[1] = u[2] * v[0] - u[0] * v[2], q[2] = u[0] * v[1] - u[1] * v[0];
+        double l = cc_sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
+        if (!(l > 0)) continue;
+        PlaneT *x = &pt[n++];
+        for (int k = 0; k < 3; k++) x->k[k] = (int64_t)(q[k] / l * 4096.0 + (q[k] >= 0 ? 0.5 : -0.5));
+        double d = (q[0] * L->wpos[a][0] + q[1] * L->wpos[a][1] + q[2] * L->wpos[a][2]) / l;
+        x->k[3] = (int64_t)(d + (d >= 0 ? 0.5 : -0.5));
+        x->t = t, x->area = l / 2;
+    }
+    qsort(pt, n, sizeof *pt, planet_cmp);
+    for (uint32_t i = 0; i < n;) {
+        uint32_t j = i;
+        double sum = 0;
+        while (j < n && !memcmp(pt[j].k, pt[i].k, sizeof pt[i].k)) sum += pt[j].area, j++;
+        int rect = 0;
+        if (j - i > 1) { /* the plane's frame: the first triangle's first edge and the normal */
+            uint32_t t0 = pt[i].t, a = m->idx[3 * t0], b = m->idx[3 * t0 + (mir ? 2 : 1)];
+            double nn[3] = {pt[i].k[0] / 4096.0, pt[i].k[1] / 4096.0, pt[i].k[2] / 4096.0}, u[3], v[3];
+            for (int k = 0; k < 3; k++) u[k] = (double)L->wpos[b][k] - L->wpos[a][k];
+            double ul = cc_sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            for (int k = 0; k < 3; k++) u[k] /= ul;
+            v[0] = nn[1] * u[2] - nn[2] * u[1], v[1] = nn[2] * u[0] - nn[0] * u[2], v[2] = nn[0] * u[1] - nn[1] * u[0];
+            double vl = cc_sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (ul > 0 && vl > 0) {
+                for (int k = 0; k < 3; k++) v[k] /= vl;
+                double lo[2] = {1e300, 1e300}, hi[2] = {-1e300, -1e300}, dd = 0;
+                const float *o = L->wpos[a];
+                for (uint32_t q = i; q < j; q++)
+                    for (int c = 0; c < 3; c++) {
+                        const float *p = L->wpos[m->idx[3 * pt[q].t + c]];
+                        double r[3] = {(double)p[0] - o[0], (double)p[1] - o[1], (double)p[2] - o[2]};
+                        double x = r[0] * u[0] + r[1] * u[1] + r[2] * u[2], y = r[0] * v[0] + r[1] * v[1] + r[2] * v[2];
+                        double z = r[0] * nn[0] + r[1] * nn[1] + r[2] * nn[2];
+                        lo[0] = x < lo[0] ? x : lo[0], hi[0] = x > hi[0] ? x : hi[0], lo[1] = y < lo[1] ? y : lo[1], hi[1] = y > hi[1] ? y : hi[1];
+                        dd = (z < 0 ? -z : z) > dd ? (z < 0 ? -z : z) : dd;
+                    }
+                double ra = (hi[0] - lo[0]) * (hi[1] - lo[1]);
+                if (ra > 0 && sum >= 0.9995 * ra && sum <= 1.0005 * ra && dd < 1.0 && ra / 2 >= amin) { /* it fills its rectangle */
+                    rect = 1;
+                    double cs[4][3];
+                    for (int c = 0; c < 4; c++)
+                        for (int k = 0; k < 3; k++) cs[c][k] = o[k] + (c & 1 ? hi[0] : lo[0]) * u[k] + (c & 2 ? hi[1] : lo[1]) * v[k];
+                    static const int TR[2][3] = {{0, 1, 3}, {0, 3, 2}};
+                    for (int h = 0; h < 2; h++) {
+                        Occ oc;
+                        for (int c = 0; c < 3; c++)
+                            for (int k = 0; k < 3; k++) oc.t[3 * c + k] = (float)cs[TR[h][c]][k];
+                        oc.area = ra / 2, oc.el = el, oc.tri = pt[i].t * 2 + (uint32_t)h;
+                        occ_keep(L->occ, &L->nocc, L->maxocc, &oc);
+                    }
+                }
+            }
+        }
+        for (uint32_t q = i; !rect && q < j; q++) { /* the triangles themselves */
+            if (pt[q].area < amin) continue;
+            uint32_t t = pt[q].t, a = m->idx[3 * t], b = m->idx[3 * t + (mir ? 2 : 1)], c = m->idx[3 * t + (mir ? 1 : 2)];
+            Occ oc;
+            memcpy(oc.t, L->wpos[a], 12), memcpy(oc.t + 3, L->wpos[b], 12), memcpy(oc.t + 6, L->wpos[c], 12);
+            oc.area = pt[q].area, oc.el = el, oc.tri = t * 2 + 1;
+            occ_keep(L->occ, &L->nocc, L->maxocc, &oc);
+        }
+        i = j;
+    }
+    return 0;
+}
+
 static int leaf_element(cc_tiles_work *w, LW *L, Node *x, uint32_t el) {
     const cc_tiles_src *s = &w->src;
     int sh = src_shape(s, el);
@@ -720,20 +845,9 @@ static int leaf_element(cc_tiles_work *w, LW *L, Node *x, uint32_t el) {
             for (int k = 0; k < 3; k++) ctr[k] = (L->wpos[a][k] + L->wpos[b][k] + L->wpos[c][k]) / 3.0f;
             if ((finite3(L->wpos[a]) && lsmp_add(L, L->wpos[a], esize)) || (finite3(ctr) && lsmp_add(L, ctr, esize))) return -1;
         }
-        if (opq && ok) {
-            double u[3], v[3], n[3];
-            for (int q = 0; q < 3; q++) u[q] = (double)L->wpos[b][q] - L->wpos[a][q], v[q] = (double)L->wpos[c][q] - L->wpos[a][q];
-            n[0] = u[1] * v[2] - u[2] * v[1], n[1] = u[2] * v[0] - u[0] * v[2], n[2] = u[0] * v[1] - u[1] * v[0];
-            double ar = cc_sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) / 2.0;
-            if (ar >= amin && ar > 0) {
-                Occ o;
-                memcpy(o.t, L->wpos[a], 12), memcpy(o.t + 3, L->wpos[b], 12), memcpy(o.t + 6, L->wpos[c], 12);
-                o.area = ar, o.el = el, o.tri = t / 3;
-                occ_keep(L->occ, &L->nocc, &o);
-            }
-        }
         if ((t / 3) % 4096 == 4095 && cc_hg_grid_fit(&L->g, w->o.proxy_tris, 0)) return -1;
     }
+    if (opq && occ_element(L, &m, mir, el, amin)) return -1;
     return cc_hg_grid_fit(&L->g, w->o.proxy_tris, 0);
 }
 
@@ -1206,11 +1320,11 @@ static int inner(cc_tiles_work *w, uint32_t n) {
     x->error = (float)(x->error + pe);
     w->cl[n] = cl;
     /* occluders: the children's largest */
-    Occ set[CC_TILES_OCC];
-    uint32_t no = 0;
+    Occ set[CC_TILES_OCC_MAX];
+    uint32_t no = 0, mo = w->o.occ < CC_TILES_OCC_MAX ? w->o.occ : CC_TILES_OCC_MAX;
     for (uint32_t k = 0; k < x->nkids; k++) {
         const Node *c = &w->nodes[x->kids[k]];
-        for (uint32_t q = 0; q < c->nocc; q++) occ_keep(set, &no, &c->occ[q]);
+        for (uint32_t q = 0; q < c->nocc; q++) occ_keep(set, &no, mo, &c->occ[q]);
     }
     return occ_store(w, x, set, no);
 }
@@ -1338,7 +1452,7 @@ static int leaf_run(cc_tiles_work *w, LW *L, uint32_t n) {
     Node *x = &w->nodes[n];
     memset(&L->g, 0, sizeof L->g);
     L->g.e = CC_TILES_MAX_DEPTH - (x->cdepth < CC_TILES_MAX_DEPTH ? x->cdepth : CC_TILES_MAX_DEPTH);
-    L->nocc = 0, L->leaf_verts = 0, L->ntouched = 0;
+    L->nocc = 0, L->leaf_verts = 0, L->ntouched = 0, L->maxocc = w->o.occ < CC_TILES_OCC_MAX ? w->o.occ : CC_TILES_OCC_MAX;
     L->nlsmp = 0, L->lcount = 0, L->lstride = 2 * x->detail / CC_TILES_SAMPLES + 1;
     arena_reset(&L->dec);
     int rc = 0;
@@ -1452,7 +1566,7 @@ int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelement
     uint64_t nt = rd32(p + 8), ne = rd32(p + 12), nl = rd32(p + 16), no = rd32(p + 20), tb = rd32(p + 24);
     uint64_t blobs = (uint64_t)rd32(p + 32) | (uint64_t)rd32(p + 36) << 32;
     if (nelements != CC_TILES_NONE && ne != nelements) return fail(err, "tiles: of another scene");
-    if (nt > CC_TILES_MAX_TILES || nl > ne || no > (uint64_t)CC_TILES_OCC * nt) return fail(err, "tiles: counts");
+    if (nt > CC_TILES_MAX_TILES || nl > ne || no > (uint64_t)CC_TILES_OCC_MAX * nt) return fail(err, "tiles: counts");
     if (tb != CC_TILES_HEAD + (uint64_t)CC_TILES_REC * nt + 4 * nl + ((nl + 3) & ~3ull)) return fail(err, "tiles: table size");
     uint64_t tp = (tb + 36 * no + 7) & ~7ull; /* the blobs' start */
     if (with_blobs ? (tp + blobs != n) : (n < tb)) return fail(err, "tiles: section size");
@@ -1793,8 +1907,9 @@ static int sel_cmp(const void *x, const void *y) {
     return a->id < b->id ? -1 : a->id > b->id;
 }
 
-uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double error_px, uint64_t budget,
+uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double error_px, uint64_t budget, unsigned flags,
                          const uint8_t *descend, uint32_t *out, uint32_t cap, uint64_t *tris) {
+    int leaves = (flags & CC_TILES_SEL_LEAVES) != 0; /* levels of detail off */
     *tris = 0;
     if (!toc->ntiles) return 0;
     HeapE *h = malloc((size_t)toc->ntiles * sizeof *h), *fin = malloc((size_t)toc->ntiles * sizeof *fin);
@@ -1805,7 +1920,7 @@ uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double
     cc_tiles_get(toc, 0, &t);
 #define PRI(T, I, D)                                                                                                                   \
     (((T).flags & CC_TILE_LEAF) ? 0.0                                                                                                  \
-     : (!((T).flags & CC_TILE_PROXY) || (descend && descend[I])) ? 1e300                                                              \
+     : (leaves || !((T).flags & CC_TILE_PROXY) || (descend && descend[I])) ? 1e300                                                              \
      : v->px_per_mm > 0 ? (double)(T).error * v->px_per_mm : (D) > 1.0 ? (double)(T).error * v->k / (D) : 1e299)
     if (in_view(v, t.box)) {
         double d = box_dist(v->eye, t.box);

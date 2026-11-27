@@ -145,6 +145,34 @@ int cc_link_cache_mark_complete(const char *src, size_t n, char *out, size_t cap
     return cc_link_cache_complete(out, m) ? 0 : -1;
 }
 
+int cc_link_cache_tiles_match(const char *src, size_t n, const char *text) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, src, n, &je), *t = v && v->type == JR_OBJ ? jr_get(v, "tiles") : NULL;
+    int ok = t && t->type == JR_STR && !strcmp(t->s, text);
+    arena_free(&a);
+    return ok;
+}
+
+int cc_link_cache_set_tiles(const char *src, size_t n, const char *text, char *out, size_t cap) {
+    static const char K[] = ",\"tiles\":\"";
+    size_t at = n, end = n;
+    for (size_t i = 0; i + sizeof K - 1 <= n; i++)
+        if (!memcmp(src + i, K, sizeof K - 1)) { at = i; break; }
+    if (at < n) { /* the old value cut out (a string without quotes or escapes: ours) */
+        end = at + sizeof K - 1;
+        while (end < n && src[end] != '"') end++;
+        if (end >= n) return -1;
+        end++;
+    }
+    if (!n || src[n - 1] != '}') return -1;
+    size_t keep = at < n ? at : n - 1; /* "tiles" sorts after every other key: last, before the closing brace */
+    int w = snprintf(out, cap, "%.*s%.*s,\"tiles\":\"%s\"}", (int)keep, src, at < n ? (int)(n - 1 - end) : 0, at < n ? src + end : "", text);
+    if (w < 0 || (size_t)w >= cap) return -1;
+    return cc_link_cache_tiles_match(out, (size_t)w, text) ? 0 : -1;
+}
+
 cc_link_job *cc_link_job_new(const cc_platform *pf, const char *path) {
     cc_link_job *j = calloc(1, sizeof *j);
     if (!j) return NULL;
@@ -411,8 +439,8 @@ static void bake_tiles(cc_link_job *j, Buf *vb) {
         return;
     }
     cc_tiles t;
-    cc_tiles_opts o;
-    cc_tiles_default(&o);
+    cc_tiles_opts o = j->topts;
+    if (!o.leaf_tris) cc_tiles_default(&o);
     cc_tiles_src src = {NULL, &vf};
     int rc = cc_tiles_start(&t, &src, &o, &e);
     while (rc == 0 && !cc_atomic_load(&j->pg.cancel)) {
@@ -469,9 +497,14 @@ static void index_run(cc_link_job *j) {
                 while (q < len && q < 10) { ln |= (uint64_t)(s[q] & 0x7f) << shift; shift += 7; if (!(s[q++] & 0x80)) break; }
                 if (ln == len - q) src = (char *)s + q, sn = (size_t)ln;
             }
-            char out[1024];
-            if (!src || sn + 1 > sizeof out || cc_link_cache_mark_complete(src, sn, out, sizeof out)) bad = 1;
-            else if (cc_viewfile_append_source(&vb, out, strlen(out))) bad = 1;
+            char out[1024], out2[1200], tt[160];
+            cc_tiles_opts o = j->topts;
+            if (!o.leaf_tris) cc_tiles_default(&o);
+            cc_tiles_opts_text(&o, tt, sizeof tt); /* TILE1: the pyramid's bake settings recorded */
+            if (!src || sn + 1 > sizeof out || cc_link_cache_mark_complete(src, sn, out, sizeof out) ||
+                cc_link_cache_set_tiles(out, strlen(out), tt, out2, sizeof out2))
+                bad = 1;
+            else if (cc_viewfile_append_source(&vb, out2, strlen(out2))) bad = 1;
             have_src = 1;
         } else if (!memcmp(kind, "HLOD", 4) || !memcmp(kind, "TILE", 4)) { /* (none expected: dropped, baked again) */
         } else if (!memcmp(kind, "PROP", 4) || !memcmp(kind, "PRPZ", 4)) buf_append(&tail, p + at, 12 + (size_t)len);
@@ -569,6 +602,13 @@ static void run(cc_link_job *j) {
         if (vf && vf->has_source && cc_link_cache_matches(vf->source.p, vf->source.n, j->bytes, j->mtime_s, ends, ends_known)) {
             j->vf = vf, j->from_cache = 1, j->map = map;
             j->incomplete = !cc_link_cache_complete(vf->source.p, vf->source.n); /* SIZE3 (E): its proxies to bake */
+            { /* TILE1: or its pyramid baked with other settings: indexed again (not converted) */
+                cc_tiles_opts o = j->topts;
+                char tt[160];
+                if (!o.leaf_tris) cc_tiles_default(&o);
+                cc_tiles_opts_text(&o, tt, sizeof tt);
+                if (!cc_link_cache_tiles_match(vf->source.p, vf->source.n, tt)) j->incomplete = 1;
+            }
             snprintf(j->cache, sizeof j->cache, "%s", cp);
             if (c) snprintf(j->log, sizeof j->log, "%s", alt_log);
             else snprintf(j->log, sizeof j->log, "%s.log.txt", j->path);

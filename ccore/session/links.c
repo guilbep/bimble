@@ -970,6 +970,7 @@ static void take_index(cc_session *s, cc_link *k, cc_link_job *j) {
 static void start_index(cc_session *s, int i) {
     cc_link *k = &s->links[i];
     cc_link_job *j = cc_link_job_new(s->pf, k->path);
+    if (j) j->topts = s->tiles_opts; /* TILE1: the pyramid's bake settings */
     if (!j) {
         k->indexing = 0;
         return;
@@ -986,6 +987,7 @@ static void start_index(cc_session *s, int i) {
 static void start(cc_session *s, int i) {
     cc_link *k = &s->links[i];
     cc_link_job *j = cc_link_job_new(s->pf, k->path);
+    if (j) j->topts = s->tiles_opts; /* TILE1: the pyramid's bake settings */
     if (!j) {
         k->state = CC_LS_FAILED, free(k->msg), k->msg = dup_z("out of memory");
         return;
@@ -1114,6 +1116,7 @@ static int links_add_queued(cc_session *s, const char *path, int *at, cc_error *
     int now = !s->pf->spawn || bytes < s->link_cache_min || !s->pf->files;
     if (now) { /* read here: as cc_link_load, through the job (the cache when it is worth one) */
         cc_link_job *j = cc_link_job_new(s->pf, path);
+        if (j) j->topts = s->tiles_opts; /* TILE1 */
         if (!j) return snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
         j->cache_min = s->link_cache_min, j->no_beside = s->link_no_beside;
         cc_link_job_run(j);

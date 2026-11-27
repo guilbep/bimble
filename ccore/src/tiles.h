@@ -87,7 +87,8 @@
 #define CC_TILES_MAX_DEPTH 16u      /* octree depth */
 #define CC_TILES_MAX_LEVELS 40u     /* levels in the file (octree, own leaves, the coarse chain) */
 #define CC_TILES_MAX_TILES (1u << 22)
-#define CC_TILES_OCC 64u            /* occluder triangles per tile */
+#define CC_TILES_OCC 64u            /* occluder triangles per tile (the default; cc_tiles_opts.occ, at most CC_TILES_OCC_MAX) */
+#define CC_TILES_OCC_MAX 256u
 #define CC_TILES_NONE 0xFFFFFFFFu
 
 enum { CC_TILE_LEAF = 1, CC_TILE_PROXY = 2, CC_TILE_OWN = 4, CC_TILE_OCC = 8 };
@@ -101,10 +102,16 @@ typedef struct {
 
 typedef struct cc_tiles_work cc_tiles_work;
 
+/* The bake-time settings (the owner's rule: every optimisation a setting with a default and an off value). A cache records
+ * them (its SRCE "tiles": cc_tiles_opts_text) and is indexed again when they change. occ 0: no occluders. */
 typedef struct {
-    uint32_t leaf_tris, proxy_tris, root_tris, res;
+    uint32_t leaf_tris, proxy_tris, root_tris, res, occ;
 } cc_tiles_opts;
 void cc_tiles_default(cc_tiles_opts *o);
+/* "leaf=40000 proxy=16384 root=512 res=64 occ=64" into out[0..n) */
+void cc_tiles_opts_text(const cc_tiles_opts *o, char *out, size_t n);
+/* the defaults, then each "key=value" of `t` (space separated; unknown keys and bad values ignored, each value bounded) */
+void cc_tiles_opts_parse(cc_tiles_opts *o, const char *t);
 
 typedef struct cc_tiles {
     Buf out;            /* the TILE section's payload once built */
@@ -179,7 +186,10 @@ typedef struct {
     double k;             /* perspective: viewport height px / (2 tan(fov_y / 2)) */
     double px_per_mm;     /* > 0: orthographic */
 } cc_tiles_view;
-uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double error_px, uint64_t budget,
+/* flags: CC_TILES_SEL_LEAVES: levels of detail off: every leaf in the frustum (error_px and budget ignored). The renderers'
+ * settings: error_px (default 1 still), budget (default none), levels of detail (default on), occluders (cc_tiles_occ). */
+enum { CC_TILES_SEL_LEAVES = 1 };
+uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double error_px, uint64_t budget, unsigned flags,
                          const uint8_t *descend, uint32_t *out, uint32_t cap, uint64_t *tris);
 
 /* ---- the reference occlusion: a small depth buffer of the tiles' occluders (conservative) ----

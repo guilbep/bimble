@@ -26,6 +26,7 @@
 #include "platform.h"
 #include "viewfile.h"
 #include "hlod.h"
+#include "tiles.h"
 
 #define CC_LINK_CACHE_MIN ((uint64_t)1 << 20) /* bytes; below, no cache (ADR 0079) */
 #define CC_LINK_CACHE_FORMAT "bimble-link-cache 7" /* TILE1 7: a section TILE (the tile pyramid, tiles.h) baked by the indexing job. 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD; 5 (SIZE2): HLOD gzipped within a budget, PRPZ; 6 (SIZE3): SRCE says "complete" (the proxies baked after the link was ready) */
@@ -84,6 +85,7 @@ typedef struct cc_link_job {
      * job is that one: `cache` names the cache to complete; its result is the completed cache read in place (vf, map). */
     int incomplete, index_only;
     double index_delay_ms; /* tests: the indexing job waits this long first (BIMBLE_LINK_INDEX_DELAY_MS) */
+    cc_tiles_opts topts;   /* TILE1: the pyramid's bake settings (zero: the defaults), recorded in SRCE "tiles" */
 } cc_link_job;
 
 /* A new job for `path` (copied). NULL out of memory. */
@@ -113,6 +115,10 @@ int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mti
 /* SIZE3 (E): whether a cache's SRCE says it is complete ("complete": true: its proxies baked; false: geometry, names and
  * property sets only, the proxies still to bake). Anything else (untrusted): 0. */
 int cc_link_cache_complete(const char *src, size_t n);
+/* TILE1: whether SRCE text `src` records the pyramid baked with settings `text` ("tiles": cc_tiles_opts_text). */
+int cc_link_cache_tiles_match(const char *src, size_t n, const char *text);
+/* TILE1: SRCE text `src` with "tiles": `text` set (added or replaced; its keys stay sorted) into out[0..cap). 0 ok. */
+int cc_link_cache_set_tiles(const char *src, size_t n, const char *text, char *out, size_t cap);
 /* SIZE3 (E): SRCE text `src` marked complete into `out` (`"complete":false` turned true). 0 ok, -1 not such a text. */
 int cc_link_cache_mark_complete(const char *src, size_t n, char *out, size_t cap);
 #endif

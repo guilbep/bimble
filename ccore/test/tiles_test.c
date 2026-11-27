@@ -473,7 +473,7 @@ static void walker(const char *what, const Buf *sec) {
         cc_tiles_view v;
         double at[3] = {c[0], c[1], q == 2 ? r.box[2] + 1700 : c[2]};
         frustum(&v, views[q].eye, at, 60, 1.6, 1000);
-        uint32_t n = cc_tiles_select(&toc, &v, 1.0, 50000000, NULL, out, toc.ntiles, &tris[q]);
+        uint32_t n = cc_tiles_select(&toc, &v, 1.0, 50000000, 0, NULL, out, toc.ntiles, &tris[q]);
         int front = 1;
         double last = -1;
         for (uint32_t i = 0; i < n; i++) {
@@ -492,9 +492,29 @@ static void walker(const char *what, const Buf *sec) {
         check_true(w, front);
         /* a budget is kept */
         uint64_t bt;
-        cc_tiles_select(&toc, &v, 0.0, 20000, NULL, out, toc.ntiles, &bt);
+        cc_tiles_select(&toc, &v, 0.0, 20000, 0, NULL, out, toc.ntiles, &bt);
         snprintf(w, sizeof w, "%s: the %s view within a budget of 20,000 (%llu)", what, views[q].name, (unsigned long long)bt);
         check_true(w, bt <= 20000 || bt <= r.tris);
+    }
+    { /* levels of detail off (a setting's off value): every leaf in the frustum, nothing else */
+        cc_tiles_view v;
+        frustum(&v, views[0].eye, c, 60, 1.6, 1000);
+        uint64_t lt;
+        uint32_t n = cc_tiles_select(&toc, &v, 1.0, 1000, CC_TILES_SEL_LEAVES, NULL, out, toc.ntiles, &lt);
+        int leaves = 1;
+        uint32_t nleaf = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            cc_tile t;
+            cc_tiles_get(&toc, out[i], &t);
+            leaves &= (t.flags & CC_TILE_LEAF) != 0;
+        }
+        for (uint32_t i = 0; i < toc.ntiles; i++) {
+            cc_tile t;
+            cc_tiles_get(&toc, i, &t);
+            nleaf += (t.flags & CC_TILE_LEAF) != 0;
+        }
+        snprintf(w, sizeof w, "%s: levels of detail off: every leaf in view (%u of %u), all the detail (%llu), budget ignored", what, n, nleaf, (unsigned long long)lt);
+        check_true(w, leaves && n == nleaf && lt == r.detail);
     }
     snprintf(w, sizeof w, "%s: far (60 sizes away) %llu <= close %llu triangles; far within 2,000", what, (unsigned long long)tris[0], (unsigned long long)tris[1]);
     check_true(w, tris[0] <= tris[1] && tris[0] <= 2000);
@@ -503,11 +523,11 @@ static void walker(const char *what, const Buf *sec) {
     cc_tiles_view v;
     frustum(&v, views[0].eye, c, 60, 1.6, 1000);
     uint64_t t0;
-    uint32_t n0 = cc_tiles_select(&toc, &v, 1.0, 50000000, NULL, out, toc.ntiles, &t0);
+    uint32_t n0 = cc_tiles_select(&toc, &v, 1.0, 50000000, 0, NULL, out, toc.ntiles, &t0);
     int was_root = n0 == 1 && out[0] == 0;
     mark[0] = 1;
     uint64_t t1;
-    uint32_t n1 = cc_tiles_select(&toc, &v, 1.0, 50000000, mark, out, toc.ntiles, &t1);
+    uint32_t n1 = cc_tiles_select(&toc, &v, 1.0, 50000000, 0, mark, out, toc.ntiles, &t1);
     int has_root = 0;
     for (uint32_t i = 0; i < n1; i++) has_root |= out[i] == 0;
     snprintf(w, sizeof w, "%s: a tile marked (hidden or selected under it) is descended (%u -> %u tiles)", what, n0, n1);
@@ -538,7 +558,7 @@ static void hostile(const Buf *sec, uint32_t ne) {
             cc_tiles_view v;
             memset(&v, 0, sizeof v);
             v.k = 1000;
-            cc_tiles_select(&toc, &v, 1, 100000, NULL, out, 64, &t);
+            cc_tiles_select(&toc, &v, 1, 100000, 0, NULL, out, 64, &t);
         }
     }
     printf("  hostile: %d damaged sections refused, %d read (a harmless byte)\n", refused, read);
@@ -580,7 +600,7 @@ static int build(const cc_tiles_src *src, Buf *out, uint64_t step, double *ms) {
     cc_tiles t;
     cc_error e;
     double t0 = now_ms();
-    int rc = cc_tiles_start(&t, src, &(cc_tiles_opts){CC_TILES_LEAF_TRIS, CC_TILES_PROXY_TRIS, CC_TILES_ROOT_TRIS, CC_TILES_RES}, &e);
+    int rc = cc_tiles_start(&t, src, &(cc_tiles_opts){CC_TILES_LEAF_TRIS, CC_TILES_PROXY_TRIS, CC_TILES_ROOT_TRIS, CC_TILES_RES, CC_TILES_OCC}, &e);
     while (!rc) {
         int st = cc_tiles_step(&t, step, &e);
         if (st < 0) rc = -1;
@@ -719,7 +739,7 @@ int main(void) {
     /* cancel half way: everything freed (ASan) */
     {
         cc_tiles t;
-        cc_tiles_start(&t, &src, &(cc_tiles_opts){CC_TILES_LEAF_TRIS, CC_TILES_PROXY_TRIS, CC_TILES_ROOT_TRIS, CC_TILES_RES}, &e);
+        cc_tiles_start(&t, &src, &(cc_tiles_opts){CC_TILES_LEAF_TRIS, CC_TILES_PROXY_TRIS, CC_TILES_ROOT_TRIS, CC_TILES_RES, CC_TILES_OCC}, &e);
         int st = cc_tiles_step(&t, 5000, &e);
         check_true("cancel: a build stopped after a step frees everything", st == 0);
         cc_tiles_free(&t);

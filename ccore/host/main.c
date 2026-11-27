@@ -311,6 +311,8 @@ static int serve(unsigned port, Serve *sv) {
         if (km && *km) ses->link_keep_ms = strtod(km, NULL);
         const char *id = cc_host_getenv("BIMBLE_LINK_INDEX_DELAY_MS"); /* SIZE3 (E): tests */
         if (id && *id) ses->link_index_delay_ms = strtod(id, NULL);
+        const char *tl = cc_host_getenv("BIMBLE_TILES"); /* TILE1: the pyramids' bake settings ("leaf=40000 occ=64 …") */
+        if (tl && *tl) cc_tiles_opts_parse(&ses->tiles_opts, tl);
     }
     const char *model = sv->model;
     if (model && *model) {
@@ -475,11 +477,14 @@ static int link_convert_main(int argc, char **argv) {
     }
     cc_link_job **kept = calloc((size_t)argc, sizeof *kept);
     if (!kept) return 1;
+    cc_tiles_opts topts; /* TILE1: BIMBLE_TILES, else the defaults */
+    cc_tiles_opts_parse(&topts, cc_host_getenv("BIMBLE_TILES"));
     double t0 = pf->now_ms(pf->ctx);
     uint64_t te = 0, tt = 0, ts = 0;
     for (int k = 0; i < argc; i++, k++) {
         cc_link_job *j = cc_link_job_new(pf, argv[i]);
         if (!j) return 1;
+        j->topts = topts;
         j->cache_min = 0, j->no_beside = no_beside;
         cc_link_job_run(j);
         if (j->rc) {
@@ -499,6 +504,7 @@ static int link_convert_main(int argc, char **argv) {
         if (index && (j->incomplete || index == 2) && j->cache[0]) { /* TILE1: the indexing job (proxies, tiles) run here, timed */
             cc_link_job *x = cc_link_job_new(pf, argv[i]);
             if (!x) return 1;
+            x->topts = topts;
             x->index_only = 1;
             snprintf(x->cache, sizeof x->cache, "%s", j->cache);
             snprintf(x->log, sizeof x->log, "%s", j->log);

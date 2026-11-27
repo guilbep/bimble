@@ -619,9 +619,9 @@ int cc_link_tiles(cc_session *s, uint64_t k, const char *name, size_t nname, int
             else if (tris > TILES_ONCE_MAX_TRIS) st = 204, s->link_tiles_none = 1; /* none: indexed again at its next open */
             else {
                 cc_tiles t;
-                cc_tiles_opts o;
+                cc_tiles_opts o = s->tiles_opts;
                 cc_error err;
-                cc_tiles_default(&o);
+                if (!o.leaf_tris) cc_tiles_default(&o);
                 if (cc_tiles_build(&t, &src, &o, &err)) st = 500, buf_puts(out, err.msg);
                 else {
                     buf_free(&s->link_tiles);
@@ -679,8 +679,8 @@ int cc_mesh_tiles(cc_session *s, uint64_t budget, const char *req, size_t nreq, 
         out = &s->tiles_out;
         s->tiles_scene = sc, s->tiles_rev = *rev;
         s->tiles = calloc(1, sizeof *s->tiles);
-        cc_tiles_opts o;
-        cc_tiles_default(&o);
+        cc_tiles_opts o = s->tiles_opts;
+        if (!o.leaf_tris) cc_tiles_default(&o);
         double t0 = s->pf->now_ms(s->pf->ctx);
         if (!s->tiles) s->tiles_status = 500, buf_puts(&s->tiles_err, "out of memory");
         else if (cc_tiles_start(s->tiles, &src, &o, &err)) s->tiles_status = 500, buf_puts(&s->tiles_err, err.msg);
@@ -759,7 +759,7 @@ static int frame_select(cc_session *s, FrameP *f, const cc_tiles_frame_q *q) {
     f->hid = calloc((size_t)f->toc.ntiles + 1, 1);
     if (!f->ids || !f->hid) return -1;
     double t0 = s->pf->now_ms(s->pf->ctx);
-    f->n = cc_tiles_select(&f->toc, &v, q->error_px, q->budget, NULL, f->ids, f->toc.ntiles, &f->tris);
+    f->n = cc_tiles_select(&f->toc, &v, q->error_px, q->budget, q->lod ? 0 : CC_TILES_SEL_LEAVES, NULL, f->ids, f->toc.ntiles, &f->tris);
     f->sel_ms = s->pf->now_ms(s->pf->ctx) - t0;
     return 0;
 }

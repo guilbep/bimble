@@ -11,6 +11,7 @@
 #include "buf.h"
 #include "history.h"
 #include "hlod.h" /* 3D2 */
+#include "tiles.h" /* TILE1 */
 #include "ifc_read.h"
 #include "measure.h"
 #include "model.h"
@@ -111,7 +112,7 @@ typedef struct cc_session {
     double hlod_ms;  /* build time so far */
     /* TILE1 (ADR 0078 amendment 6): the open scene's tile pyramid (mesh.h cc_mesh_tiles), built in steps per (scene, rev);
      * an opened view file's own section TILE (view_tiles); one small link's pyramid built at once (link_tiles). */
-    struct cc_tiles *tiles;
+    cc_tiles *tiles;
     const cc_scene *tiles_scene;
     uint32_t tiles_rev;
     int tiles_status;
@@ -119,6 +120,7 @@ typedef struct cc_session {
     Buf tiles_out, tiles_err, view_tiles, link_tiles;
     uint64_t link_tiles_uid, link_tiles_gen;
     int link_tiles_none; /* the last cc_link_tiles' 204 meant "no tiles", not superseded */
+    cc_tiles_opts tiles_opts; /* TILE1: the pyramids' bake settings (zero: the defaults; BIMBLE_TILES); a cache baked otherwise is indexed again */
     cc_persist *persist;
     /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link
      * order; dropped with the open model (lib.rs:1668). links_gen + 1 on every change to them
