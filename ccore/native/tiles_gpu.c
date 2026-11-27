@@ -78,9 +78,31 @@ static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v;
 static float rdf(const uint8_t *p) { float v; memcpy(&v, p, 4); return v; }
 
 /* ---- GPU tiles ---- */
-typedef struct { float c[3], r; uint32_t first, n, elem; float lo[3], hi[3]; } GElem; /* a merged element: its sphere, its indices, its number, its box */
+/* NUI3: each element's test box (ob: centre, then three half axes), the tighter of its world box and its own placed box
+ * (a long diagonal member's world box is much larger than itself) */
+typedef struct { float c[3], r; uint32_t first, n, elem; float lo[3], hi[3]; float ob[12]; } GElem; /* a merged element: its sphere, its indices, its number, its box */
 typedef struct { uint32_t first, n, firstf, copy0, ncopy, nmir; uint8_t closed; } GShape; /* firstf: reversed indices (~0 none) */
-typedef struct { float c[3], r; uint32_t plc, elem; float lo[3], hi[3]; } GCopy;
+typedef struct { float c[3], r; uint32_t plc, elem; float lo[3], hi[3]; float ob[12]; } GCopy;
+/* the test box: the placed local box (m: columns x, y, z, t; llo/lhi: the local box) when its volume is under 0.9 of the
+ * world box's, else the world box; 1 mm wider either way (f32 slack) */
+static void test_box(float ob[12], const float m[12], const float llo[3], const float lhi[3], const float wlo[3], const float whi[3]) {
+    double vw = 1;
+    for (int d = 0; d < 3; d++) vw *= (double)(whi[d] - wlo[d]) + 2;
+    double det = m[0] * ((double)m[4] * m[8] - (double)m[5] * m[7]) - m[3] * ((double)m[1] * m[8] - (double)m[2] * m[7]) + m[6] * ((double)m[1] * m[5] - (double)m[2] * m[4]);
+    double vo = fabs(det);
+    float lc[3], le[3], len[3];
+    for (int d = 0; d < 3; d++) lc[d] = (llo[d] + lhi[d]) / 2, le[d] = (lhi[d] - llo[d]) / 2, vo *= 2.0 * le[d] + 2;
+    for (int k = 0; k < 3; k++) len[k] = sqrtf(m[3 * k] * m[3 * k] + m[3 * k + 1] * m[3 * k + 1] + m[3 * k + 2] * m[3 * k + 2]);
+    if (vo < 0.9 * vw && len[0] > 0 && len[1] > 0 && len[2] > 0 && isfinite(vo)) {
+        for (int d = 0; d < 3; d++) ob[d] = m[d] * lc[0] + m[3 + d] * lc[1] + m[6 + d] * lc[2] + m[9 + d];
+        for (int k = 0; k < 3; k++)
+            for (int d = 0; d < 3; d++) ob[3 + 3 * k + d] = m[3 * k + d] * (le[k] + 1.0f / len[k]);
+        return;
+    }
+    for (int d = 0; d < 3; d++) ob[d] = (wlo[d] + whi[d]) / 2;
+    memset(ob + 3, 0, 36);
+    for (int d = 0; d < 3; d++) ob[3 + 4 * d] = (whi[d] - wlo[d]) / 2 + 1;
+}
 /* Tiles live in shared PAGES (one draw covers every tile of a page): per page a buffer of merged vertices (V), indices
  * (I, every tile's), shapes' vertices (SV), placements (PL), proxies' u16 positions (P, two vertices a unit) and the
  * proxies' table (TT: box, placement, colour); a tile holds one range of each in one page. Pages grow (the first small:
@@ -184,7 +206,8 @@ struct nv_gtile {
     uint32_t off[NBUF], n[NBUF];
     uint64_t bytes;
     uint64_t tris;
-    uint32_t nel, nclosed; /* merged elements; the first nclosed closed and outward */
+    uint32_t nel, nclosed; /* merged elements (a large one as its clusters, NUI3); the first nclosed closed and outward */
+    uint32_t nclu;          /* elements cut in clusters */
     GElem *el;
     uint32_t nshape;
     GShape *sh;
@@ -397,6 +420,11 @@ nv_gtile *nv_gtile_proxy(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile
     return g;
 }
 
+/* NUI3, clusters (cluster_tris): a merged element of more than clu_size triangles drawn and tested as clusters of
+ * clu_size triangles in space order (one huge mesh's box covers the building: the test cannot hide it); 0 off */
+static uint32_t clu_size = 512;
+#define CLU_ON(nt) (clu_size && (nt) > clu_size)
+void nv_tiles_cluster_tris(uint32_t n) { clu_size = n ? (n < 64 ? 64 : n) : 0; }
 static int cmp_u32(const void *a, const void *b) { uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b; return x < y ? -1 : x > y; }
 static int cmp_u64(const void *a, const void *b) { uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b; return x < y ? -1 : x > y; }
 static int cmp_used(const void *a, const void *b) { uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b; return x < y ? -1 : x > y; }
@@ -417,7 +445,7 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
     uint8_t *closed_b = calloc(nb + 1, 1);
     struct { float m[12]; uint32_t elem, b; int mir, closed; } *E = calloc(nel + 1, sizeof *E);
     nv_vec wv = {0}, wi = {0}, sv = {0}, si = {0}, plc = {0};
-    uint64_t *ord = NULL;
+    uint64_t *ord = NULL, *tk = NULL;
     int rc = -1;
     if (!g || !bm || !uses || !shape_of || !mirn || !closed_b || !E) { snprintf(err, errn, "out of memory"); goto done; }
     g->kind = 1, g->page = -1;
@@ -487,8 +515,15 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
         for (uint64_t i = 0; i < nel; i++) ord[i] &= 0xFFFFFFFFull;
     }
     /* merged: elements whose block is used fewer than 4 times, placed here; closed ones first (their own draw) */
-    uint32_t nm = 0;
-    for (uint64_t i = 0; i < nel; i++) nm += uses[E[i].b] < 4;
+    uint32_t nm = 0, maxt = 0;
+    for (uint64_t i = 0; i < nel; i++)
+        if (uses[E[i].b] < 4) {
+            uint32_t nt = bm[E[i].b].ni / 3;
+            nm += CLU_ON(nt) ? (nt + clu_size - 1) / clu_size : 1;
+            if (CLU_ON(nt) && nt > maxt) maxt = nt;
+        }
+    tk = maxt ? malloc(8ull * maxt) : NULL; /* NUI3: a large element's triangles in space order (its clusters) */
+    if (maxt && !tk) { snprintf(err, errn, "out of memory"); goto done; }
     g->el = calloc(nm + 1, sizeof *g->el);
     if (!g->el) { snprintf(err, errn, "out of memory"); goto done; }
     for (int grp = 0; grp < 2; grp++)
@@ -511,16 +546,67 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
                 }
                 v[k].elem = E[i].elem;
             }
-            for (uint32_t k = 0; k + 2 < me->ni; k += 3) { /* a mirrored placement's triangles reversed: outward stays front */
-                ix[k] = vb + me->idx[k];
-                ix[k + 1] = vb + me->idx[E[i].mir ? k + 2 : k + 1];
-                ix[k + 2] = vb + me->idx[E[i].mir ? k + 1 : k + 2];
+            uint32_t ntri = me->ni / 3;
+            int clu = CLU_ON(ntri) && tk;
+            if (clu) { /* NUI3: the triangles in Morton order of their centres in the element's box, cut in clusters of clu_size */
+                float ext[3];
+                for (int d = 0; d < 3; d++) ext[d] = hi[d] - lo[d] > 1 ? hi[d] - lo[d] : 1;
+                for (uint32_t t = 0; t < ntri; t++) {
+                    uint32_t q[3];
+                    uint64_t key = 0;
+                    for (int d = 0; d < 3; d++) {
+                        float f = ((v[me->idx[3 * t]].p[d] + v[me->idx[3 * t + 1]].p[d] + v[me->idx[3 * t + 2]].p[d]) / 3 - lo[d]) / ext[d];
+                        q[d] = f <= 0 ? 0 : f >= 1 ? 1023 : (uint32_t)(f * 1023);
+                    }
+                    for (int bit = 9; bit >= 0; bit--)
+                        for (int d = 0; d < 3; d++) key = key << 1 | ((q[d] >> bit) & 1);
+                    tk[t] = key << 32 | t;
+                }
+                qsort(tk, ntri, 8, cmp_u64);
+            }
+            for (uint32_t t = 0; t < ntri; t++) { /* a mirrored placement's triangles reversed: outward stays front */
+                uint32_t k = 3 * t, s0 = clu ? 3 * (uint32_t)(tk[t] & 0xFFFFFFFFu) : k;
+                ix[k] = vb + me->idx[s0];
+                ix[k + 1] = vb + me->idx[E[i].mir ? s0 + 2 : s0 + 1];
+                ix[k + 2] = vb + me->idx[E[i].mir ? s0 + 1 : s0 + 2];
+            }
+            for (uint32_t k = 3 * ntri; k < me->ni; k++) ix[k] = vb + me->idx[k];
+            float ec[3], r2 = 0;
+            for (int d = 0; d < 3; d++) ec[d] = me->nv ? (lo[d] + hi[d]) / 2 : 0, r2 += me->nv ? (hi[d] - lo[d]) * (hi[d] - lo[d]) / 4 : 0;
+            if (clu) { /* the clusters: the element's sphere (still_px decides by the element), each its own box */
+                uint32_t base = (uint32_t)(wi.n - me->ni);
+                for (uint32_t t0 = 0; t0 < ntri; t0 += clu_size) {
+                    uint32_t t1 = t0 + clu_size < ntri ? t0 + clu_size : ntri;
+                    GElem *ce = &g->el[g->nel++];
+                    memcpy(ce->c, ec, 12), ce->r = sqrtf(r2), ce->first = base + 3 * t0, ce->n = 3 * (t1 - t0), ce->elem = E[i].elem;
+                    for (int d = 0; d < 3; d++) ce->lo[d] = 3e38f, ce->hi[d] = -3e38f;
+                    for (uint32_t k = 3 * t0; k < 3 * t1; k++)
+                        for (int d = 0; d < 3; d++) {
+                            float p = wv.n ? ((nv_vtx *)wv.p)[ix[k]].p[d] : 0;
+                            ce->lo[d] = fminf(ce->lo[d], p), ce->hi[d] = fmaxf(ce->hi[d], p);
+                        }
+                    for (int d = 0; d < 3; d++) ce->ob[d] = (ce->lo[d] + ce->hi[d]) / 2;
+                    memset(ce->ob + 3, 0, 36);
+                    for (int d = 0; d < 3; d++) ce->ob[3 + 4 * d] = (ce->hi[d] - ce->lo[d]) / 2 + 1;
+                    if (grp == 0) g->nclosed++;
+                }
+                g->nclu++;
+                g->tris += me->ni / 3;
+                continue;
             }
             GElem *ge = &g->el[g->nel++];
-            float r2 = 0;
-            for (int d = 0; d < 3; d++) ge->c[d] = me->nv ? (lo[d] + hi[d]) / 2 : 0, r2 += me->nv ? (hi[d] - lo[d]) * (hi[d] - lo[d]) / 4 : 0;
+            memcpy(ge->c, ec, 12);
             ge->r = sqrtf(r2), ge->first = (uint32_t)(wi.n - me->ni), ge->n = me->ni, ge->elem = E[i].elem;
             for (int d = 0; d < 3; d++) ge->lo[d] = me->nv ? lo[d] : 0, ge->hi[d] = me->nv ? hi[d] : 0;
+            {
+                float llo[3] = {0, 0, 0}, lhi[3] = {0, 0, 0};
+                for (uint32_t k = 0; k < me->nv; k++)
+                    for (int d = 0; d < 3; d++) {
+                        if (!k || me->pos[k][d] < llo[d]) llo[d] = me->pos[k][d];
+                        if (!k || me->pos[k][d] > lhi[d]) lhi[d] = me->pos[k][d];
+                    }
+                test_box(ge->ob, m, llo, lhi, ge->lo, ge->hi);
+            }
             if (grp == 0) g->nclosed++;
             g->tris += me->ni / 3;
         }
@@ -589,6 +675,8 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
                 float ex = fabsf(m[d]) * e0 + fabsf(m[3 + d]) * e1 + fabsf(m[6 + d]) * e2;
                 cp->lo[d] = cp->c[d] - ex, cp->hi[d] = cp->c[d] + ex;
             }
+            if (me->nv) test_box(cp->ob, m, lo0, hi0, cp->lo, cp->hi);
+            else test_box(cp->ob, m, (float[3]){0, 0, 0}, (float[3]){0, 0, 0}, cp->lo, cp->hi);
             g->tris += me->ni / 3;
         }
         free(fill), free(fillm);
@@ -606,7 +694,7 @@ nv_gtile *nv_gtile_leaf(SDL_GPUDevice *dev, const nv_tileset *ts, uint32_t tile,
     (void)cmp_u32;
 done:
     nv_vec_free(&wv), nv_vec_free(&wi), nv_vec_free(&sv), nv_vec_free(&si), nv_vec_free(&plc);
-    free(uses), free(shape_of), free(mirn), free(closed_b), free(E), free(ord);
+    free(uses), free(shape_of), free(mirn), free(closed_b), free(E), free(ord), free(tk);
     arena_free(&a);
     if (rc) { nv_gtile_free(dev, g); return NULL; }
     return g;
@@ -819,7 +907,7 @@ typedef SDL_GPUIndexedIndirectDrawCommand Cmd;
 /* the frame's commands in buckets: one draw each (pass, page, kind) */
 enum { K_MERGED, K_MERGED_BACK, K_SHAPES, K_SHAPES_BACK, K_PROXY, NKIND };
 typedef struct { Cmd *c; uint32_t *g; uint32_t n, cap, at; } Bucket;
-typedef struct { float lo[4], hi[4]; uint32_t g[4]; } Test;
+typedef struct { float c[4], ax[4], ay[4], az[4]; uint32_t g[4]; } Test; /* NUI3: a box by its centre and half axes (ttest.comp) */
 static Bucket bk[2][NPAGE][NKIND];
 
 static struct {
@@ -948,6 +1036,16 @@ typedef struct { nv_gtile *g; uint32_t a, b, gate; int32_t shape; uint8_t pass; 
 static GRec *grec[2];
 static uint32_t ngrec[2], cgrec[2];
 static int surplus_on = -1;
+static int surplus_top;
+static struct { double t; uint32_t e; float ob[12]; } top[8];
+void nv_tiles_surplus_top(void) {
+    for (int j = 0; j < 8; j++)
+        if (top[j].t > 0) {
+            const float *o = top[j].ob;
+            fprintf(stderr, "surplus: element %u, %.0f triangles, box centre %.0f %.0f %.0f, half axes |%.0f| |%.0f| |%.0f|\n", top[j].e, top[j].t, o[0], o[1], o[2],
+                    sqrtf(o[3] * o[3] + o[4] * o[4] + o[5] * o[5]), sqrtf(o[6] * o[6] + o[7] * o[7] + o[8] * o[8]), sqrtf(o[9] * o[9] + o[10] * o[10] + o[11] * o[11]));
+        }
+}
 static double surplus[8]; /* need, pass 1, pass 2, not seen: same group as a seen one, box passed alone, drawn in pass 1 but hidden now; leaves' total; frames */
 void nv_tiles_surplus(double out[8]) { memcpy(out, surplus, sizeof surplus); }
 static void grec_add(int slot, nv_gtile *g, uint32_t a, uint32_t b, int32_t shape, int pass, uint32_t gate) {
@@ -964,21 +1062,125 @@ static void grec_add(int slot, nv_gtile *g, uint32_t a, uint32_t b, int32_t shap
 static int cur_slot;
 static Cut slot_cut[2];
 static int seen_last(uint32_t e, uint64_t fr) { (void)fr; return e < nseen_cpu && lastc && seen_cpu[e] == (uint32_t)lastc; }
+static Test *new_test(uint32_t gate) {
+    GROW(F.test, F.ntest, F.ctest, 1);
+    if (F.oom) return NULL;
+    Test *te = &F.test[F.ntest++];
+    memset(te, 0, sizeof *te);
+    te->g[0] = gate, te->g[2] = 1;
+    return te;
+}
+static void test_aabb(Test *te, const float lo[3], const float hi[3]) {
+    for (int d = 0; d < 3; d++) te->c[d] = (lo[d] + hi[d]) / 2;
+    te->ax[0] = (hi[0] - lo[0]) / 2, te->ay[1] = (hi[1] - lo[1]) / 2, te->az[2] = (hi[2] - lo[2]) / 2;
+}
+static void test_ob(uint32_t gate, const float ob[12]) {
+    Test *te = new_test(gate);
+    if (!te) return;
+    memcpy(te->c, ob, 12), memcpy(te->ax, ob + 3, 12), memcpy(te->ay, ob + 6, 12), memcpy(te->az, ob + 9, 12);
+}
+static void test_world(uint32_t gate, const float lo[3], const float hi[3]) { /* 1 mm wider (f32 slack), as grow_box */
+    Test *te = new_test(gate);
+    if (!te) return;
+    float l[3] = {lo[0] - 1, lo[1] - 1, lo[2] - 1}, h[3] = {hi[0] + 1, hi[1] + 1, hi[2] + 1};
+    test_aabb(te, l, h);
+}
 static uint32_t group_test(float lo[3], float hi[3]) {
     uint32_t g = new_gate();
-    GROW(F.test, F.ntest, F.ctest, 1);
-    if (F.oom) return 0;
-    Test *te = &F.test[F.ntest++];
-    memcpy(te->lo, lo, 12), memcpy(te->hi, hi, 12), te->lo[3] = te->hi[3] = 0;
-    te->g[0] = g, te->g[1] = 0, te->g[2] = 1, te->g[3] = 0;
+    Test *te = new_test(g);
+    if (te) test_aabb(te, lo, hi);
     return g;
+}
+/* NUI3, the tighter test (occlusion_test): 0 a group's box (NUI2); 1 each element's world box, the group's gate shared
+ * (pass 1 draws exactly the elements seen last frame, the others in groups); 2 as 1 with each element's own placed box
+ * when tighter (test_box) */
+static int TMODE = 2;
+/* occlusion_split: pieces a side at most (1: none), about test_split_px pixels each; occlusion_span: texels a side read */
+static uint32_t test_split = 1, test_split_px = 64, test_span = 4;
+void nv_tiles_test_mode(int mode, int split, int span, int split_px) {
+    TMODE = mode < 0 ? 0 : mode > 2 ? 2 : mode;
+    test_split_px = split_px < 8 ? 8 : split_px > 1024 ? 1024 : (uint32_t)split_px;
+    test_split = split < 1 ? 1 : split > 8 ? 8 : (uint32_t)split;
+    test_span = span < 2 ? 2 : span > 16 ? 16 : (uint32_t)span;
+}
+static void elem_test(uint32_t gate, const float lo[3], const float hi[3], const float ob[12]) {
+    if (TMODE >= 2) test_ob(gate, ob);
+    else test_world(gate, lo, hi);
 }
 static void grow_box(float lo[3], float hi[3], const float a[3], const float b[3]) { /* an element's box, 1 mm wider (f32 slack) */
     for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], a[d] - 1), hi[d] = fmaxf(hi[d], b[d] + 1);
 }
 static uint32_t CLN = 2; /* occlusion_group: elements a group (the A/B: 1, 2, 4, 8, 16, 32, 64) */
 void nv_tiles_group_size(uint32_t n) { CLN = n < 1 ? 1 : n > 256 ? 256 : n; }
+static void emit_leaf_elems(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *cut) {
+    int back = T->o.cull_back && !T->o.reference, pgi = g->page;
+    for (int grp = 0; grp < 2; grp++) {
+        uint32_t a = back ? (grp ? g->nclosed : 0) : (grp ? g->nel : 0), b = back ? (grp ? g->nel : g->nclosed) : g->nel;
+        int kind = back && grp == 0 ? K_MERGED_BACK : K_MERGED;
+        uint32_t p0 = 0, pn = 0, r0 = 0, rn = 0, gn = 0, gate = 0;
+        uint64_t gt = 0;
+        for (uint32_t i = a; i < b; i++) {
+            const GElem *e = &g->el[i];
+            if (small(cut, e->c, e->r)) continue;
+            if (seen_last(e->elem, fr)) { /* pass 1, ungated: runs joined */
+                grec_add(cur_slot, g, i, i + 1, -1, 1, 0);
+                if (pn && p0 + pn == e->first) pn += e->n;
+                else {
+                    if (pn) add_cmd(1, pgi, kind, pn, 1, g->off[B_I] + p0, (int32_t)g->off[B_V], 0, 0), F.tris1 += pn / 3;
+                    p0 = e->first, pn = e->n;
+                }
+                continue;
+            }
+            if (!gn) gate = new_gate(), gt = 0;
+            elem_test(gate, e->lo, e->hi, e->ob);
+            grec_add(cur_slot, g, i, i + 1, -1, 2, gate);
+            if (rn && r0 + rn == e->first) rn += e->n;
+            else {
+                if (rn) add_cmd(2, pgi, kind, rn, 1, g->off[B_I] + r0, (int32_t)g->off[B_V], 0, gate), gt += rn / 3;
+                r0 = e->first, rn = e->n;
+            }
+            if (++gn == CLN) {
+                if (rn) add_cmd(2, pgi, kind, rn, 1, g->off[B_I] + r0, (int32_t)g->off[B_V], 0, gate), gt += rn / 3, rn = 0;
+                F.gate_tris[gate] += gt, gn = 0;
+            }
+            if (F.oom) return;
+        }
+        if (pn) add_cmd(1, pgi, kind, pn, 1, g->off[B_I] + p0, (int32_t)g->off[B_V], 0, 0), F.tris1 += pn / 3;
+        if (gn) {
+            if (rn) add_cmd(2, pgi, kind, rn, 1, g->off[B_I] + r0, (int32_t)g->off[B_V], 0, gate), gt += rn / 3;
+            F.gate_tris[gate] += gt;
+        }
+    }
+    for (uint32_t s2 = 0; s2 < g->nshape; s2++) {
+        const GShape *sh = &g->sh[s2];
+        int kind = back && sh->closed ? K_SHAPES_BACK : K_SHAPES;
+        for (int mir = 0; mir < 2; mir++) {
+            uint32_t a = sh->copy0 + (mir ? sh->ncopy - sh->nmir : 0), b = mir ? sh->copy0 + sh->ncopy : sh->copy0 + sh->ncopy - sh->nmir;
+            if (a >= b) continue;
+            uint32_t first = mir && sh->firstf != UINT32_MAX ? sh->firstf : sh->first;
+            GROW(F.inst, F.ninst, F.cinst, b - a);
+            if (F.oom) return;
+            uint32_t i0 = F.ninst; /* pass 1: the copies seen, one command */
+            for (uint32_t k = a; k < b; k++)
+                if (!small(cut, g->cp[k].c, g->cp[k].r) && seen_last(g->cp[k].elem, fr)) F.inst[F.ninst++] = g->off[B_PL] + g->cp[k].plc, grec_add(cur_slot, g, k, k + 1, (int32_t)s2, 1, 0);
+            if (F.ninst > i0) add_cmd(1, pgi, kind, sh->n, F.ninst - i0, g->off[B_I] + first, (int32_t)g->off[B_SV], i0, 0), F.tris1 += (uint64_t)sh->n / 3 * (F.ninst - i0);
+            uint32_t gn = 0, gate = 0;
+            i0 = F.ninst;
+            for (uint32_t k = a; k < b; k++) { /* pass 2: the others in groups, each copy tested, the group's gate shared */
+                if (small(cut, g->cp[k].c, g->cp[k].r) || seen_last(g->cp[k].elem, fr)) continue;
+                if (!gn) gate = new_gate(), i0 = F.ninst;
+                F.inst[F.ninst++] = g->off[B_PL] + g->cp[k].plc;
+                elem_test(gate, g->cp[k].lo, g->cp[k].hi, g->cp[k].ob);
+                grec_add(cur_slot, g, k, k + 1, (int32_t)s2, 2, gate);
+                if (++gn == CLN) add_cmd(2, pgi, kind, sh->n, gn, g->off[B_I] + first, (int32_t)g->off[B_SV], i0, gate), F.gate_tris[gate] += (uint64_t)sh->n / 3 * gn, gn = 0;
+                if (F.oom) return;
+            }
+            if (gn) add_cmd(2, pgi, kind, sh->n, gn, g->off[B_I] + first, (int32_t)g->off[B_SV], i0, gate), F.gate_tris[gate] += (uint64_t)sh->n / 3 * gn;
+        }
+    }
+}
 static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *cut) {
+    if (TMODE >= 1) { emit_leaf_elems(T, g, fr, cut); return; }
     int back = T->o.cull_back && !T->o.reference, pgi = g->page;
     for (int grp = 0; grp < 2; grp++) {
         uint32_t a = back ? (grp ? g->nclosed : 0) : (grp ? g->nel : 0), b = back ? (grp ? g->nel : g->nclosed) : g->nel;
@@ -1154,7 +1356,6 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
             uint32_t own = 0;
             if (occl && !(g && g->kind == 1 && T->groups)) {
                 own = new_gate();
-                GROW(F.test, F.ntest, F.ctest, 1);
                 if (nmap >= T->test_cap_cpu) {
                     uint32_t nc = T->test_cap_cpu ? T->test_cap_cpu * 2 : 1024;
                     TMap *nm2 = realloc(T->map, nc * sizeof *nm2);
@@ -1162,10 +1363,10 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
                     else T->map = nm2, T->test_cap_cpu = nc;
                 }
                 if (F.oom) break;
-                Test *te = &F.test[F.ntest++];
-                memcpy(te->lo, &ts->sbox[6ull * t], 12), memcpy(te->hi, &ts->sbox[6ull * t + 3], 12);
-                te->lo[3] = te->hi[3] = 0;
-                te->g[0] = own, te->g[1] = 0, te->g[2] = g != NULL, te->g[3] = 0;
+                Test *te = new_test(own);
+                if (!te) break;
+                test_aabb(te, &ts->sbox[6ull * t], &ts->sbox[6ull * t + 3]);
+                te->g[2] = g != NULL;
                 T->map[nmap++] = (TMap){ts, t, own}, T->nmap = nmap;
             }
             if (g && occl && g->kind == 1 && T->groups) { /* a loaded leaf: its elements' groups decide (above) */
@@ -1365,10 +1566,11 @@ void nv_tiles_occlusion(R *r, SDL_GPUCommandBuffer *cmd) {
         SDL_EndGPUComputePass(p);
     }
     /* the tests: every selected tile's box */
-    struct { float vp[16]; float px[4]; int32_t n[4]; int32_t lv[16][4]; } tu;
+    struct { float vp[16]; float px[4]; int32_t n[4]; int32_t o[4]; int32_t lv[16][4]; } tu;
     memcpy(tu.vp, r->last_vp, sizeof tu.vp);
     tu.px[0] = (float)r->W, tu.px[1] = (float)r->H, tu.px[2] = (float)NEAR_MM, tu.px[3] = (float)hiz_block;
     tu.n[0] = (int)F.ntest, tu.n[1] = (int)T->hiz_levels, tu.n[2] = (int)T->lv[0][1], tu.n[3] = (int)T->lv[0][2];
+    tu.o[0] = (int)test_split, tu.o[1] = (int)test_split_px, tu.o[2] = (int)test_span, tu.o[3] = 0;
     for (int l = 0; l < 16; l++) tu.lv[l][0] = (int)T->lv[l][0], tu.lv[l][1] = (int)T->lv[l][1], tu.lv[l][2] = (int)T->lv[l][2], tu.lv[l][3] = 0;
     SDL_GPUStorageBufferReadWriteBinding gw = {.buffer = T->gates, .cycle = false};
     p = SDL_BeginGPUComputePass(cmd, NULL, 0, &gw, 1);
@@ -1516,6 +1718,8 @@ uint64_t nv_tiles_collect(R *r, int slot) {
         const uint32_t *gv = T->downs[slot] ? SDL_MapGPUTransferBuffer(r->dev, T->downs[slot], false) : NULL;
         double s[8] = {0};
         const Cut *cut = &slot_cut[slot];
+        surplus_top = getenv("BIMBLE_TILES_SURPLUS") && atoi(getenv("BIMBLE_TILES_SURPLUS")) >= 2;
+        memset(top, 0, sizeof top);
         uint32_t fr32 = (uint32_t)p->frame;
         for (uint32_t i = 0; gv && i < ngrec[slot]; i++) {
             const GRec *q = &grec[slot][i];
@@ -1536,7 +1740,15 @@ uint64_t nv_tiles_collect(R *r, int slot) {
                 if (e < nseen_cpu && seen_cpu[e] == fr32) s[0] += t;
                 else if (q->pass == 1) s[5] += t;
                 else if (any_seen) s[3] += t;
-                else s[4] += t;
+                else {
+                    s[4] += t;
+                    if (surplus_top) { /* BIMBLE_TILES_SURPLUS=2: the largest of these, printed at the shot */
+                        const float *ob = q->shape < 0 ? q->g->el[k].ob : q->g->cp[k].ob;
+                        int at = -1;
+                        for (int j = 0; j < 8; j++) if (top[j].t < t && (at < 0 || top[j].t < top[at].t)) at = j;
+                        if (at >= 0) top[at].t = t, top[at].e = e, memcpy(top[at].ob, ob, 48);
+                    }
+                }
             }
         }
         if (gv) SDL_UnmapGPUTransferBuffer(r->dev, T->downs[slot]);

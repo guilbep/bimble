@@ -504,7 +504,11 @@ jobs:
       - name: ccore/ci/run.sh native (lavapipe)
         run: |
           export PKG_CONFIG_PATH=$HOME/.local/sdl3/lib/pkgconfig LD_LIBRARY_PATH=$HOME/.local/sdl3/lib
-          export VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json | head -n 1)
+          # NUI3: Mesa 25 names it lvp_icd.json (no architecture): the old glob found none, VK_DRIVER_FILES was empty and
+          # the loader had no driver ("No supported SDL_GPU backend found!", native_app failing in 0.1 s)
+          export VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          [[ -n $VK_DRIVER_FILES ]] || { echo "::error::no lavapipe ICD in /usr/share/vulkan/icd.d"; ls /usr/share/vulkan/icd.d; exit 1; }
+          echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           ccore/ci/run.sh native
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)

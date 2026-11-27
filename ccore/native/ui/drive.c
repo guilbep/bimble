@@ -329,6 +329,7 @@ static int run_step(App *a, Step *s, double now) {
         if (sp[7] > 0)
             fprintf(stderr, "drive: shot %s: leaves %.2f M triangles: of elements shown %.2f M; pass 1 %.2f M, pass 2 %.2f M; of elements not shown: same group as a shown one %.2f M, a group passing the box test alone %.2f M, drawn in pass 1 (shown before) %.2f M\n",
                     arg, sp[6] / 1e6, sp[0] / 1e6, sp[1] / 1e6, sp[2] / 1e6, sp[3] / 1e6, sp[4] / 1e6, sp[5] / 1e6);
+        if (sp[7] > 0) nv_tiles_surplus_top();
         return 1;
     }
     if (!strcmp(op, "copy_report")) { /* Performance › Copy, as the button does: the clipboard and a file; stderr says where */

@@ -1,44 +1,69 @@
 #version 450
 // NUI2: each selected tile's box against the depth pyramid of pass 1. Hidden when its nearest point (reverse Z: the
-// largest depth) is behind the farthest depth over every texel its screen rectangle covers (the level where that
-// rectangle spans at most 2 x 2 texels); a box reaching behind the near plane is never hidden. Writes its gate (its
-// draws in pass 2, its answer read back) and, when it is visible and not loaded, its stand-in's gate. The level is the
-// finest where the rectangle spans at most 4 x 4 texels (16 reads).
+// largest depth) is behind the farthest depth over every texel its screen rectangle covers (the finest level where that
+// rectangle spans at most o.z x o.z texels); a box reaching behind the near plane is never hidden. Writes its gate (its
+// draws in pass 2, its answer read back) and, when it is visible and not loaded, its stand-in's gate (only ever 1: gates
+// start at 0, several tests may share one).
+// NUI3: a box is a centre and three half axes (an element's own placed box when tighter than its world box). A box
+// found visible and large on screen is tested again in pieces (up to o.x a side, about o.y pixels each): visible when a
+// piece is (the union of the pieces is the box: still exact; each piece has its own nearest depth and a smaller rectangle).
 layout(local_size_x = 64) in;
 layout(set = 0, binding = 0, r32f) uniform readonly image2D hiz;
-struct Test { vec4 lo; vec4 hi; uvec4 g; }; // g.x own gate, g.y its stand-in's gate (0 none)
+struct Test { vec4 c; vec4 ax; vec4 ay; vec4 az; uvec4 g; }; // g.x own gate, g.y its stand-in's gate (0 none)
 layout(std430, set = 0, binding = 1) readonly buffer Tests { Test test[]; };
 layout(std430, set = 1, binding = 0) buffer Gates { uint gate[]; };
-layout(set = 2, binding = 0) uniform U { mat4 vp; vec4 px; ivec4 n; ivec4 lv[16]; }; // px: W, H, near; n: tests, levels; lv: x offset, w, h
-void main() {
-    uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(n.x)) return;
-    Test t = test[i];
-    bool vis = false;
+// px: W, H, near, pixels a level-0 texel side; n: tests, levels; o: pieces a side at most, pixels a piece, texels a side read; lv: x offset, w, h
+layout(set = 2, binding = 0) uniform U { mat4 vp; vec4 px; ivec4 n; ivec4 o; ivec4 lv[16]; };
+
+// a box in clip space (centre C, half axes X Y Z): visible (true) or hidden
+bool piece(vec4 C, vec4 X, vec4 Y, vec4 Z) {
     float zmax = 0.0;
     vec2 mn = vec2(3.0e38), mx = vec2(-3.0e38);
     for (int k = 0; k < 8; k++) {
-        vec3 c = vec3((k & 1) != 0 ? t.hi.x : t.lo.x, (k & 2) != 0 ? t.hi.y : t.lo.y, (k & 4) != 0 ? t.hi.z : t.lo.z);
-        vec4 q = vp * vec4(c, 1.0);
-        if (q.w <= px.z) { vis = true; break; }
+        vec4 q = C + ((k & 1) != 0 ? X : -X) + ((k & 2) != 0 ? Y : -Y) + ((k & 4) != 0 ? Z : -Z);
+        if (q.w <= px.z) return true;
         vec3 d = q.xyz / q.w;
         zmax = max(zmax, d.z);
         vec2 s = vec2((d.x * 0.5 + 0.5) * px.x, (0.5 - 0.5 * d.y) * px.y);
         mn = min(mn, s), mx = max(mx, s);
     }
-    if (!vis) {
-        if (mx.x < 0.0 || mx.y < 0.0 || mn.x > px.x || mn.y > px.y) vis = false; // off screen
-        else {
-            int B = int(px.w); // pixels a level-0 texel side
-            ivec2 a = ivec2(clamp(floor(mn), vec2(0.0), px.xy - 1.0)) / B, b = ivec2(clamp(floor(mx), vec2(0.0), px.xy - 1.0)) / B;
-            int L = 0;
-            while (L < n.y - 1 && max((b.x >> L) - (a.x >> L), (b.y >> L) - (a.y >> L)) > 3) L++; // NUI2: up to 4 x 4 texels (tighter than 2 x 2)
-            float far = 3.0e38;
-            for (int y = a.y >> L; y <= (b.y >> L); y++)
-                for (int x = a.x >> L; x <= (b.x >> L); x++) far = min(far, imageLoad(hiz, ivec2(lv[L].x + min(x, lv[L].y - 1), min(y, lv[L].z - 1))).r);
-            vis = !(zmax * 1.00001 < far);
+    if (mx.x < 0.0 || mx.y < 0.0 || mn.x > px.x || mn.y > px.y) return false; // off screen
+    int B = int(px.w);
+    ivec2 a = ivec2(clamp(floor(mn), vec2(0.0), px.xy - 1.0)) / B, b = ivec2(clamp(floor(mx), vec2(0.0), px.xy - 1.0)) / B;
+    int L = 0, span = max(o.z, 2) - 1;
+    while (L < n.y - 1 && max((b.x >> L) - (a.x >> L), (b.y >> L) - (a.y >> L)) > span) L++;
+    float lim = zmax * 1.00001;
+    for (int y = a.y >> L; y <= (b.y >> L); y++)
+        for (int x = a.x >> L; x <= (b.x >> L); x++)
+            if (!(lim < imageLoad(hiz, ivec2(lv[L].x + min(x, lv[L].y - 1), min(y, lv[L].z - 1))).r)) return true;
+    return false;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(n.x)) return;
+    Test t = test[i];
+    vec4 C = vp * vec4(t.c.xyz, 1.0), X = vp * vec4(t.ax.xyz, 0.0), Y = vp * vec4(t.ay.xyz, 0.0), Z = vp * vec4(t.az.xyz, 0.0);
+    bool vis = piece(C, X, Y, Z);
+    if (vis && o.x > 1 && C.w > px.z) { // large on screen: the pieces (each axis cut by its length in pixels at the centre's depth)
+        vec2 sc = px.xy / C.w;
+        int nx = clamp(int(ceil(length(X.xy * sc) / float(o.y))), 1, o.x);
+        int ny = clamp(int(ceil(length(Y.xy * sc) / float(o.y))), 1, o.x);
+        int nz = clamp(int(ceil(length(Z.xy * sc) / float(o.y))), 1, o.x);
+        if (nx * ny * nz > 1) {
+            vis = false;
+            vec4 PX = X / float(nx), PY = Y / float(ny), PZ = Z / float(nz);
+            for (int a = 0; a < nx && !vis; a++)
+                for (int b = 0; b < ny && !vis; b++)
+                    for (int c = 0; c < nz && !vis; c++) {
+                        vec4 Q = C + X * ((2.0 * float(a) + 1.0) / float(nx) - 1.0) + Y * ((2.0 * float(b) + 1.0) / float(ny) - 1.0) +
+                                 Z * ((2.0 * float(c) + 1.0) / float(nz) - 1.0);
+                        vis = piece(Q, PX, PY, PZ);
+                    }
         }
     }
-    gate[t.g.x] = vis ? 1u : 0u;
-    if (vis && t.g.y != 0u) gate[t.g.y] = 1u;
+    if (vis) {
+        gate[t.g.x] = 1u;
+        if (t.g.y != 0u) gate[t.g.y] = 1u;
+    }
 }
