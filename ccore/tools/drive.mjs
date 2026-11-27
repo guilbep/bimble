@@ -558,7 +558,7 @@ export class Drive {
     const page = await this.ev(`(() => { const g = window.__bbGl, d = window.__drv; return { frames: g.frameRecs || [], timer: !!g.gpuTimer, drv: d ? { inputs: d.inputs, frames: d.frames, errors: d.errors } : null,
       firstFrameMs: g.firstFrameMs, fullFrameMs: g.fullFrameMs ?? null, proxyPreview: g.proxyPreview ?? null, meshAt: g.meshAt ?? null, gpuBytes: g.gpuBytes ?? null, canvas: [document.getElementById("bimble").width, document.getElementById("bimble").height],
       linkProxies: (g.linkProxies || []).map((x) => ({ cells: x.cells, tris: x.tris, drawnCells: x.drawnCells, drawnTris: x.drawnTris })), linkDetail: (g.linkDetail || []).map((x) => x.detail),
-      settings: null }; })()`);
+      settings: window.__bbSettings ? window.__bbSettings() : null }; })()`);
     const report = await this.report();
     writeFileSync(join(dir, "report.txt"), report ?? "(no perf.ts)\n");
     writeFileSync(join(dir, "frames.json"), JSON.stringify(page.frames));
@@ -583,7 +583,8 @@ export class Drive {
     const moving = kinds("m"), still = [...kinds("w")], slices = kinds("s");
     const s = {
       name: basename(dir), at: new Date().toISOString(), load: loadNow(), browser: this.browserVersion, adapter: this.gpu.renderer, software: this.gpu.software, extensions: this.ext, timer: page.timer,
-      size: this.o.size, dpr: Number(this.o.dpr), canvas: page.canvas, settings: this.o.settings ?? null, panel: !!this.o.panel, minMemGb: this.minMem, stopped: this.stopWhy,
+      size: this.o.size, dpr: Number(this.o.dpr), canvas: page.canvas, settings: this.o.settings ?? null,
+      optimisations: page.settings ? Object.fromEntries(["draw_visible", "edge_mode", "cull_back", "still_px", "refill_offscreen", "moving_fps", "moving_proxies", "link_gpu_mb"].map((k) => [k, page.settings[k] ?? null])) : null, panel: !!this.o.panel, minMemGb: this.minMem, stopped: this.stopWhy,
       open: { firstPictureMs: page.proxyPreview ? page.proxyPreview.at : page.firstFrameMs, firstDetailMs: page.firstFrameMs, completeMs: page.fullFrameMs }, // performance.now() of the page (navigation start = 0)
       moving: { js: stat(moving.map((f) => f.js)), gpu: stat(moving.map(gpuOf).filter((x) => x != null)), draws: med(moving.map((f) => f.draws)), tris: med(moving.map((f) => f.tris)), outlines: med(moving.map((f) => f.outlines)), proxied: med(moving.map((f) => f.proxied)) },
       whole: { js: stat(still.map((f) => f.js)), gpu: stat(still.map(gpuOf).filter((x) => x != null)), draws: med(still.map((f) => f.draws)), tris: med(still.map((f) => f.tris)) },
@@ -649,6 +650,7 @@ export function profileTop(p, n) {
 function summaryMd(s) {
   const st = (x) => (x && x.n ? `${f1(x.median)} / ${f1(x.p95)} / ${f1(x.max)} (n ${x.n})` : "–");
   const L = [`# drive: ${s.name}`, "", `${s.at}; load ${s.load}; ${s.browser ?? "?"}; adapter \`${s.adapter}\`${s.software ? " — SOFTWARE (a CPU rasteriser): not a GPU's numbers" : " (real GPU)"}; GPU time by ${s.timer ? "timer query" : "fence (draw start to the GPU's end, to a loop's resolution)"}`,
+    `optimisations in force: ${s.optimisations ? Object.entries(s.optimisations).map(([k, v]) => `${k} ${v}`).join(", ") : "unknown (an older page)"}`,
     `window ${s.size} css px at dpr ${s.dpr} (canvas ${s.canvas.join(" x ")}); settings ${s.settings ?? "default"}; panel ${s.panel ? "open" : "closed"}; extensions: ${s.extensions.join(", ") || "none"}`, "",
     "| | median / p95 / max ms |", "|---|---|",
     `| open → first picture / first detail / complete (page clock) | ${f0(s.open.firstPictureMs)} / ${f0(s.open.firstDetailMs)} / ${f0(s.open.completeMs)} |`,

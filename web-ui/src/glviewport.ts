@@ -1539,7 +1539,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const visibleOn = () => stats.visible !== false && (userSettings.value?.values.draw_visible ?? true); // (the setting; a bench hook)
   const visKeyOf = (key: string, box: unknown) => `${key}|${canvas.width}x${canvas.height}|${visGen}|${listsGen}|${JSON.stringify(box)}|${state.value.links ?? 0}`;
   /** Edges found on screen: in 3D (not in a plan, where the drawing's lines stay), with the target, unless a bench hook asks the line pass. */
-  const screenEdgesNow = () => !!tgt && !plan && stats.lineEdges !== true && pressed("edges", true) && !stats.noEdges;
+  const screenEdgesNow = () => !!tgt && !plan && stats.lineEdges !== true && opt().edge_mode === "screen" && pressed("edges", true) && !stats.noEdges;
+  /** VIS1: the 3D view's optimisations as stored (the owner: each a setting with a good default and an exact value). */
+  const opt = () => { const v = userSettings.value?.values; return { edge_mode: v?.edge_mode ?? "screen", cull_back: v?.cull_back ?? false, still_px: v?.still_px ?? 0, refill_offscreen: v?.refill_offscreen ?? true }; };
   stats.frameRecs = ftime.log, stats.gpuTimer = ftime.timer;
   const motionWin = () => Math.max(MOTION_MS, 2 * lastFrameMs);
   const inputNow = () => { lastInputAt = performance.now(); };
@@ -2777,8 +2779,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       // VIS1 (P0-c): many batches (a project of links): the bucketed cut (gl/cull.ts budgetCutFast), the same rule
       const cut = seen.length > 2000 && budget < Infinity && stats.exactCut !== true ? budgetCutFast(seen.map((x) => x.c), budget, `${visGen}|${listsGen}`) : budgetCut(seen.map((x) => x.c), budget);
       cutT = cut.t;
-      if (!movingNow && !slice && !idMode && (stats.stillPx ?? 0) > 0) { // VIS1: a bench hook (option 3): what is under stillPx px left out of a still frame
-        cutT = stats.stillPx! * (orthoEye ? orthoMmPx : pxK);
+      const stillPx = stats.stillPx ?? opt().still_px; // VIS1: the setting still_px (0: off; a bench hook overrides)
+      if (!movingNow && !slice && !idMode && stillPx > 0) { // VIS1 (option 3): what is under stillPx px left out of a still frame
+        cutT = stillPx * (orthoEye ? orthoMmPx : pxK);
         for (const { d, c } of seen) d.k1 = cutEnd(c, cutT);
       }
       if (!slice) { let all = 0; for (const { c } of seen) { const k = c.b.vcum ?? c.b.cum; all += k[c.b.n]! - k[c.k0]!; } lastAllTris = all; } // VIS1 (P0-a)
@@ -3004,7 +3007,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (!slice || fill?.t === Infinity) for (const c of linkCut) { const n = drawLinkCells(c.x, c.cells, c.mdl, c.colour); fTris += n, fDraws++, linkPrxTris += n; } // LNK3D (C)
       useModel(hostGl), setModel(0), gl.bindVertexArray(vao);
     };
-    if (stats.cullBack && !box) gl.enable(gl.CULL_FACE), gl.cullFace(gl.BACK), gl.frontFace(gl.CCW); // VIS1: a bench hook (option 4)
+    if ((stats.cullBack ?? opt().cull_back) && !box && !idMode) gl.enable(gl.CULL_FACE), gl.cullFace(gl.BACK), gl.frontFace(gl.CCW); // VIS1: the setting cull_back (option 4; a bench hook overrides)
     if (!box) faces(0);
     else {
       // ADR 0014: outward faces lit, then inward faces (seen only through the cut) unlit at the cut
@@ -3037,7 +3040,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.depthMask(false);
     // A plan: edges 2 mm ahead, so the outline of a cut drawn where it stands on something stays.
     if (plan) gl.uniform1f(uZbias, (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1));
-    const edgesOn0 = pressed("edges", true) && !stats.noEdges; // Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off (3D2: a bench hook too)
+    const edgesOn0 = pressed("edges", true) && !stats.noEdges && opt().edge_mode !== "none"; // (VIS1: edge_mode none) Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off (3D2: a bench hook too)
     // VIS1: in 3D, edges found on screen (gl/screenedges.ts) instead of the line pass, when the depth can be copied
     const scrEdges = edgesOn0 && !idMode && screenEdgesNow();
     if (tgt) tgt.colourOnly(true); // VIS1: lines, outlines, the box and the ghost: colour only
@@ -3133,7 +3136,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!slice) drawGhost(); // (a slice adds to the kept picture: the ghost is drawn once)
     // VIS1 (C-iv): the fill's slices complete the picture offscreen: the canvas keeps the moving frame's picture
     // and shows the target when the fill is done, or every PRESENT_MS meanwhile (a long fill still shows progress)
-    const holdSlice = !!tgt && slice && (fill !== null || fillEdges) && performance.now() - lastPresentAt < PRESENT_MS && stats.showSlices !== true;
+    const holdSlice = !!tgt && slice && (fill !== null || fillEdges) && performance.now() - lastPresentAt < PRESENT_MS && stats.showSlices !== true && opt().refill_offscreen;
     if (tgt && !holdSlice) tgt.present(scrEdges, E0, E1), fDraws++, lastPresented = true, lastPresentAt = performance.now(); // VIS1: onto the canvas, with its edges
     // VIS1: this picture's pyramid, once per key (the masks are made once per pyramid: 40 ms for 83,000 elements), and
     // once more when the picture completes after a pyramid of a partial one (a moving frame's, a slice's: fewer occluders)
