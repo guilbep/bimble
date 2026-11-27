@@ -21,7 +21,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readPng, colours, diffShare } from "./lib/png.mjs";
+import { readPng, inkShare, diffShare } from "./lib/png.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.NATIVE_BIN ?? join(CCORE, "out/app/bimble");
@@ -133,8 +133,8 @@ quit
   let img = null;
   try { img = readPng(join(r1.out, "fixture.png")); } catch (e) { check("fixture: the shot is a PNG", false, String(e)); }
   if (img) {
-    const n = colours(img, Math.floor(img.width * 0.3), Math.floor(img.height * 0.35), Math.floor(img.width * 0.95), Math.floor(img.height * 0.9));
-    check(`fixture: the 3D view is not blank (${n} colours)`, n > 20);
+    const ink = inkShare(img, Math.floor(img.width * 0.3), Math.floor(img.height * 0.35), Math.floor(img.width * 0.95), Math.floor(img.height * 0.9));
+    check(`fixture: the 3D view is not blank (${(ink * 100).toFixed(1)} % off its ground, over 2 %)`, ink > 0.02);
     if (process.env.NATIVE_WRITE_REF === "1") {
       mkdirSync(dirname(REF), { recursive: true });
       copyFileSync(join(r1.out, "fixture.png"), REF);

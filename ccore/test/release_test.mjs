@@ -35,7 +35,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readPng, colours } from "./lib/png.mjs";
+import { readPng, inkShare } from "./lib/png.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = readFileSync(join(CCORE, "VERSION"), "utf8").trim();
@@ -197,7 +197,8 @@ try {
       check("bimble --offscreen --quit-after 3 --shot exits 0", rc === 0, err.trim().split("\n").slice(-3).join(" | "));
       let img = null;
       try { img = readPng(shot); } catch (e) { check("bimble's shot is a PNG", false, String(e)); }
-      if (img) check("bimble's shot draws the fixture (the 3D view not blank)", colours(img, Math.floor(img.width * 0.3), Math.floor(img.height * 0.35), Math.floor(img.width * 0.9), Math.floor(img.height * 0.9)) > 20, `${img.width}x${img.height}`);
+      const ink = img ? inkShare(img, Math.floor(img.width * 0.3), Math.floor(img.height * 0.35), Math.floor(img.width * 0.9), Math.floor(img.height * 0.9)) : 0;
+      if (img) check(`bimble's shot draws the fixture (${(ink * 100).toFixed(1)} % of the 3D view off its ground, over 2 %)`, ink > 0.02, `${img.width}x${img.height}`);
     }
   } else if (!WIN && !MAC) console.log("SKIP native app: the archive has no bimble (SDL3 >= 3.4, FreeType or glslc absent where it was built)");
 

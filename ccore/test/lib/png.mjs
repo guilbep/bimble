@@ -57,3 +57,19 @@ export function diffShare(a, b, tol = 24) {
   }
   return bad / (a.width * a.height);
 }
+
+/** The share (0..1) of a region's pixels that differ (by more than `tol` in a channel) from its most
+ *  common colour (the ground): a picture drawn on a flat ground is not blank when this is above ~1 %. */
+export function inkShare(img, x0 = 0, y0 = 0, x1 = img.width, y1 = img.height, tol = 30) {
+  const count = new Map();
+  for (let y = y0; y < y1; y += 2) for (let x = x0; x < x1; x += 2) { const c = img.rgba.readUInt32LE((y * img.width + x) * 4); count.set(c, (count.get(c) ?? 0) + 1); }
+  let ground = 0, best = -1;
+  for (const [c, n] of count) if (n > best) best = n, ground = c;
+  let ink = 0, all = 0;
+  for (const [c, n] of count) {
+    all += n;
+    const d = Math.max(Math.abs((c & 255) - (ground & 255)), Math.abs(((c >> 8) & 255) - ((ground >> 8) & 255)), Math.abs(((c >> 16) & 255) - ((ground >> 16) & 255)));
+    if (d > tol) ink += n;
+  }
+  return all ? ink / all : 0;
+}
