@@ -27,9 +27,9 @@ export interface GpuMesh {
 }
 
 /** GPU2: a model's buffers as WebGL2 holds them (glviewport.ts ModelGl): read back once, then emptied. */
-export interface GlArrays { pos: ArrayBuffer; el: ArrayBuffer; edge: ArrayBuffer; edgeNrm: ArrayBuffer; edgeEl: ArrayBuffer; shapeIdx: ArrayBuffer;
-  idx: ArrayBuffer; edgeIdx: ArrayBuffer; instMat: ArrayBuffer; instEl: ArrayBuffer }
-export type GlName = keyof GlArrays;
+export type GlName = "pos" | "el" | "edge" | "edgeNrm" | "edgeEl" | "shapeIdx" | "idx" | "edgeIdx" | "instMat" | "instEl";
+/** GPU2: one of them streamed in chunks (`read` copies bytes [off, off + dst.length) into dst): never a whole copy in the page. */
+export interface GlStream { name: GlName; size: number; read: (off: number, dst: Uint8Array) => void }
 export const GL_NAMES: GlName[] = ["pos", "el", "edge", "edgeNrm", "edgeEl", "shapeIdx", "idx", "edgeIdx", "instMat", "instEl"];
 
 /** GPU2: a model's slot (glviewport.ts Slot): its ranges in the mesh and its WebGL2 buffers (null: released). */
@@ -62,8 +62,10 @@ export interface GpuModels {
   cutLink: (x: GpuLinkPrx, xf: ModelXf, usable: Uint8Array, planes: Float64Array | null, eye: number[], px: number) => { cells: number[]; replaced: Uint8Array };
   /** The frame needed model k's detail (the memory budget's clock); its detail is released: ask it back. */
   need: (k: number) => void; want: (k: number) => void;
-  /** WebGL2's buffers of a slot: read back (null: none, or emptied), emptied, filled again. */
-  readGl: (gl: object) => Partial<GlArrays>; emptyGl: (gl: object) => void; fillGl: (gl: object, a: Partial<GlArrays>) => void;
+  /** WebGL2's buffers of a slot: those that hold bytes (streamed), emptied (WebGPU owns the model), filled again in
+   *  chunks (`fillGl` sizes one and gives its writer), given back (`ownGl` false: WebGL2 draws it again). */
+  readGl: (gl: object) => GlStream[]; emptyGl: (gl: object) => void;
+  fillGl: (gl: object, name: GlName, size: number) => (off: number, src: Uint8Array) => void; ownGl: (gl: object, gpu: boolean) => void;
   /** The device was lost with WebGL2's buffers emptied: the open model uploaded again from the page, the links released (asked back). */
   recover: () => void;
   /** WebGL2's proxies (the open model's, the links') emptied while WebGPU draws, filled again from the page's copies. */

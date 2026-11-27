@@ -22,12 +22,14 @@ import { GpuCull } from "./cull";
 import { BU, TU, type GpuDevice } from "./device";
 import { DEPTH, DRAW_BYTES, Pipelines, type PipeKey } from "./pipelines";
 import { xfRows, type ModelXf } from "../gl/cull";
-import { BACKGROUND, BOX, EDGE, GHOST, GHOST_ALPHA, GHOST_EDGE, OUTLINE, REFERENCE_EDGE, Scene, SLOT } from "./scene";
-import { GL_NAMES, type GlArrays, type GpuDb, type GpuLinkPrx, type GpuModels, type GpuRenderer, type GpuView } from "./switch";
+import { BACKGROUND, BOX, CHUNK, EDGE, GHOST, GHOST_ALPHA, GHOST_EDGE, OUTLINE, REFERENCE_EDGE, Scene, SLOT } from "./scene";
+import { GL_NAMES, type GpuDb, type GpuLinkPrx, type GpuModels, type GpuRenderer, type GpuView } from "./switch";
 
 const STILL_MS = 150, MOVING_PROXY_PX = 3, STILL_PROXY_PX = 1, FIRST_BUDGET_TRIS = 1000000, AMBIENT = 0.62, CUT_SHADE = 0.72, EDGE_MIN_PX = 16;
-/** Taking WebGL2's buffers over: at most this long a frame (at least one model), the open model at once. */
-const TAKE_MS = 24;
+/** Taking WebGL2's buffers over: at most this long and this many bytes a frame (at least one model), the open model at
+ *  once (the memory the two drivers free and allocate stays bounded: the local folder's 1.7 GB in one go passed the
+ *  machine's 2.5 GB floor). */
+const TAKE_MS = 24, TAKE_BYTES = 96 << 20;
 /** Picks' triangles read back from the GPU (a link's arrays dropped from the page): bounded. */
 const PICK_CACHE_BYTES = 8 << 20;
 
@@ -125,14 +127,13 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
     lastM = M;
     if (handing) return true;
     const t0 = performance.now();
-    let pending = 0;
+    let pending = 0, moved = 0;
     for (const x of M.slots) {
       const g = scene.models[x.k];
       if (!x.gl) { if (g) scene.release(x.k); continue; }
       if (g && g.gl === x.gl && g.seen === seenKey(x.bytes, M.listsKey)) continue;
-      if (x.k > 0 && performance.now() - t0 > TAKE_MS) { pending++; continue; }
-      const a = M.readGl(x.gl);
-      scene.take(x.k, x.gl, a, seenKey(x.bytes, M.listsKey));
+      if (x.k > 0 && (performance.now() - t0 > TAKE_MS || moved > TAKE_BYTES)) { pending++; continue; }
+      moved += scene.take(x.k, x.gl, M.readGl(x.gl), seenKey(x.bytes, M.listsKey));
       M.emptyGl(x.gl);
     }
     for (let k = M.slots.length; k < scene.models.length; k++) scene.release(k);
@@ -619,12 +620,26 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
         for (const [i, k] of ks.entries()) {
           const g = scene.models[k], x = M.slots[k];
           if (!g || !x?.gl || g.gl !== x.gl) continue;
-          const names = GL_NAMES.filter((n) => g.b[n]);
-          const got = await readBack(names.map((n) => ({ b: g.b[n]!, at: 0, n: g.size[n] ?? 0 })));
-          if (M.slots[k]?.gl !== g.gl) continue; // released meanwhile
-          const a: Partial<GlArrays> = {};
-          names.forEach((n, j) => { a[n] = got[j]!; });
-          M.fillGl(g.gl, a);
+          // each buffer in CHUNK pieces through one mappable buffer (copied, mapped, written into WebGL2's, unmapped)
+          const stage = device.createBuffer({ size: CHUNK, usage: BU.MAP_READ | BU.COPY_DST });
+          let gone = false;
+          try {
+            for (const n of GL_NAMES.filter((q) => g.b[q])) {
+              const size = g.size[n] ?? 0, write = M.fillGl(g.gl, n, size);
+              for (let off = 0; off < size && !gone; off += CHUNK) {
+                const len = Math.min(CHUNK, size - off), len4 = Math.ceil(len / 4) * 4;
+                const enc = device.createCommandEncoder();
+                enc.copyBufferToBuffer(g.b[n]!, off, stage, 0, Math.min(len4, g.b[n]!.size - off));
+                device.queue.submit([enc.finish()]);
+                await stage.mapAsync(1, 0, len4);
+                if (M.slots[k]?.gl !== g.gl) gone = true; // released meanwhile
+                else write(off, new Uint8Array(stage.getMappedRange(0, len4), 0, len));
+                stage.unmap();
+              }
+            }
+          } finally { stage.destroy(); }
+          if (gone) continue;
+          M.ownGl(g.gl, false);
           scene.release(k);
           perfRenderer.progress = `WebGL2: ${i + 1} of ${ks.length} models given back`;
         }

@@ -8,7 +8,11 @@
 // uniforms (render.ts). The open model's HLOD proxies and each link's baked proxies are uploaded from the page's copies.
 import type { Proxies } from "../gl/proxies";
 import { BU } from "./device";
-import { GL_NAMES, type GlArrays, type GlName, type GpuLinkPrx } from "./switch";
+import { GL_NAMES, type GlName, type GlStream, type GpuLinkPrx } from "./switch";
+
+/** GPU2: a model's buffers move between the renderers in chunks of this size (one reused array in the page). */
+export const CHUNK = 16 << 20;
+const chunk = new Uint8Array(CHUNK);
 
 const PALETTE: [number, number, number][] = [ // glviewport.ts CATEGORY_SRGB (style.rs): the proxies' parts
   [214, 214, 210], [150, 170, 196], [226, 196, 150], [206, 150, 128], [236, 220, 120], [176, 160, 132], [176, 214, 226], [238, 238, 236],
@@ -68,19 +72,26 @@ export class Scene {
   drop(b: GPUBuffer | null | undefined): void { if (b) this.old.push(b); }
   flushOld(): void { for (const b of this.old) b.destroy(); this.old = []; }
 
-  /** Model k's buffers from WebGL2's read back (only those WebGL2 wrote since: the others are kept). */
-  take(k: number, gl: object, a: Partial<GlArrays>, seen: unknown): GModel {
+  /** Model k's buffers from WebGL2's (only those WebGL2 wrote since: the others are kept), streamed in CHUNK pieces
+   *  through one reused array (getBufferSubData, then writeBuffer: no whole copy in the page). Returns the bytes moved. */
+  take(k: number, gl: object, streams: GlStream[], seen: unknown): number {
     let g = this.models[k];
     if (!g || g.gl !== gl) { if (g) this.release(k); g = this.models[k] = new GModel(gl); }
-    for (const name of GL_NAMES) {
-      const d = a[name];
-      if (!d) continue;
-      this.drop(g.b[name]);
-      g.b[name] = this.buf(d.byteLength, USAGE[name], d), g.size[name] = d.byteLength;
-      if (name === "instMat" || name === "instEl") g.group = null;
+    let moved = 0;
+    for (const s of streams) {
+      this.drop(g.b[s.name]);
+      const b = this.buf(s.size, USAGE[s.name]);
+      for (let off = 0; off < s.size; off += CHUNK) {
+        const n = Math.min(CHUNK, s.size - off), n4 = Math.ceil(n / 4) * 4;
+        if (n4 > n) chunk.fill(0, n, n4);
+        s.read(off, chunk.subarray(0, n));
+        this.device.queue.writeBuffer(b, off, chunk, 0, n4);
+      }
+      g.b[s.name] = b, g.size[s.name] = s.size, moved += s.size;
+      if (s.name === "instMat" || s.name === "instEl") g.group = null;
     }
     g.seen = seen;
-    return g;
+    return moved;
   }
   /** Model k's buffers freed (released by the budget, handed back to WebGL2, or the mesh gone). */
   release(k: number): void {

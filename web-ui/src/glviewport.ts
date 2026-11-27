@@ -98,7 +98,7 @@ import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: b
 import { drawRefPlanes, type RefPlaneDrawn } from "./gl/refplanes"; // WAVE1B: reference planes
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
 import { perfFrame, perfInputs, perfMesh, renderer as perfRenderer } from "./perf"; // GPU1: the performance panel's counters (LNK3D: the renderer's reason)
-import { gpuSwitch, type GlArrays, type GpuModels, type GpuRenderer, type GpuView } from "./gpu/switch"; // GPU1: the WebGPU renderer (ADR 0083)
+import { gpuSwitch, type GlStream, type GpuModels, type GpuRenderer, type GpuView } from "./gpu/switch"; // GPU1: the WebGPU renderer (ADR 0083)
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -871,13 +871,26 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     cutLink: (x, xf, usable, planes, eye, px) => cutLinkPrx(x as LinkPrx, xf, usable, planes, eye as V3, px),
     need: (k) => { const x = slots[k]; if (x && k > 0) x.needFrame = drawFrame, x.needAt = performance.now(); },
     want: (k) => { wanted.add(k); },
-    readGl: (g) => {
-      const mg = g as ModelGl, out: Partial<GlArrays> = {};
-      for (const n of GL_BUFS) { const d = glRead(mg[n]); if (d) out[n] = d; }
+    readGl: (g) => { // (each buffer streamed in chunks by its reader: never a whole copy in the page)
+      const mg = g as ModelGl, out: GlStream[] = [];
+      for (const n of GL_BUFS) {
+        const b = mg[n];
+        gl.bindBuffer(gl.COPY_READ_BUFFER, b);
+        const size = gl.getBufferParameter(gl.COPY_READ_BUFFER, gl.BUFFER_SIZE) as number;
+        gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+        if (size > 0) out.push({ name: n, size, read: (off, dst) => { gl.bindBuffer(gl.COPY_READ_BUFFER, b); gl.getBufferSubData(gl.COPY_READ_BUFFER, off, dst); gl.bindBuffer(gl.COPY_READ_BUFFER, null); } });
+      }
       return out;
     },
     emptyGl: (g) => { for (const n of GL_BUFS) glPut((g as ModelGl)[n], null); gpuOwned.add(g); if (!prxEmptied) gpuModels().emptyPrx(); },
-    fillGl: (g, a) => { for (const n of GL_BUFS) if (a[n]) glPut((g as ModelGl)[n], a[n]!); gpuOwned.delete(g); },
+    fillGl: (g, n, size) => {
+      const b = (g as ModelGl)[n];
+      gl.bindBuffer(gl.COPY_WRITE_BUFFER, b);
+      gl.bufferData(gl.COPY_WRITE_BUFFER, size, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+      return (off, src) => { gl.bindBuffer(gl.COPY_WRITE_BUFFER, b); gl.bufferSubData(gl.COPY_WRITE_BUFFER, off, src); gl.bindBuffer(gl.COPY_WRITE_BUFFER, null); };
+    },
+    ownGl: (g, gpu) => { if (gpu) gpuOwned.add(g); else gpuOwned.delete(g); },
     emptyPrx: () => {
       prxEmptied = true;
       for (const x of linkPrx.values()) for (const b of x.bufs) glPut(b, null);
