@@ -105,9 +105,9 @@ spike's orbit-zoom gesture (`bimble --preset orbit-zoom`), 17 synthetic links (8
 | input → frame median / p95 / max | 7.3–7.7 / 11–12 / 15–19 ms | 6.4 / 10.3 / 14.5 ms | 9.5 / 42.2 / 87.6 ms |
 | peak process memory | 85 MB | 334 MB | 1,818 MB |
 
-The owner's folder was measured locally, under the shared measure lock, in a memory cap and with a
-private cache folder; those numbers stay out of the repository (private data) and are in the ticket's
-report. The edit loop (`make dev-native`): an edit of a shell C file → tcc build 67–110 ms → an
+The owner's folder was not measured in ticket NUI1 (the machine's measurement lock stayed held by other
+runs for the whole window); NAT2's numbers on it (prototype I: first picture 71 ms, moving 18 ms, still
+54 ms, input → frame 14.5 ms median) remain the reference until the next run. The edit loop (`make dev-native`): an edit of a shell C file → tcc build 67–110 ms → an
 offscreen shot written: 188–258 ms.
 
 ## Alternatives considered
