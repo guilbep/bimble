@@ -927,6 +927,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!ready) { dirty = true; return false; }
     drawFrame++; // SIZE2FIX: the budget's clock counts WebGPU's frames too
     gpuR.frame(v);
+    if (perfRenderer.progress) dirty = true; // GPU2: links still being taken over (or given back): another frame
     const b = clipBox();
     stats.boxHandles = b && !plan ? boxHandles(b) : [];
     drawOverlay();

@@ -167,10 +167,12 @@ async function main() {
   const use = async (to) => {
     await evalJs(`(async () => (await import('/src/perf.ts')).chooseRenderer(${JSON.stringify(to)}))()`);
     const want = to === "webgpu" ? "WebGPU" : "WebGL2";
+    let seen = null;
     await waitFor(`${want} drawing`, 60000, async () => {
       const r = await R(), s = await evalJs("window.__bbGl.gpuSplit ?? null");
+      seen = { ...r, split: s };
       return r.using === want && !r.progress && (to === "webgl2" || (s && s.taken === s.models)) ? r : null;
-    });
+    }).catch((e) => { throw new Error(`${e.message}; last seen ${JSON.stringify(seen)}; warnings ${warnings.slice(-3).join(" | ")}`); });
     await evalJs("window.__bbGl.bench.frame(0, false)");
     await calm();
     return (await waitFor("the switch's time", 10000, async () => (await R()).switchMs).catch(() => null));
