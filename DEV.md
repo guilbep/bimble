@@ -101,7 +101,9 @@ make native-test                  # = ccore/ci/run.sh native (the CI job ccore-n
   frames, frames with ids missing, ids missing, coplanar ties). `--compare k=v,k=v --compare …` runs the same
   script once per set and prints the summaries side by side (`<out>/compare.md`). Driver steps for tiles:
   `look_box fx fy fz tx ty tz` (a camera inside the scene's box), `check_tiles` (every leaf's elements inside
-  its box). `BIMBLE_TILES_DEBUG=1`: one line a frame (walk, commands, tests, tiles loaded and wanted).
+  its box). `BIMBLE_TILES_DEBUG=1`: one line a frame (walk, commands, tests, tiles loaded and wanted);
+  `BIMBLE_TILES_SURPLUS=1`: at each `shot`, where the leaves' triangles went (of elements shown, pass 1, pass 2,
+  and of elements not shown by cause). `frames_in_flight` (2): the next frame recorded while the GPU draws this one.
 - A crash: `ccore/native/symbolize.sh [session folder]` turns the session log's raw stack into functions and
   lines with `ccore/out/app/debug/<build id>.debug` (kept by `native/build.sh app`, the last 20 builds).
 
