@@ -243,6 +243,55 @@ async function onPage(cdp, mode) {
   await waitFor(`${mode}: f2 removed`, 10000, async () => (await gl()).links.length === 1).catch(() => null);
   check(`${mode}: remove: the row and the link go`, (await rows()).map((r) => r.name).join() === "m1.ifc" && (await gl()).links.length === 1);
 
+  // ---- SIZE2FIX2: a link's mesh asked with its name and the key is never a 404, whatever happened to the link: the
+  // host asked directly (the heads' key read first), the link unloaded (no geometry, the key read again after), of
+  // another name, of an older key, out of range, removed while its request is held (CDP Fetch); a bare index out of
+  // range stays 404. Fails on 7233611: an unloaded link asked with the current key answered 404 ----
+  if (mode === "native") {
+    const H = `http://127.0.0.1:${PORT}`;
+    const heads = async () => { const ab = new Uint8Array(await (await fetch(`${H}/mesh?t=${TOKEN}&shapes=1&lazy=1`)).arrayBuffer()); const dv = new DataView(ab.buffer);
+      let o = 52 + 48 * dv.getUint32(12, true) + 12 * dv.getUint32(16, true) + 4 * dv.getUint32(20, true) + 32 * dv.getUint32(24, true) + 52 * dv.getUint32(12, true);
+      const n = dv.getUint32(o + 8, true); o += 12; const out = [];
+      for (let k = 0; k < n; k++) { const L = dv.getUint32(o, true), name = new TextDecoder().decode(ab.subarray(o + 4, o + 4 + L)); o += 4 + L + ((4 - (L % 4)) % 4);
+        out.push({ name, nE: dv.getUint32(o + 48, true), key: dv.getUint32(o + 52, true) }); o += 56; }
+      return out; };
+    const ask = async (k, q) => (await fetch(`${H}/mesh?t=${TOKEN}&link=${k}${q}`)).status;
+    const h0 = await heads();
+    const m1 = h0.findIndex((h) => h.name === "m1.ifc"), key0 = h0[m1]?.key;
+    const st = {};
+    st.ready = await ask(m1, `&name=m1.ifc&key=${key0}`);
+    st.otherName = await ask(m1, `&name=zz.ifc&key=${key0}`);
+    st.olderKey = await ask(m1, `&name=m1.ifc&key=${key0 + 1000}`);
+    st.outOfRange = await ask(99, `&name=m1.ifc&key=${key0}`);
+    st.bareOutOfRange = await ask(99, "");
+    await B(`b.actionBody("manage_links", { op: "unload", name: "m1.ifc" }); return 1;`);
+    const h1 = await heads();
+    st.unloadedNow = await ask(m1, `&name=m1.ifc&key=${h1[m1]?.key}`);
+    await B(`b.actionBody("manage_links", { op: "load", name: "m1.ifc" }); return 1;`);
+    // the page's own request held while its link is removed, then let go
+    await S("Fetch.enable", { patterns: [{ urlPattern: "*mesh?*link=*", requestStage: "Request" }] });
+    let held = null;
+    const onPause = (msg) => { if (msg.method === "Fetch.requestPaused" && !held) held = msg.params; else if (msg.method === "Fetch.requestPaused") S("Fetch.continueRequest", { requestId: msg.params.requestId }).catch(() => {}); };
+    cdp.on(onPause);
+    await B(`b.manageLink("reload", "m1.ifc"); return 1;`);
+    const paused = await waitFor("a link's mesh request held", 10000, () => held).catch(() => null);
+    const r0 = meshResponses.length;
+    if (paused) {
+      await B(`b.actionBody("manage_links", { op: "remove", name: "m1.ifc" }); return 1;`);
+      await sleep(300);
+      await S("Fetch.continueRequest", { requestId: paused.requestId });
+    }
+    await waitFor("its answer", 5000, () => meshResponses.slice(r0).some((r) => /(^|&)link=/.test(r.url))).catch(() => null);
+    st.removedWhileHeld = meshResponses.slice(r0).find((r) => /(^|&)link=/.test(r.url))?.status ?? null;
+    await S("Fetch.disable");
+    held = { requestId: "" }; // (no more holds)
+    await B(`b.actionBody("link_model", { path: ${JSON.stringify(join(work, "m1.ifc"))} }); return 1;`);
+    await waitFor(`${mode}: m1 back`, 10000, async () => (await gl()).links.some((l) => l.name === "m1.ifc")).catch(() => null);
+    check(`${mode}: a named, keyed request for a link's mesh is never a 404 (superseded: 204), a bare one out of range is`,
+      st.ready === 200 && st.otherName === 204 && st.olderKey === 204 && st.outOfRange === 204 && st.unloadedNow === 204 && st.removedWhileHeld === 204 && st.bareOutOfRange === 404,
+      JSON.stringify(st));
+  }
+
   // ---- SIZE2FIX: links removed, unloaded, loaded and read again while their meshes are in flight (each request
   // 250 ms late): a link's mesh is asked by its name and the heads' key; one asked after the links changed is
   // superseded (204), dropped quietly, the heads asked again: no 404, no console error (checked at the end) ----

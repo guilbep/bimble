@@ -345,7 +345,10 @@ int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int 
      * link removed, replaced or read again since: superseded, 204, not an error: the page asks again) */
     if (l && name && (strlen(l->name) != nname || memcmp(l->name, name, nname))) l = NULL;
     if (l && has_key && key != (uint32_t)s->links_mesh_gen) l = NULL;
-    if (!l && (name || has_key)) st = 204;
+    /* SIZE2FIX2: a request that names the link or carries the key is never a 404: gone, renamed, unloaded, missing,
+     * queued or converting (no geometry now), out of range or of another key: superseded (204); 404 stays for a
+     * bare request (index alone) of no such link */
+    if ((!l || !l->kind) && (name || has_key)) st = 204;
     else if (!l || !l->kind) st = 404, buf_puts(out, "no such link");
     else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
         buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;

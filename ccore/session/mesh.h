@@ -55,6 +55,7 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n);
  * with the error. The native host serves it as GET /mesh?link=k. */
 int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n);
 /* SIZE2FIX: with `name` (the link's name, NULL: any) and the mesh key (`has_key`: the LNKS heads' key the
- * page read), a link that is no longer k under that name, or a key that is no longer the links' mesh
- * generation, answers 204 (superseded: no body; the page drops that fetch and asks the heads again). */
+ * page read), a link that is no longer k under that name, a key that is no longer the links' mesh
+ * generation, or a link with no geometry now (unloaded, missing, queued, converting) answers 204 (superseded:
+ * no body; the page drops that fetch and asks the heads again): never 404 (SIZE2FIX2). */
 #endif
