@@ -12,7 +12,7 @@ import { onMounted, onUnmounted, shallowRef } from "vue";
 import { state } from "../bimble";
 import { t } from "../i18n";
 import { currentPanel } from ".";
-import { adapterNames, chooseRenderer, howToWebgpu, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
+import { adapterNames, chooseRenderer, howToWebgpu, perfCompare, perfComparing, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
 import { linkGpu } from "../gl/linkmem"; // SIZE3 (C)
 
 const snap = shallowRef<PerfSnapshot>(perfSnapshot());
@@ -51,6 +51,13 @@ const liveAdapter = () => { // (the adapter of the renderer drawing now, not the
   return a ? `${adapterNames(a, " · ") || t("perf.unknown")}${a.software ? ` · ${t("perf.softwareShort")}` : ""}` : t("perf.unknown");
 };
 const why = () => whyPlain(renderer.using === "WebGPU" || renderer.asked !== "webgpu" ? null : renderer.reason);
+const comparing = shallowRef<string | null>(null);
+async function compare() { // GPU2: the same camera path on both renderers; the report then holds both blocks
+  comparing.value = t("perf.comparing", { what: "" });
+  await perfCompare((what) => { comparing.value = what ? t("perf.comparing", { what }) : null; });
+  comparing.value = null;
+  note.value = t("perf.compared");
+}
 function record() {
   perfRecord();
   snap.value = perfSnapshot();
@@ -122,11 +129,13 @@ function record() {
       <li v-for="(i, k) in snap.inputs" :key="k" class="mono">{{ ms(i.ms) }} · {{ i.what }}</li>
       <li v-if="!snap.inputs.length" class="q" style="list-style:none">{{ t('perf.none') }}</li>
     </ol>
+    <div v-if="comparing" class="note" role="status" data-bb="perf-comparing">{{ comparing }}</div>
     <div v-if="snap.recording" class="note" data-bb="perf-recording">{{ t('perf.recording') }}</div>
     <div v-else-if="snap.record" class="note" data-bb="perf-recorded">{{ t('perf.recorded', { s: snap.record.seconds, n: snap.record.moving.n + snap.record.still.n, m: ms(snap.record.moving.median) }) }}</div>
     <label class="note" style="display:flex;gap:6px;align-items:center"><input v-model="names" type="checkbox" data-bb="perf-names">{{ t('perf.names') }}</label>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn s" type="button" :disabled="snap.recording" data-bb="perf-record" @click="record">{{ t('perf.record') }}</button>
+      <button class="btn s" type="button" :disabled="snap.recording || !!comparing" data-bb="perf-record" @click="record">{{ t('perf.record') }}</button>
+      <button class="btn s" type="button" :disabled="snap.recording || !!comparing || perfComparing()" data-bb="perf-compare" :title="t('perf.compareTitle')" @click="compare">{{ t('perf.compare') }}</button>
       <button class="btn p" type="button" data-bb="perf-copy" @click="copy">{{ t('perf.copy') }}</button>
     </div>
     <div v-if="note" class="note" role="status" data-bb="perf-note">{{ note }}</div>

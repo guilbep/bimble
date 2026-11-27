@@ -111,7 +111,7 @@ try {
   const gpuInfo = await inputAdapter(L.evalJs);
   const R = () => L.evalJs("(() => { const r = window.__bbPerf.snapshot().renderer; return { using: r.using, asked: r.asked, reason: r.reason, switchMs: r.switchMs ?? null, progress: r.progress ?? null }; })()");
   const clickAt = async (sel) => {
-    const c = await L.evalJs(`(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    const c = await L.evalJs(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
     await L.S("Input.dispatchMouseEvent", { type: "mousePressed", x: c.x, y: c.y, button: "left", buttons: 1, clickCount: 1 });
     await L.S("Input.dispatchMouseEvent", { type: "mouseReleased", x: c.x, y: c.y, button: "left", buttons: 0, clickCount: 1 });
   };
@@ -150,6 +150,20 @@ try {
   check("the palette's \"renderer webgpu\" switches to WebGPU", !!r3, JSON.stringify(r3));
   await L.evalJs("(async () => (await import('/src/perf.ts')).chooseRenderer('webgl2'))()");
   await waitFor("WebGL2 again", 30000, async () => { const r = await R(); return r.using === "WebGL2" && !r.progress ? r : null; });
+  // "Compare renderers": the same camera path on both, the copied report holds both blocks
+  await L.evalJs("(async () => { (await import('/src/dialogs/index.ts')).currentDialog.value = null; (await import('/src/panels/index.ts')).currentPanel.value = 'performance'; })()");
+  await waitFor("the Compare button", 3000, () => L.evalJs("!!document.querySelector('[data-bb=perf-compare]')"));
+  await clickAt("[data-bb=perf-compare]");
+  const busy = await waitFor("comparing", 3000, () => L.evalJs("document.querySelector('[data-bb=perf-comparing]')?.textContent ?? null")).catch(() => null);
+  check("Compare renderers starts and says what it does", !!busy, busy);
+  await waitFor("the comparison's end", 180000, () => L.evalJs("!document.querySelector('[data-bb=perf-comparing]') && !!window.__bbPerf.compared()"));
+  await L.evalJs("window.__bbPerfCopied = null, document.querySelector('[data-bb=perf-copy]').click()");
+  const rep = await waitFor("the report", 5000, () => L.evalJs("window.__bbPerfCopied"));
+  const block = rep.slice(rep.indexOf("compare renderers"));
+  console.log(block);
+  check("the copied report holds both renderers side by side (the same path)", /compare renderers \(an orbit/.test(rep) && /WebGL2\s+WebGPU/.test(block) &&
+    /moving median \/ p95\s+\S+ ms \/ \S+ ms \(n \d+\)\s+\S+ ms/.test(block) && /time to switch/.test(block) && /GPU bytes\s+[\d.]+ MB\s+[\d.]+ MB/.test(block));
+  check("after the comparison the renderer asked before is back (WebGL2)", (await R()).using === "WebGL2" || (await waitFor("WebGL2 back", 30000, async () => (await R()).using === "WebGL2").catch(() => false)));
   check("no uncaught page error", L.errors.length === 0, L.errors.join(" | "));
 } catch (e) {
   check("the run", false, e?.stack ?? String(e));

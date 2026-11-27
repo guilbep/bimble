@@ -148,6 +148,7 @@ export function perfFrame(moving: boolean, t0: number, sync: WebGL2RenderingCont
 
 function push(f: PerfFrame): void {
   frames.push(f);
+  compareRec?.push(f); // GPU2
   if (frames.length > RING) frames.splice(0, frames.length - RING);
   if (recording) recording.frames.push(f), endRecord();
   const g = window.__bbGl;
@@ -209,6 +210,68 @@ function endRecord(): void {
   perfWait(false);
 }
 export const perfRecording = (): boolean => recording !== null;
+
+// ---- GPU2: "Compare renderers": the same camera path on WebGL2, then on WebGPU (switched live), each frame waited for ----
+/** One renderer's block of a comparison. */
+export interface CompareBlock { renderer: "WebGL2" | "WebGPU"; error: string | null; switchMs: number | null; moving: FrameStats; still: FrameStats;
+  tris: number; draws: number; stillTris: number; stillDraws: number; gpuBytes: number | null; adapter: string }
+let compareRec: PerfFrame[] | null = null;
+let lastCompare: { blocks: CompareBlock[]; path: string } | null = null;
+export const perfComparing = (): boolean => comparing;
+let comparing = false;
+/** The path: COMPARE_STEPS frames turning the view by COMPARE_STEP radians each (an orbit of the current view), one an
+ *  animation frame, then COMPARE_STILL_MS still (the fill and its still frames) and COMPARE_STILL_FRAMES whole still frames;
+ *  the view turned back after. */
+const COMPARE_STEPS = 240, COMPARE_STEP = 0.0125, COMPARE_STILL_MS = 2500, COMPARE_STILL_FRAMES = 10;
+const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+const until = async (f: () => boolean, ms: number) => { const t = performance.now() + ms; while (!f() && performance.now() < t) await new Promise((r) => setTimeout(r, 50)); return f(); };
+const median = (xs: number[]) => quantile(xs, 0.5);
+export async function perfCompare(progress: (what: string) => void = () => {}): Promise<void> {
+  const g = window.__bbGl;
+  if (comparing || !g?.bench) return;
+  comparing = true;
+  perfWait(true);
+  const back = renderer.asked;
+  const blocks: CompareBlock[] = [];
+  try {
+    for (const r of ["webgl2", "webgpu"] as const) {
+      const want = r === "webgpu" ? "WebGPU" : "WebGL2";
+      progress(`${want}: switching`);
+      chooseRenderer(r);
+      const ok = await until(() => renderer.using === want && !renderer.progress && renderer.reason !== "starting…", 60000);
+      await until(() => renderer.switchMs !== null, 5000);
+      const name = renderer.using === "WebGPU" ? (renderer.adapter ? adapterNames(renderer.adapter) : "unknown") : glAdapter ? adapterNames(glAdapter) : "unknown";
+      if (!ok) { blocks.push({ renderer: want, error: renderer.reason ?? "did not start", switchMs: null, moving: stats([]), still: stats([]), tris: 0, draws: 0, stillTris: 0, stillDraws: 0, gpuBytes: null, adapter: name }); continue; }
+      const switchMs = renderer.switchMs ?? null;
+      for (let i = 0; i < 10; i++) await nextFrame(); // (settled)
+      compareRec = [];
+      for (let i = 0; i < COMPARE_STEPS; i++) {
+        if (i % 40 === 0) progress(`${want}: orbit ${Math.round((100 * i) / COMPARE_STEPS)} %`);
+        g.bench.frame(COMPARE_STEP, true);
+        await nextFrame();
+      }
+      progress(`${want}: still`);
+      await new Promise((res) => setTimeout(res, COMPARE_STILL_MS));
+      for (let i = 0; i < COMPARE_STILL_FRAMES; i++) { g.bench.frame(0, false); await nextFrame(); } // whole still frames (a small model's moving frame draws all: no fill)
+      const fs = compareRec;
+      compareRec = null;
+      g.bench.frame(-COMPARE_STEPS * COMPARE_STEP, false); // the view turned back
+      const mv = fs.filter((f) => f.moving), st = fs.filter((f) => !f.moving);
+      const snap = perfSnapshot();
+      blocks.push({ renderer: want, error: null, switchMs, moving: stats(mv), still: stats(st), tris: median(mv.map((f) => f.tris)), draws: median(mv.map((f) => f.draws)),
+        stillTris: st.length ? Math.max(...st.map((f) => f.tris)) : NaN, stillDraws: st.length ? Math.max(...st.map((f) => f.draws)) : NaN, gpuBytes: snap.gpuBytes, adapter: name });
+    }
+  } finally {
+    compareRec = null;
+    if (back === "webgl2" || back === "webgpu") chooseRenderer(back);
+    else chooseRenderer("webgl2");
+    perfWait(false);
+    comparing = false;
+  }
+  lastCompare = { blocks, path: `an orbit of the current view, ${COMPARE_STEPS} frames of ${COMPARE_STEP} rad (one an animation frame), then ${COMPARE_STILL_MS / 1000} s still and ${COMPARE_STILL_FRAMES} whole still frames` };
+  progress("");
+}
+export const perfCompared = () => lastCompare;
 
 const quantile = (xs: number[], q: number): number => {
   if (!xs.length) return NaN;
@@ -298,13 +361,27 @@ export function perfReport(names: boolean, file: string | null): string {
     L.push(`  still:  ${fline(s.record.still)}`);
     L.push(`  inputs: ${s.record.inputs.length}, slowest ${ms(s.record.inputs.length ? Math.max(...s.record.inputs.map((i) => i.ms)) : null)}`);
   }
+  if (lastCompare) { // GPU2: the two renderers side by side, the same camera path
+    const [a, b] = lastCompare.blocks, pad = (x: string) => x.padEnd(26);
+    const row = (k: string, f: (c: CompareBlock) => string) => L.push(`  ${pad(k)}${(a ? f(a) : "-").padEnd(30)}${b ? f(b) : "-"}`);
+    L.push(`compare renderers (${lastCompare.path}):`);
+    row("", (c) => c.renderer);
+    row("adapter", (c) => c.adapter.slice(0, 28));
+    row("not drawn", (c) => c.error ?? "-");
+    row("time to switch", (c) => ms(c.switchMs));
+    row("moving median / p95", (c) => `${ms(c.moving.median)} / ${ms(c.moving.p95)} (n ${c.moving.n})`);
+    row("still median / p95", (c) => `${ms(c.still.median)} / ${ms(c.still.p95)} (n ${c.still.n})`);
+    row("moving tris / draws", (c) => `${num(c.tris || 0)} / ${num(c.draws || 0)}`);
+    row("still tris / draws (max)", (c) => (Number.isFinite(c.stillTris) ? `${num(c.stillTris)} / ${num(c.stillDraws)}` : "-"));
+    row("GPU bytes", (c) => mb(c.gpuBytes));
+  }
   return L.join("\n") + "\n";
 }
 
 declare global {
   interface Window {
     /** GPU1: the performance panel's source (perf.ts), for the lab tests. */
-    __bbPerf?: { snapshot: typeof perfSnapshot; report: typeof perfReport; record: typeof perfRecord };
+    __bbPerf?: { snapshot: typeof perfSnapshot; report: typeof perfReport; record: typeof perfRecord; compare: typeof perfCompare; compared: typeof perfCompared };
   }
 }
-window.__bbPerf = { snapshot: perfSnapshot, report: perfReport, record: perfRecord };
+window.__bbPerf = { snapshot: perfSnapshot, report: perfReport, record: perfRecord, compare: perfCompare, compared: perfCompared };
