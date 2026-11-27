@@ -150,7 +150,7 @@ struct App {
     uint32_t link_gen, next_elem;
     double origin0[3];
     double core_origin[3];     /* the open scene's origin (world mm): the core's rays and boxes are relative to it */
-    int have_origin, draw_key, fitted, ids_dirty, vis_dirty;
+    int have_origin, origin_links, draw_key, fitted, ids_dirty, vis_dirty;
     uint32_t *id_slot;
     size_t id_cap;
     double load_ms_total;

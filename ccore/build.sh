@@ -346,15 +346,16 @@ release() {
             ${harden_link[@]+"${harden_link[@]}"} -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
     fi
     # NUI1 (ADR 0084): the native app `bimble` beside bimble-ccore, on Linux. NATIVE_APP=1: required (the
-    # release job); auto (default): built when SDL3 >= 3.4, FreeType and glslc are there, else said and left
+    # release job); auto (default): built when SDL3 >= 3.4 and FreeType are there (NUI3: the shaders' SPIR-V is
+    # committed, no glslc), else said and left
     # out; 0: left out.
     local native=${NATIVE_APP:-auto}
     if [[ $CC_OS == Linux && $native != 0 ]]; then
-        if [[ $native == 1 ]] || { command -v glslc > /dev/null && pkg-config --exists 'sdl3 >= 3.4.0' freetype2 2> /dev/null; }; then
+        if [[ $native == 1 ]] || pkg-config --exists 'sdl3 >= 3.4.0' freetype2 2> /dev/null; then
             step "native app bimble" native/build.sh app
             cp out/app/bimble "$stage/bimble"
         else
-            printf '  %-28s %s\n' "native app bimble" "left out: SDL3 >= 3.4, FreeType or glslc not found (NATIVE_APP=1 requires it)"
+            printf '  %-28s %s\n' "native app bimble" "left out: SDL3 >= 3.4 or FreeType not found (NATIVE_APP=1 requires it)"
         fi
     fi
     local web

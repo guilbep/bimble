@@ -73,6 +73,7 @@ static const uint32_t SPV_GATE[] =
 typedef struct nv_render R;
 static uint32_t *seen_cpu; /* per element: the last frame that showed it (seen.comp, read back) */
 static uint32_t nseen_cpu;
+static uint32_t ngrec[2]; /* the surplus records (below) */
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static float rdf(const uint8_t *p) { float v; memcpy(&v, p, 4); return v; }
 
@@ -647,7 +648,7 @@ static void bury(R *r) {
 static struct Snap {
     int read_vis, seen_planned;
     uint64_t frame, tris1;
-    uint32_t tiles1, ngates, nmap, cg, cm;
+    uint32_t tiles1, ngates, nmap, cg, cm, nseen; /* nseen: the elements the frame's seen read-back holds */
     uint64_t *gate_tris;
     uint32_t *gate_tiles;
     TMap *map;
@@ -673,6 +674,7 @@ void nv_render_remove_tileset(R *r, nv_tileset *ts) {
             T->nsets--;
             r->tl.gpu_bytes -= ts->bytes;
             SDL_WaitForGPUIdle(r->dev);
+            ngrec[0] = ngrec[1] = 0; /* NUI3: the surplus records point at tiles freed here (BIMBLE_TILES_SURPLUS crashed on a re-indexed link) */
             for (uint32_t i = 0; i < ts->nT; i++) if (ts->g[i]) ts->bytes -= ts->g[i]->bytes, nv_gtile_free(r->dev, ts->g[i]), ts->g[i] = NULL;
             ts->resident = 0;
             nv_tileset_unref(r->dev, ts);
@@ -1452,6 +1454,7 @@ void nv_tiles_snapshot(R *r, int slot) {
     nv_tiles_r *T = &r->tl;
     struct Snap *p = &snp[slot];
     p->read_vis = T->read_vis, p->seen_planned = T->seen_planned, p->frame = T->frame, p->tris1 = F.tris1, p->tiles1 = F.tiles1;
+    p->nseen = r->ncolour; /* NUI3: the colour table may grow before this frame is collected (a link added): its read-back holds this many */
     p->ngates = 0, p->nmap = 0;
     if (F.ngates > p->cg) {
         uint64_t *a2 = realloc(p->gate_tris, F.ngates * 8ull);
@@ -1501,11 +1504,11 @@ uint64_t nv_tiles_collect(R *r, int slot) {
     if (p->seen_planned && T->seen_downs[slot]) { /* the elements seen: the next frames' pass 1 */
         const uint32_t *sv = SDL_MapGPUTransferBuffer(r->dev, T->seen_downs[slot], false);
         if (sv) {
-            if (nseen_cpu < r->ncolour) {
-                uint32_t *n2 = realloc(seen_cpu, r->ncolour * 4ull);
-                if (n2) memset(n2 + nseen_cpu, 0, (r->ncolour - nseen_cpu) * 4ull), seen_cpu = n2, nseen_cpu = r->ncolour;
+            if (nseen_cpu < p->nseen) {
+                uint32_t *n2 = realloc(seen_cpu, p->nseen * 4ull);
+                if (n2) memset(n2 + nseen_cpu, 0, (p->nseen - nseen_cpu) * 4ull), seen_cpu = n2, nseen_cpu = p->nseen;
             }
-            if (seen_cpu) memcpy(seen_cpu, sv, (nseen_cpu < r->ncolour ? nseen_cpu : r->ncolour) * 4ull);
+            if (seen_cpu) memcpy(seen_cpu, sv, (nseen_cpu < p->nseen ? nseen_cpu : p->nseen) * 4ull);
             SDL_UnmapGPUTransferBuffer(r->dev, T->seen_downs[slot]);
         }
     }

@@ -37,7 +37,7 @@ void scene_reset(App *a) {
     if (a->model_ts) nv_render_remove_tileset(a->r, a->model_ts), nv_tileset_unref(a->dev, a->model_ts), a->model_ts = NULL;
     a->model_tiles = 0, a->model_ident = NULL;
     free(a->model_ids), a->model_ids = NULL, a->model_nE = 0;
-    a->have_origin = 0, a->next_elem = NV_ELEM0, a->draw_key = -1, a->fitted = 0;
+    a->have_origin = 0, a->origin_links = 0, a->next_elem = NV_ELEM0, a->draw_key = -1, a->fitted = 0;
     a->selected = 0;
     a->ids_dirty = 1;
     a->t_complete = 0, a->t_first_picture = 0;
@@ -187,15 +187,48 @@ static void submit(App *a, SLink *L, int kind) {
 static void links_sync(App *a) {
     cc_session *s = a->ses;
     nv_ses_wr(a->loader);
-    if (!a->have_origin) /* a project of links alone: the first ready link's placed origin is the scene's */
-        for (size_t i = 0; i < s->nlinks && !a->have_origin; i++) {
+    if (!a->have_origin || a->origin_links) { /* a project of links alone: the scene's origin from the links (NUI3) */
+        /* the ready links' placed origins; the origin is the one with the most triangles (else elements) of ready links within 1 km of it
+         * (a georeferenced project with one link in a local frame: the many, not the first ready; f32 positions step by
+         * distance / 2^24: 150 mm at 2,500 km). When a better one comes later (more links ready) the scene moves to it
+         * (every link re-placed, the camera shifted: the picture does not move). */
+        double O[64][3], W[64];
+        int no = 0;
+        for (size_t i = 0; i < s->nlinks && no < 64; i++) {
             if (!nv_link_ident(s, (int)i)) continue;
             double c, sn, t[3];
             cc_link_placement(s, &s->links[i], &c, &sn, t);
             const double *o = cc_link_rows(&s->links[i])->origin;
-            a->origin0[0] = c * o[0] - sn * o[1] + t[0], a->origin0[1] = sn * o[0] + c * o[1] + t[1], a->origin0[2] = o[2] + t[2];
-            a->have_origin = 1;
+            O[no][0] = c * o[0] - sn * o[1] + t[0], O[no][1] = sn * o[0] + c * o[1] + t[1], O[no][2] = o[2] + t[2];
+            double tr = (double)cc_link_triangles(&s->links[i]), ne = (double)cc_link_rows(&s->links[i])->nelements;
+            W[no++] = (tr > ne ? tr : ne) + 1; /* triangles, else elements (a link's triangles may be counted later) */
         }
+        int best = -1;
+        double bw = 0, cur = 0;
+        for (int i = 0; i < no; i++) {
+            double w = 0, wc = 0;
+            for (int k = 0; k < no; k++) {
+                double d0 = O[k][0] - O[i][0], d1 = O[k][1] - O[i][1], d2 = O[k][2] - O[i][2];
+                if (d0 * d0 + d1 * d1 + d2 * d2 < 1e12) w += W[k];
+                d0 = O[k][0] - a->origin0[0], d1 = O[k][1] - a->origin0[1], d2 = O[k][2] - a->origin0[2];
+                if (d0 * d0 + d1 * d1 + d2 * d2 < 1e12) wc += W[k];
+            }
+            if (w > bw) bw = w, best = i;
+            cur = wc;
+        }
+        if (getenv("BIMBLE_ORIGIN_DEBUG")) slog("origin: %d ready, best %d weight %.0f, here %.0f", no, best, bw, cur);
+        if (best >= 0 && !a->have_origin) {
+            memcpy(a->origin0, O[best], sizeof a->origin0), a->have_origin = 1, a->origin_links = 1;
+            slog("the scene origin: a link's placed origin (%.0f, %.0f, %.0f) mm", a->origin0[0], a->origin0[1], a->origin0[2]);
+        } else if (best >= 0 && bw > cur) { /* most of the model is elsewhere: move the scene's origin there */
+            double d[3];
+            for (int k = 0; k < 3; k++) d[k] = a->origin0[k] - O[best][k];
+            slog("the scene origin moved by (%.0f, %.0f, %.0f) mm to where most triangles are", -d[0], -d[1], -d[2]);
+            for (int i = a->nlinks - 1; i >= 0; i--) slot_drop(a, i);
+            memcpy(a->origin0, O[best], sizeof a->origin0);
+            for (int k = 0; k < 3; k++) a->cam.target[k] += d[k];
+        }
+    }
     for (int i = a->nlinks - 1; i >= 0; i--) { /* gone */
         int found = 0;
         for (size_t k = 0; k < s->nlinks; k++) if (s->links[k].uid == a->links_s[i].uid) found = 1;
@@ -227,6 +260,9 @@ static void links_sync(App *a) {
         L->uid = l->uid, L->ident = id, L->c = c, L->s = sn, L->colour = l->colour, L->visible = l->visible;
         L->proxies_gen = l->proxies_gen;
         memcpy(L->off, off, sizeof off);
+        if (fabs(off[0]) > 1e6 || fabs(off[1]) > 1e6 || fabs(off[2]) > 1e6) /* NUI3: f32 positions there step by off / 2^24 */
+            slog("link %zu: %.0f km from the scene origin: its f32 positions step by %.0f mm", k, sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]) / 1e6,
+                 sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]) / 16777216.0);
         snprintf(L->name, sizeof L->name, "%s", l->name ? l->name : "");
         L->nelem = (uint32_t)cc_link_rows(l)->nelements;
         L->elem0 = take_elems(a, L->nelem);
