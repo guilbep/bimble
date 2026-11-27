@@ -108,7 +108,11 @@ async function main() {
   // the setting off from the Settings dialog (File › Settings): nothing left out; on again
   const toggle = () => d.ev(`(async () => { const raf = () => new Promise((r) => requestAnimationFrame(r)); if (!document.querySelector('[data-bb=settings-draw-visible]')) { document.querySelector('[data-bb=quickbar-file]').click(); await raf(); await raf(); document.querySelector('[data-bb=file-menu-settings]').click(); for (let i = 0; i < 20 && !document.querySelector('[data-bb=settings-draw-visible]'); i++) await raf(); }
     const c = document.querySelector('[data-bb=settings-draw-visible]'); if (!c) return null; c.click(); for (let i = 0; i < 10; i++) await raf(); return c.checked; })()`);
-  const r1q = `(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r)); delete g.visible; b.snap(0, 0); for (let i = 0; i < 4; i++) { await raf(); b.frame(0, false); } return { used: g.vis ? g.vis.used : null, hidden: g.vis ? g.vis.hiddenTris : null, on: g.vis ? g.vis.on : null }; })()`;
+  // (frames until the state read is there: under load the new camera's pyramid comes back after more frames than 4, its
+  // fence polled each frame; on, it must come within 120 frames; off, nothing may be left out from the first frame on)
+  const r1q = `(async () => { const g = window.__bbGl, b = g.bench, raf = () => new Promise((r) => requestAnimationFrame(r)); delete g.visible; b.snap(0, 0);
+    let i = 0; for (; i < 120; i++) { await raf(); b.frame(0, false); if (i >= 3 && (!g.vis || !g.vis.on || g.vis.used)) break; }
+    return { used: g.vis ? g.vis.used : null, hidden: g.vis ? g.vis.hiddenTris : null, on: g.vis ? g.vis.on : null, why: g.vis ? g.vis.why ?? null : null, frames: i + 1 }; })()`;
   const rDef = await d.ev(r1q);
   check("VIS2: on by default: culling used, triangles left out", rDef.on === true && rDef.used === true && rDef.hidden > 0, JSON.stringify(rDef));
   const offNow = await toggle();
