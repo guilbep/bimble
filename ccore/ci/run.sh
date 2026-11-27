@@ -21,7 +21,8 @@
 #   full  fast, the lab suites, then the rest of unit: every suite once (test/native_app_test.mjs among
 #         them: it says "skipped" without SDL3 >= 3.4 or a Vulkan device).
 #   native  the native app `bimble` (ticket NUI1, ADR 0084; the job ccore-native): its third parties
-#         checked (native/deps.sh --check), the shell's data against the TypeScript sources, build.sh
+#         checked (native/deps.sh --check), the shaders' committed SPIR-V against their sources (native/build.sh
+#         shaders --check), the shell's data against the TypeScript sources, build.sh
 #         native-app, then test/native_app_test.mjs with CCORE_NATIVE_REQUIRED=1 (no skip: a missing
 #         SDL3 or Vulkan device fails), and the same under ASan and UBSan (native/build.sh asan).
 #   clang for a machine with neither tcc nor wasm-ld (macOS, ticket MAC1, the job ccore-macos):
@@ -168,6 +169,7 @@ docs_checks() {
 }
 native_suites() {
     suite shell_data node ../web-ui/scripts/export-shell-data.mjs --check
+    suite native-shaders native/build.sh shaders --check
     suite build-native-app ./build.sh native-app
     suite native-deps native/deps.sh --check
     suite native_app env CCORE_NATIVE_REQUIRED=1 node test/native_app_test.mjs

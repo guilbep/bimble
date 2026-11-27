@@ -60,7 +60,9 @@ edit written (the watcher's delay is not in it); 2.1 s at 20,000 elements (`larg
 
 `bimble` is the same C core with a native 3D view (SDL3's GPU API on Vulkan) and the lab's ribbon,
 navigator and panels drawn by Dear ImGui, in one process (`ccore/native/`). It needs SDL 3.4 or newer
-and FreeType (`pkg-config sdl3 freetype2`), and `glslc` (shaderc) to build its shaders. Where SDL 3.4
+and FreeType (`pkg-config sdl3 freetype2`). Its shaders' SPIR-V is committed (`ccore/native/shaders/gen/`):
+`glslc` (shaderc) only to change a shader (the build makes the header again; `native/build.sh shaders --check`
+in `ci/run.sh native` says a header is not made from today's source). Where SDL 3.4
 is not packaged: `ccore/ci/sdl3.sh ~/.local/sdl3`, then `PKG_CONFIG_PATH=~/.local/sdl3/lib/pkgconfig`.
 
 ```sh
