@@ -116,12 +116,13 @@ try {
     await L.S("Input.dispatchMouseEvent", { type: "mouseReleased", x: c.x, y: c.y, button: "left", buttons: 0, clickCount: 1 });
   };
   /** A real click on `sel`, timed (input_time.mjs): the page's part is the switch's label pressed and the chip's; presented: the
-   *  first frame after it from either renderer (the picture never blank: WebGL2's stays while WebGPU gets ready). */
+   *  first frame of the renderer asked, or the progress line while it gets ready (WebGL2's picture stays: never blank). */
   const timedSwitch = async (sel, to) => {
     const f0 = await L.evalJs("window.__bbGl.frames");
     await L.evalJs(watchSource({ kind: "pointerdown",
       page: `document.querySelector('[data-bb=perf-switch-${to}]')?.getAttribute('aria-pressed') === 'true' && /${to === "webgpu" ? "WebG(PU|L2\\*)" : "WebGL2"}/.test(document.querySelector('[data-bb=status-renderer]')?.textContent ?? '')`,
-      presented: `window.__bbGl.frames > ${f0}` }));
+      // presented: the first frame drawn by the renderer asked, or the progress line while it gets ready (the old picture stays)
+      presented: `(window.__bbGl.frames > ${f0} && window.__bbPerf.snapshot().renderer.using === ${JSON.stringify(to === "webgpu" ? "WebGPU" : "WebGL2")}) || !!document.querySelector('[data-bb=perf-progress]')` }));
     await clickAt(sel);
     return verdict(await readTimes(L.evalJs), gpuInfo);
   };

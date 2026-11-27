@@ -5,7 +5,7 @@ import { lang, setLang, t, type Lang } from "../i18n";
 import { page } from "../pages";
 import { dialog } from "../dialogs";
 import { panel, currentPanel } from "../panels";
-import { gpuSide, howToWebgpu, renderer, toggleRenderer } from "../perf"; // GPU2: the renderer chip
+import { gpuSide, howToWebgpu, renderer, toggleRenderer, warmRenderer } from "../perf"; // GPU2: the renderer chip
 /** GPU2: the chip's title: the renderer, and what to do when WebGPU was asked and has no adapter. */
 const chipTitle = (): string => { const h = renderer.asked === "webgpu" && renderer.using !== "WebGPU" ? howToWebgpu(renderer.reason) : null; return `${t("perf.chipTitle", { what: renderer.using })}${h ? ` \u2014 ${t(h)}` : ""}`; };
 
@@ -95,7 +95,7 @@ const chips = (): Chip[] => {
           d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/></svg><span class="pft">{{ t('perf.open') }}</span></button>
       <!-- GPU2: the renderer drawing now, one click from the other (live; the performance panel says more) -->
       <button type="button" class="pf rc" data-bb="status-renderer" :aria-pressed="gpuSide()" :title="chipTitle()"
-        :aria-label="chipTitle()" @click="toggleRenderer()">{{ renderer.using }}<span v-if="renderer.progress || (renderer.asked === 'webgpu' && renderer.using !== 'WebGPU')" class="rx" aria-hidden="true">*</span></button>
+        :aria-label="chipTitle()" @pointerenter="warmRenderer()" @click="toggleRenderer()">{{ renderer.using }}<span v-if="renderer.progress || (renderer.asked === 'webgpu' && renderer.using !== 'WebGPU')" class="rx" aria-hidden="true">*</span></button>
       <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
         <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
           :aria-pressed="lang === l" :lang="l" :title="t(l === 'fr' ? 'status.langFr' : 'status.langEn')"

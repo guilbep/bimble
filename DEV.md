@@ -257,6 +257,7 @@ themselves. Any of them on the GPU:
 ```sh
 LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_first_input.mjs     # input_time.mjs then asserts 200 ms presented
 LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_webgpu.mjs          # the real adapter accepted, pictures = WebGL2's
+LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_webgpu_links.mjs    # GPU2: six links, WebGPU = WebGL2 in 7 states, 10 live switches
 LAB_GPU=vulkan node ccore/tools/frames.mjs --force --models fixture,heavy,large                 # WebGL2: the real-GPU section of results/frames.md
 LAB_GPU=vulkan node ccore/tools/frames.mjs --force --models fixture,heavy,large --renderer webgpu
 LAB_GPU=vulkan HOST_BIN=$PWD/ccore/out/native/bimble-ccore node ccore/tools/frames.mjs --links 17  # a row of that section

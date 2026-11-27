@@ -13,7 +13,7 @@
 // device is kept between switches (no probe, no fill-rate test the second time), dropped when lost.
 import { watch } from "vue";
 import { userSettings } from "../bimble";
-import { chosenRenderer, onRendererChosen, renderer as perfRenderer } from "../perf";
+import { chosenRenderer, onRendererChosen, onWarmRenderer, renderer as perfRenderer } from "../perf";
 import type { Proxies } from "../gl/proxies";
 import type { Batch, ModelXf } from "../gl/cull";
 
@@ -159,6 +159,27 @@ export function gpuSwitch(canvas: HTMLCanvasElement, stats: object, set: (r: Gpu
     r.destroy(true);
     if (g === gen) perfRenderer.using = "WebGL2";
   };
+  const soft = new URLSearchParams(location.search).get("gpuSoftware") === "1";
+  const lost = (why: string) => {
+    kept = null;
+    if (!cur) return;
+    console.warn("webgpu:", why, "- back to WebGL2");
+    const r = cur;
+    cur = null, set(null);
+    view?.().models?.recover(); // (WebGL2's buffers were emptied: the open model again from the page, the links asked back)
+    r.destroy(false);
+    perfRenderer.using = "WebGL2", perfRenderer.reason = why, perfRenderer.progress = null;
+  };
+  /** The checked device (kept between switches; a refusal is asked again next time). */
+  const open = async () => {
+    const { openDevice } = await import("./device");
+    kept ??= openDevice(soft, lost);
+    const d = await kept;
+    if ("reason" in d) kept = null;
+    return d;
+  };
+  // GPU2: the device checked ahead (the panel opened, the chip hovered): the switch then skips the probe and the fill rate
+  onWarmRenderer(() => { if (!kept && !cur) void open().catch(() => undefined); });
   const apply = async () => {
     const a = asked();
     perfRenderer.asked = a;
@@ -174,21 +195,10 @@ export function gpuSwitch(canvas: HTMLCanvasElement, stats: object, set: (r: Gpu
     }
     if (cur) { perfRenderer.reason = null; return; } // (WebGPU asked again while handing back: kept)
     perfRenderer.reason = "starting…";
-    const soft = new URLSearchParams(location.search).get("gpuSoftware") === "1";
+    perfRenderer.progress = "WebGPU: checking the adapter (WebGL2 draws meanwhile)";
     try {
-      const { openDevice } = await import("./device");
-      kept ??= openDevice(soft, (why) => {
-        kept = null;
-        if (!cur) return;
-        console.warn("webgpu:", why, "- back to WebGL2");
-        const r = cur;
-        cur = null, set(null);
-        view?.().models?.recover(); // (WebGL2's buffers were emptied: the open model again from the page, the links asked back)
-        r.destroy(false);
-        perfRenderer.using = "WebGL2", perfRenderer.reason = why, perfRenderer.progress = null;
-      });
-      const d = await kept;
-      if ("reason" in d) kept = null;
+      const d = await open();
+      if (perfRenderer.progress?.startsWith("WebGPU: checking")) perfRenderer.progress = null;
       if (g !== gen) return;
       if ("reason" in d) { perfRenderer.reason = a === "auto" ? `automatic: ${d.reason}` : d.reason; console.info("webgpu:", d.reason, "- WebGL2 draws"); return; } // (said in the performance panel)
       if (a === "auto" && d.adapter.software) { // GPU2: automatic never takes a software adapter (a fallback, a CPU's name, a CPU's fill rate)
@@ -210,6 +220,7 @@ export function gpuSwitch(canvas: HTMLCanvasElement, stats: object, set: (r: Gpu
       perfRenderer.adapter = d.adapter;
       set(cur); // (the viewport's seam prepares it, WebGL2 drawing meanwhile, then says WebGPU is in use)
     } catch (e) {
+      perfRenderer.progress = null;
       perfRenderer.using = "WebGL2", perfRenderer.reason = `the WebGPU renderer failed to start: ${e instanceof Error ? e.message : String(e)}`;
       console.warn("webgpu:", perfRenderer.reason);
       if (cur) { const r = cur; cur = null, set(null); view?.().models?.recover(); r.destroy(true); }

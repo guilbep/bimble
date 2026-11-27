@@ -11,8 +11,8 @@
 // Inputs: a press, a drag move, a wheel step, a click or a key on the viewport; its time to the end
 // of the next frame drawn (dropped when no frame comes within 2 s: it changed nothing on screen).
 // Nothing here is sent anywhere; file names leave the page only in the copied text, when asked.
+import { shallowReactive } from "vue";
 import { linkGpu } from "./gl/linkmem"; // SIZE3 (C)
-import { reactive } from "vue";
 import { setSettings, userSettings } from "./bimble";
 
 /** One frame drawn: when it started (performance.now), what it took (ms), moving or still, what it drew. */
@@ -51,8 +51,9 @@ let waiters = 0;
 let recording: { until: number; frames: PerfFrame[]; inputs: PerfInput[] } | null = null;
 let lastRecord: { seconds: number; frames: PerfFrame[]; inputs: PerfInput[] } | null = null;
 
-/** Reactive (GPU2): the status bar's chip and the panel's switch follow it at once. */
-export const renderer: PerfRenderer = reactive<PerfRenderer>({ asked: "auto", using: "WebGL2", adapter: null, reason: null, gpuCull: false,
+/** Reactive (GPU2): the status bar's chip and the panel's switch follow it at once. Shallow: the adapter stays a plain
+ *  object (a page's proxy reads back as {} through CDP's returnByValue: frames.mjs and the lab tests read it). */
+export const renderer: PerfRenderer = shallowReactive<PerfRenderer>({ asked: "auto", using: "WebGL2", adapter: null, reason: null, gpuCull: false,
   progress: null, switchTo: null, switchAt: null, switchMs: null });
 
 // ---- GPU2: the live toggle (the panel's switch, the status bar's chip, the palette's "renderer webgpu|webgl2"). Here,
@@ -74,6 +75,10 @@ export function chooseRenderer(a: "webgl2" | "webgpu"): string | null {
   for (const f of appliers) f();
   return err;
 }
+const warmers = new Set<() => void>();
+export const onWarmRenderer = (f: () => void): void => { warmers.add(f); };
+/** The WebGPU device checked ahead of a switch (the panel opened, the chip hovered): no renderer made, no buffer. */
+export const warmRenderer = (): void => { for (const f of warmers) f(); };
 /** The toggle's other side: WebGPU when WebGL2 was asked (or automatic), else WebGL2. */
 export const toggleRenderer = (): string | null => chooseRenderer(gpuSide() ? "webgl2" : "webgpu");
 /** The toggle's side: WebGPU asked, or automatic and WebGPU drawing. */
@@ -304,7 +309,7 @@ export function perfSnapshot(): PerfSnapshot {
   const cc = (window as unknown as { __bbCcore?: { memBytes?: () => number } }).__bbCcore;
   const c = document.getElementById("bimble") as HTMLCanvasElement | null;
   return {
-    renderer, adapter: renderer.using === "WebGPU" ? renderer.adapter : glAdapter,
+    renderer: { ...renderer }, adapter: renderer.using === "WebGPU" ? renderer.adapter : glAdapter, // (a plain copy, not the reactive object)
     moving: stats(frames.filter((f) => f.moving)), still: stats(frames.filter((f) => !f.moving)), synced: frames.some((f) => f.synced),
     tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, batches: g?.moving?.batches ?? 0, culled: g?.moving?.culled ?? 0,
     proxiesDrawn: g?.proxies?.drawnCells ?? 0, proxyTris: g?.proxies?.drawnTris ?? 0,

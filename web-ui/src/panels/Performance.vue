@@ -12,7 +12,7 @@ import { onMounted, onUnmounted, shallowRef } from "vue";
 import { state } from "../bimble";
 import { t } from "../i18n";
 import { currentPanel } from ".";
-import { adapterNames, chooseRenderer, gpuSide, howToWebgpu, perfCompare, perfComparing, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
+import { adapterNames, chooseRenderer, gpuSide, warmRenderer, howToWebgpu, perfCompare, perfComparing, perfRecord, perfReport, perfSnapshot, perfWait, renderer, whyPlain, type FrameStats, type PerfSnapshot } from "../perf";
 import { linkGpu } from "../gl/linkmem"; // SIZE3 (C)
 
 const snap = shallowRef<PerfSnapshot>(perfSnapshot());
@@ -20,7 +20,7 @@ const names = shallowRef(false);
 const note = shallowRef<string | null>(null);
 const shownReport = shallowRef<string | null>(null);
 let timer = 0;
-onMounted(() => { perfWait(true); timer = window.setInterval(() => { snap.value = perfSnapshot(); }, 500); });
+onMounted(() => { perfWait(true); warmRenderer(); /* GPU2: the device checked ahead of the switch */ timer = window.setInterval(() => { snap.value = perfSnapshot(); }, 500); });
 onUnmounted(() => { perfWait(false); clearInterval(timer); });
 
 const ms = (x: number | null) => (x === null || !Number.isFinite(x) ? "–" : `${x < 10 ? x.toFixed(1) : Math.round(x)} ms`);
