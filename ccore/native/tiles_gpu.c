@@ -77,15 +77,19 @@ typedef struct nv_render R;
 static uint32_t *seen_cpu; /* per element: the last frame that showed it (seen.comp, read back) */
 static uint32_t nseen_cpu;
 static uint32_t ngrec[2]; /* the surplus records (below) */
+static SDL_GPUBuffer *tres;           /* NUI3: the tests' answers (ttest.comp res[]) */
+static uint32_t tres_cap;
+static SDL_GPUTransferBuffer *tres_down[2];
+static uint32_t tres_down_cap[2];
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static float rdf(const uint8_t *p) { float v; memcpy(&v, p, 4); return v; }
 
 /* ---- GPU tiles ---- */
 /* NUI3: each element's test box (ob: centre, then three half axes), the tighter of its world box and its own placed box
  * (a long diagonal member's world box is much larger than itself) */
-typedef struct { float c[3], r; uint32_t first, n, elem; float lo[3], hi[3]; float ob[12]; } GElem; /* a merged element: its sphere, its indices, its number, its box */
+typedef struct { float c[3], r; uint32_t first, n, elem; float lo[3], hi[3]; float ob[12]; uint32_t cold; } GElem; /* a merged element: its sphere, its indices, its number, its box */
 typedef struct { uint32_t first, n, firstf, copy0, ncopy, nmir; uint8_t closed; } GShape; /* firstf: reversed indices (~0 none) */
-typedef struct { float c[3], r; uint32_t plc, elem; float lo[3], hi[3]; float ob[12]; } GCopy;
+typedef struct { float c[3], r; uint32_t plc, elem; float lo[3], hi[3]; float ob[12]; uint32_t cold; } GCopy; /* cold: the frame its own test said hidden (NUI3) */
 /* the test box: the placed local box (m: columns x, y, z, t; llo/lhi: the local box) when its volume is under 0.9 of the
  * world box's, else the world box; 1 mm wider either way (f32 slack) */
 static void test_box(float ob[12], const float m[12], const float llo[3], const float lhi[3], const float wlo[3], const float whi[3]) {
@@ -771,6 +775,7 @@ static struct Snap {
     int read_vis, seen_planned;
     uint64_t frame, tris1;
     uint32_t tiles1, ngates, nmap, cg, cm, nseen; /* nseen: the elements the frame's seen read-back holds */
+    uint32_t **tel, ntel, ctel; /* NUI3: per test, the element's cold field */
     uint64_t *gate_tris;
     uint32_t *gate_tiles;
     TMap *map;
@@ -803,6 +808,7 @@ void nv_render_remove_tileset(R *r, nv_tileset *ts) {
             r->tl.gpu_bytes -= ts->bytes;
             SDL_WaitForGPUIdle(r->dev);
             ngrec[0] = ngrec[1] = 0; /* NUI3: the surplus records point at tiles freed here (BIMBLE_TILES_SURPLUS crashed on a re-indexed link) */
+            snp[0].ntel = snp[1].ntel = 0; /* and the tests' cold fields */
             for (uint32_t i = 0; i < ts->nT; i++) if (ts->g[i]) ts->bytes -= ts->g[i]->bytes, nv_gtile_free(r->dev, ts->g[i]), ts->g[i] = NULL;
             ts->resident = 0;
             nv_tileset_unref(r->dev, ts);
@@ -875,7 +881,7 @@ void nv_tiles_init(R *r) {
     T->hiz0 = cpipe(r, SPV_HIZ0, sizeof SPV_HIZ0, 1, 0, 0, 1, 0, 8, 8);
     T->hizn = cpipe(r, SPV_HIZN, sizeof SPV_HIZN, 0, 0, 0, 1, 0, 8, 8);
     T->hizn2 = cpipe(r, SPV_HIZN2, sizeof SPV_HIZN2, 0, 0, 0, 1, 0, 8, 8);
-    T->test = cpipe(r, SPV_TTEST, sizeof SPV_TTEST, 1, 0, 1, 0, 1, 64, 1); /* NUI3: the pyramid by a sampler */
+    T->test = cpipe(r, SPV_TTEST, sizeof SPV_TTEST, 1, 0, 1, 0, 2, 64, 1); /* NUI3: the pyramid by a sampler; the tests' answers */
     T->gate = cpipe(r, SPV_GATE, sizeof SPV_GATE, 0, 0, 3, 0, 1, 64, 1);
     T->seen = cpipe(r, SPV_SEEN, sizeof SPV_SEEN, 1, 0, 0, 0, 1, 8, 8);
     if (!T->face_w_back || !T->face_i_back || !T->proxy || !T->hiz0 || !T->hizn || !T->test || !T->gate)
@@ -897,6 +903,9 @@ void nv_tiles_release(R *r) {
     SDL_GPUComputePipeline *cp[] = {T->hiz0, T->hizn, T->test, T->gate, T->seen, T->hizn2};
     for (int k = 0; k < 6; k++) if (cp[k]) SDL_ReleaseGPUComputePipeline(d, cp[k]);
     if (T->seen_buf) SDL_ReleaseGPUBuffer(d, T->seen_buf);
+    if (tres) SDL_ReleaseGPUBuffer(d, tres), tres = NULL, tres_cap = 0;
+    for (int k = 0; k < 2; k++) if (tres_down[k]) SDL_ReleaseGPUTransferBuffer(d, tres_down[k]), tres_down[k] = NULL, tres_down_cap[k] = 0;
+    snp[0].ntel = snp[1].ntel = 0;
     for (int k = 0; k < 2; k++) if (T->seen_downs[k]) SDL_ReleaseGPUTransferBuffer(d, T->seen_downs[k]);
     free(seen_cpu), seen_cpu = NULL, nseen_cpu = 0;
     SDL_GPUBuffer *b[] = {T->cmd_a, T->cmd_b, T->gidx, T->gates, T->tests, T->vis, T->inst};
@@ -964,6 +973,7 @@ static struct {
     uint32_t *gate_tiles, cgates;
     uint64_t tris1;
     uint32_t tiles1, tiles_cold;
+    uint32_t **tel, ctel; /* NUI3: per test, the element's cold field (NULL: a tile's test) */
     int oom;
 } F;
 
@@ -1106,6 +1116,13 @@ static int cur_slot;
 static Cut slot_cut[2];
 static int seen_last(uint32_t e, uint64_t fr) { (void)fr; return e < nseen_cpu && lastc && seen_cpu[e] == (uint32_t)lastc; }
 static Test *new_test(uint32_t gate) {
+    if (F.ntest >= F.ctel) { /* the elements' cold fields, in step with the tests */
+        uint32_t nc = F.ctel ? F.ctel * 2 : 4096;
+        uint32_t **n2 = realloc(F.tel, nc * sizeof *n2);
+        if (!n2) { F.oom = 1; return NULL; }
+        F.tel = n2, F.ctel = nc;
+    }
+    F.tel[F.ntest] = NULL;
     GROW(F.test, F.ntest, F.ctest, 1);
     if (F.oom) return NULL;
     Test *te = &F.test[F.ntest++];
@@ -1146,10 +1163,16 @@ void nv_tiles_test_mode(int mode, int split, int span, int split_px) {
     test_split = split < 1 ? 1 : split > 8 ? 8 : (uint32_t)split;
     test_span = span < 2 ? 2 : span > 16 ? 16 : (uint32_t)span;
 }
-static void elem_test(uint32_t gate, const float lo[3], const float hi[3], const float ob[12]) {
+static void elem_test(uint32_t gate, const float lo[3], const float hi[3], const float ob[12], uint32_t *cold) {
     if (TMODE >= 2) test_ob(gate, ob);
     else test_world(gate, lo, hi);
+    if (!F.oom && F.ntest) F.tel[F.ntest - 1] = cold;
 }
+/* NUI3 occlusion_cold: an element its own test found hidden in the last frame collected waits under one gate for all such
+ * elements of its leaf (each still tested by its own box: the gate is theirs or-ed, exact): one command a run of them, not
+ * one a group; found visible, they are drawn and their own tests decide from the next frame on */
+static int cold_on = 1, cold_now; /* cold_now: this frame (occlusion_cold 1: still frames only, 2: every frame) */
+void nv_tiles_cold(int on) { cold_on = on < 0 ? 0 : on > 2 ? 2 : on; }
 static void grow_box(float lo[3], float hi[3], const float a[3], const float b[3]) { /* an element's box, 1 mm wider (f32 slack) */
     for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], a[d] - 1), hi[d] = fmaxf(hi[d], b[d] + 1);
 }
@@ -1166,11 +1189,23 @@ static void emit_leaf_elems(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *
     for (int grp = 0; grp < 2; grp++) {
         uint32_t a = back ? (grp ? g->nclosed : 0) : (grp ? g->nel : 0), b = back ? (grp ? g->nel : g->nclosed) : g->nel;
         int kind = back && grp == 0 ? K_MERGED_BACK : K_MERGED;
-        uint32_t p0 = 0, pn = 0, r0 = 0, rn = 0, gn = 0, gate = 0;
-        uint64_t gt = 0;
+        uint32_t p0 = 0, pn = 0, r0 = 0, rn = 0, gn = 0, gate = 0, c0 = 0, cn = 0, cgate = 0;
+        uint64_t gt = 0, ct = 0;
         for (uint32_t i = a; i < b; i++) {
-            const GElem *e = &g->el[i];
+            GElem *e = &g->el[i];
             if (small(cut, e->c, e->r)) continue;
+            if (cold_now && lastc && e->cold == (uint32_t)lastc && !seen_last(e->elem, fr)) { /* NUI3: hidden last frame: the cold run */
+                if (!cgate) cgate = new_gate();
+                elem_test(cgate, e->lo, e->hi, e->ob, &e->cold);
+                grec_add(cur_slot, g, i, i + 1, -1, 2, cgate);
+                if (cn && c0 + cn == e->first) cn += e->n;
+                else {
+                    if (cn) add_cmd(2, pgi, kind, cn, 1, g->off[B_I] + c0, (int32_t)g->off[B_V], 0, cgate), ct += cn / 3;
+                    c0 = e->first, cn = e->n;
+                }
+                if (F.oom) return;
+                continue;
+            }
             if (seen_last(e->elem, fr)) { /* pass 1, ungated: runs joined */
                 grec_add(cur_slot, g, i, i + 1, -1, 1, 0);
                 if (pn && p0 + pn == e->first) pn += e->n;
@@ -1181,7 +1216,7 @@ static void emit_leaf_elems(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *
                 continue;
             }
             if (!gn) gate = new_gate(), gt = 0;
-            elem_test(gate, e->lo, e->hi, e->ob);
+            elem_test(gate, e->lo, e->hi, e->ob, &e->cold);
             grec_add(cur_slot, g, i, i + 1, -1, 2, gate);
             if (rn && r0 + rn == e->first) rn += e->n;
             else {
@@ -1199,6 +1234,8 @@ static void emit_leaf_elems(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *
             if (rn) add_cmd(2, pgi, kind, rn, 1, g->off[B_I] + r0, (int32_t)g->off[B_V], 0, gate), gt += rn / 3;
             F.gate_tris[gate] += gt;
         }
+        if (cn) add_cmd(2, pgi, kind, cn, 1, g->off[B_I] + c0, (int32_t)g->off[B_V], 0, cgate), ct += cn / 3;
+        if (cgate) F.gate_tris[cgate] += ct;
     }
     for (uint32_t s2 = 0; s2 < g->nshape; s2++) {
         const GShape *sh = &g->sh[s2];
@@ -1214,12 +1251,26 @@ static void emit_leaf_elems(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *
                 if (!small(cut, g->cp[k].c, g->cp[k].r) && seen_last(g->cp[k].elem, fr)) F.inst[F.ninst++] = g->off[B_PL] + g->cp[k].plc, grec_add(cur_slot, g, k, k + 1, (int32_t)s2, 1, 0);
             if (F.ninst > i0) add_cmd(1, pgi, kind, sh->n, F.ninst - i0, g->off[B_I] + first, (int32_t)g->off[B_SV], i0, 0), F.tris1 += (uint64_t)sh->n / 3 * (F.ninst - i0);
             uint32_t gn = 0, gate = 0;
+            if (cold_now && lastc) { /* NUI3: the copies hidden last frame: one command under one gate */
+                uint32_t cg = 0, ci0 = F.ninst;
+                for (uint32_t k = a; k < b; k++) {
+                    GCopy *cp = &g->cp[k];
+                    if (cp->cold != (uint32_t)lastc || small(cut, cp->c, cp->r) || seen_last(cp->elem, fr)) continue;
+                    if (!cg) cg = new_gate();
+                    F.inst[F.ninst++] = g->off[B_PL] + cp->plc;
+                    elem_test(cg, cp->lo, cp->hi, cp->ob, &cp->cold);
+                    grec_add(cur_slot, g, k, k + 1, (int32_t)s2, 2, cg);
+                    if (F.oom) return;
+                }
+                if (cg) add_cmd(2, pgi, kind, sh->n, F.ninst - ci0, g->off[B_I] + first, (int32_t)g->off[B_SV], ci0, cg), F.gate_tris[cg] += (uint64_t)sh->n / 3 * (F.ninst - ci0);
+            }
             i0 = F.ninst;
             for (uint32_t k = a; k < b; k++) { /* pass 2: the others in groups, each copy tested, the group's gate shared */
                 if (small(cut, g->cp[k].c, g->cp[k].r) || seen_last(g->cp[k].elem, fr)) continue;
+                if (cold_now && lastc && g->cp[k].cold == (uint32_t)lastc) continue; /* in the cold command above */
                 if (!gn) gate = new_gate(), i0 = F.ninst;
                 F.inst[F.ninst++] = g->off[B_PL] + g->cp[k].plc;
-                elem_test(gate, g->cp[k].lo, g->cp[k].hi, g->cp[k].ob);
+                elem_test(gate, g->cp[k].lo, g->cp[k].hi, g->cp[k].ob, &g->cp[k].cold);
                 grec_add(cur_slot, g, k, k + 1, (int32_t)s2, 2, gate);
                 if (++gn == CLN) add_cmd(2, pgi, kind, sh->n, gn, g->off[B_I] + first, (int32_t)g->off[B_SV], i0, gate), F.gate_tris[gate] += (uint64_t)sh->n / 3 * gn, gn = 0;
                 if (F.oom) return;
@@ -1365,6 +1416,7 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
     T->ntests = 0, T->read_vis = 0, T->read_vis_planned = 0, T->nmap = 0, T->seen_planned = 0;
     if (!T->nsets) return 0;
     int ref = T->o.reference, occl = T->o.occlusion && !ref && T->test && T->gate && T->hiz0 && T->hiz;
+    cold_now = cold_on == 2 || (cold_on == 1 && !T->o.tri_budget); /* NUI3: moving frames (a budget) keep their small groups */
     if (!ref) T->frame++;
     uint64_t fr = T->frame;
     new_gate(); /* gate 0: always */
@@ -1528,6 +1580,7 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
         buf_room(r, &T->gates, &T->cap_tests, bga + 4, CR | CW) || buf_room(r, &T->tests, &T->cap_inst, bt + 48, CR)) return 0;
     static uint32_t cap_b, cap_vis, cap_in;
     if (buf_room(r, &T->cmd_b, &cap_b, bc + 20, IND | CW) || buf_room(r, &T->inst, &cap_in, bi + 4, USE_S)) return 0;
+    if (buf_room(r, &tres, &tres_cap, F.ntest * 4 + 4, CR | CW)) return 0; /* NUI3: the tests' answers */
     (void)cap_vis;
     uint32_t total = bc + bg + bga + bt + bi + 80;
     if (!T->up || T->up_cap < total) {
@@ -1655,9 +1708,9 @@ void nv_tiles_occlusion(R *r, SDL_GPUCommandBuffer *cmd) {
     tu.n[0] = (int)F.ntest, tu.n[1] = (int)T->hiz_levels, tu.n[2] = (int)T->lv[0][1], tu.n[3] = (int)T->lv[0][2];
     tu.o[0] = (int)test_split, tu.o[1] = (int)test_split_px, tu.o[2] = (int)test_span, tu.o[3] = 0;
     for (int l = 0; l < 16; l++) tu.lv[l][0] = (int)T->lv[l][0], tu.lv[l][1] = (int)T->lv[l][1], tu.lv[l][2] = (int)T->lv[l][2], tu.lv[l][3] = 0;
-    SDL_GPUStorageBufferReadWriteBinding gw = {.buffer = T->gates, .cycle = false};
-    if (!cs_skipped(4)) {
-    p = SDL_BeginGPUComputePass(cmd, NULL, 0, &gw, 1);
+    SDL_GPUStorageBufferReadWriteBinding gw[2] = {{.buffer = T->gates, .cycle = false}, {.buffer = tres, .cycle = false}};
+    if (!cs_skipped(4) && tres) {
+    p = SDL_BeginGPUComputePass(cmd, NULL, 0, gw, 2);
     SDL_BindGPUComputePipeline(p, T->test);
     SDL_GPUTextureSamplerBinding hb = {.texture = T->hiz, .sampler = r->nearest};
     SDL_BindGPUComputeSamplers(p, 0, &hb, 1);
@@ -1729,6 +1782,20 @@ void nv_tiles_readback(R *r, SDL_GPUCopyPass *cp) {
     SDL_GPUBufferRegion src = {.buffer = T->gates, .offset = 0, .size = need};
     SDL_GPUTransferBufferLocation dst = {.transfer_buffer = T->down, .offset = 0};
     SDL_DownloadFromGPUBuffer(cp, &src, &dst);
+    if (cold_on && tres && F.ntest) { /* NUI3: the tests' answers, this slot's */
+        uint32_t nb = F.ntest * 4;
+        if (!tres_down[r->slot] || tres_down_cap[r->slot] < nb) {
+            if (tres_down[r->slot]) SDL_ReleaseGPUTransferBuffer(r->dev, tres_down[r->slot]);
+            SDL_GPUTransferBufferCreateInfo tci = {.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = nb * 2};
+            tres_down[r->slot] = SDL_CreateGPUTransferBuffer(r->dev, &tci);
+            tres_down_cap[r->slot] = tres_down[r->slot] ? nb * 2 : 0;
+        }
+        if (tres_down[r->slot]) {
+            SDL_GPUBufferRegion s3 = {.buffer = tres, .offset = 0, .size = nb};
+            SDL_GPUTransferBufferLocation d3 = {.transfer_buffer = tres_down[r->slot], .offset = 0};
+            SDL_DownloadFromGPUBuffer(cp, &s3, &d3);
+        }
+    }
     if (T->seen_planned) {
         SDL_GPUBufferRegion s2 = {.buffer = T->seen_buf, .offset = 0, .size = r->ncolour * 4};
         SDL_GPUTransferBufferLocation d2 = {.transfer_buffer = T->seen_down, .offset = 0};
@@ -1756,6 +1823,14 @@ void nv_tiles_snapshot(R *r, int slot) {
         p->map = m2, p->cm = T->nmap;
     }
     if (F.ngates) memcpy(p->gate_tris, F.gate_tris, F.ngates * 8ull), memcpy(p->gate_tiles, F.gate_tiles, F.ngates * 4ull);
+    p->ntel = 0;
+    if (cold_on && F.ntest && tres_down[slot]) {
+        if (F.ntest > p->ctel) {
+            uint32_t **t2 = realloc(p->tel, F.ntest * sizeof *t2);
+            if (t2) p->tel = t2, p->ctel = F.ntest;
+        }
+        if (p->ctel >= F.ntest) memcpy(p->tel, F.tel, F.ntest * sizeof *p->tel), p->ntel = F.ntest;
+    }
     if (T->nmap) memcpy(p->map, T->map, T->nmap * sizeof *p->map);
     p->ngates = F.ngates, p->nmap = T->nmap;
 }
@@ -1788,6 +1863,15 @@ uint64_t nv_tiles_collect(R *r, int slot) {
             nv_tileset *ts = T->sets[si];
             for (uint32_t k = 0; k < ts->nsel; k++) ts->tested[ts->sel[k]] = ts->vis[ts->sel[k]] = p->frame;
         }
+    if (p->ntel && p->read_vis && tres_down[slot]) { /* NUI3: each element its own test found hidden: cold from now */
+        const uint32_t *res = SDL_MapGPUTransferBuffer(r->dev, tres_down[slot], false);
+        if (res) {
+            for (uint32_t i = 0; i < p->ntel; i++)
+                if (p->tel[i]) *p->tel[i] = res[i] ? 0u : (uint32_t)p->frame;
+            SDL_UnmapGPUTransferBuffer(r->dev, tres_down[slot]);
+        }
+        p->ntel = 0;
+    }
     if (p->seen_planned && T->seen_downs[slot]) { /* the elements seen: the next frames' pass 1 */
         const uint32_t *sv = SDL_MapGPUTransferBuffer(r->dev, T->seen_downs[slot], false);
         if (sv) {
