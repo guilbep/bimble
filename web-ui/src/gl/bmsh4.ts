@@ -138,7 +138,14 @@ function decoder(): Worker | null {
     worker = typeof Worker === "undefined" ? null : new Worker(new URL("./bmsh4.worker.ts", import.meta.url), { type: "module" });
     if (worker) {
       worker.onmessage = (e: MessageEvent) => {
-        const m = e.data as { id: number; out?: ArrayBuffer; error?: string };
+        const m = e.data as { id: number; out?: ArrayBuffer; rows?: Bmsh4Rows; error?: string };
+        const r = rowsPending.get(m.id); // SIZE3: a rows answer
+        if (r) {
+          rowsPending.delete(m.id);
+          if (m.rows) r.res(m.rows);
+          else r.rej(new Error(m.error ?? "BMSH 4: the decoder failed"));
+          return;
+        }
         const p = pending.get(m.id);
         pending.delete(m.id);
         if (!p) return;
@@ -147,7 +154,8 @@ function decoder(): Worker | null {
       };
       worker.onerror = () => { // a worker that cannot start (a blocked script): here from now on
         for (const p of pending.values()) p.rej(new Error("BMSH 4: the decoder failed"));
-        pending.clear();
+        for (const p of rowsPending.values()) p.rej(new Error("BMSH 4: the decoder failed"));
+        pending.clear(), rowsPending.clear();
         worker?.terminate();
         worker = null;
       };
@@ -178,3 +186,131 @@ export async function bmsh4Decode(ab: ArrayBuffer, maxBytes = 2 ** 31): Promise<
     setTimeout(() => { t0 = performance.now(); res(); }, 0);
   }));
 }
+
+// ---- SIZE3 (B): a link's rows and boxes without its arrays ----
+/** What a link's mesh stands on without its heavy arrays (glviewport.ts dropArrays' result): its rows as parseBmsh
+ *  then bake give them (a shape of few copies baked: its own vertices appended), its placements, each element's
+ *  box (its own frame: upload's arithmetic) and the lengths its arrays would have. */
+export interface Bmsh4Rows {
+  rev: number; origin: [number, number, number]; size: number; ids: string[]; cats: Uint8Array;
+  v0: Uint32Array; nv: Uint32Array; i0: Uint32Array; ni: Uint32Array; s0: Uint32Array; ns: Uint32Array;
+  shape: Uint32Array; place: Float32Array; boxes: Float32Array; counts: { nv: number; ni: number; ns: number };
+}
+
+/** The bytes version 3 of these version 4 bytes would take (from the header only). */
+export function bmsh3Size(ab: ArrayBuffer): number {
+  const dv = new DataView(ab);
+  if (ab.byteLength < 52 || dv.getUint32(0, true) !== 0x48534d42 || dv.getUint32(4, true) !== 4) return Infinity;
+  const nE = dv.getUint32(12, true), nV = dv.getUint32(16, true), nI = dv.getUint32(20, true), nS = dv.getUint32(24, true);
+  return 52 + 48 * nE + 12 * nV + 4 * nI + 32 * nS + 52 * nE;
+}
+
+/** Version 4 bytes to their rows and boxes: each block decoded on its own into a scratch (the largest block's
+ *  size at most), never the whole mesh. `minCopies`, `minTris`: glviewport.ts's bake rule (INSTANCE_MIN_*). Throws on
+ *  damaged bytes, as bmsh4ToBmsh3. */
+export function bmsh4Rows(ab: ArrayBuffer, minCopies: number, minTris: number): Bmsh4Rows {
+  const b = new Uint8Array(ab), dv = new DataView(ab), n = ab.byteLength;
+  if (n < 52 || dv.getUint32(0, true) !== 0x48534d42 || dv.getUint32(4, true) !== 4) throw new Error("not BMSH version 4");
+  const rev = dv.getUint32(8, true), nE = dv.getUint32(12, true), nV = dv.getUint32(16, true), nI = dv.getUint32(20, true), nS = dv.getUint32(24, true);
+  if (52 + 52 * nE + 4 > n) throw new Error("BMSH 4: cut short");
+  const origin: [number, number, number] = [dv.getFloat64(28, true), dv.getFloat64(36, true), dv.getFloat64(44, true)];
+  const ids: string[] = [], cats = new Uint8Array(nE), v0 = new Uint32Array(nE), nv = new Uint32Array(nE), i0 = new Uint32Array(nE), ni = new Uint32Array(nE);
+  const s0 = new Uint32Array(nE), ns = new Uint32Array(nE), shape = new Uint32Array(nE), place = new Float32Array(12 * nE);
+  for (let e = 0, o = 52; e < nE; e++, o += 48) {
+    ids.push(String.fromCharCode(...b.subarray(o, o + 22)));
+    cats[e] = b[o + 22] ?? 7;
+    v0[e] = dv.getUint32(o + 24, true), nv[e] = dv.getUint32(o + 28, true), i0[e] = dv.getUint32(o + 32, true);
+    ni[e] = dv.getUint32(o + 36, true), s0[e] = dv.getUint32(o + 40, true), ns[e] = dv.getUint32(o + 44, true);
+    if (i0[e]! + ni[e]! > nI || v0[e]! + nv[e]! > nV || s0[e]! + ns[e]! > nS) throw new Error("BMSH row out of range");
+  }
+  const sh0 = 52 + 48 * nE;
+  let pl = sh0 + 4 * nE;
+  for (let e = 0; e < nE; e++) {
+    shape[e] = dv.getUint32(sh0 + 4 * e, true);
+    if (!shape[e]) continue;
+    if (pl + 48 > n) throw new Error("BMSH 4: cut short");
+    for (let k = 0; k < 12; k++) place[12 * e + k] = dv.getFloat32(pl + 4 * k, true);
+    pl += 48;
+  }
+  // each block's elements: an element's first vertex lies in the block that starts at or before it
+  const byV0 = Array.from({ length: nE }, (_, e) => e).sort((x, y) => v0[x]! - v0[y]! || x - y);
+  const boxes = new Float32Array(6 * nE);
+  let at = pl;
+  if (at + 4 > n) throw new Error("BMSH 4: cut short");
+  const nB = dv.getUint32(at, true);
+  at += 4;
+  let fv = 0, fi = 0, fs = 0, q = 0;
+  let scratch = { pos: new Float32Array(0), idx: new Uint32Array(0), edges: new Float32Array(0), normals: new Int8Array(0) };
+  const f = Math.fround;
+  for (let j = 0; j < nB; j++) {
+    if (n - at < 4) throw new Error("BMSH 4: cut short");
+    const len = dv.getUint32(at, true);
+    at += 4;
+    if (len > n - at || len < 9) throw new Error("BMSH 4: cut short");
+    // the block's counts (BMG1: magic, mode, varint nv ni ne nn): its scratch sized to it
+    const r = { o: at + 5 };
+    const vint = () => { let v = 0, mul = 1; for (let i = 0; i < 10; i++) { if (r.o >= at + len) throw new Error("BMSH 4: block cut short"); const x = b[r.o++]!; v += (x & 0x7f) * mul; if (x < 0x80) return v; mul *= 128; } throw new Error("BMSH 4: varint too long"); };
+    const bv = vint(), bi = vint(), be = vint();
+    if (bv > nV || bi > nI || be > nS) throw new Error("BMSH 4: counts");
+    if (scratch.pos.length < 3 * bv || scratch.idx.length < bi || scratch.edges.length < 6 * be)
+      scratch = { pos: new Float32Array(3 * bv), idx: new Uint32Array(bi), edges: new Float32Array(6 * be), normals: new Int8Array(8 * be) };
+    const c = block(b, dv, at, at + len, scratch, 0, 0, 0);
+    for (; q < nE && v0[byV0[q]!]! < fv + c.nv; q++) {
+      const e = byV0[q]!;
+      if (v0[e]! < fv || v0[e]! + nv[e]! > fv + c.nv) throw new Error("BMSH 4: a row across blocks");
+      const p = shape[e] ? place.subarray(12 * e, 12 * e + 12) : null;
+      let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+      const P = scratch.pos;
+      for (let v = 3 * (v0[e]! - fv); v < 3 * (v0[e]! - fv + nv[e]!); v += 3) { // (upload's arithmetic: glviewport.ts elementBox)
+        let x = P[v]!, y = P[v + 1]!, z = P[v + 2]!;
+        if (p) {
+          const qx = f(f(f(f(p[0]! * x) + f(p[3]! * y)) + f(p[6]! * z)) + p[9]!), qy = f(f(f(f(p[1]! * x) + f(p[4]! * y)) + f(p[7]! * z)) + p[10]!);
+          z = f(f(f(f(p[2]! * x) + f(p[5]! * y)) + f(p[8]! * z)) + p[11]!), x = qx, y = qy;
+        }
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        if (z < z0) z0 = z;
+        if (z > z1) z1 = z;
+      }
+      boxes[6 * e] = x0, boxes[6 * e + 1] = y0, boxes[6 * e + 2] = z0, boxes[6 * e + 3] = x1, boxes[6 * e + 4] = y1, boxes[6 * e + 5] = z1;
+    }
+    fv += c.nv, fi += c.ni, fs += c.ns, at += len;
+  }
+  if (fv !== nV || fi !== nI || fs !== nS) throw new Error("BMSH 4: blocks short of the counts");
+  if (at !== n) throw new Error("BMSH 4: trailing bytes");
+  for (; q < nE; q++) { const e = byV0[q]!; if (nv[e]) throw new Error("BMSH 4: a row past the blocks"); boxes.set([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity], 6 * e); }
+  // bake's rows (glviewport.ts bake): a shape of few copies or few triangles becomes own vertices appended
+  const copies = new Map<number, number>();
+  for (let e = 0; e < nE; e++) if (shape[e]) copies.set(shape[e]!, (copies.get(shape[e]!) ?? 0) + 1);
+  let v = nV, i = nI, sg = nS;
+  for (let e = 0; e < nE; e++) {
+    if (!shape[e] || !((copies.get(shape[e]!) ?? 0) < minCopies || ni[e]! < 3 * minTris)) continue;
+    v0[e] = v, i0[e] = i, s0[e] = sg, shape[e] = 0;
+    v += nv[e]!, i += ni[e]!, sg += ns[e]!;
+  }
+  const size = 52 + 48 * nE + 12 * nV + 4 * nI + 32 * nS + 52 * nE;
+  return { rev, origin, size, ids, cats, v0, nv, i0, ni, s0, ns, shape, place, boxes, counts: { nv: v, ni: i, ns: sg } };
+}
+
+/** bmsh4Rows off the page's thread when it can be (`ab` transferred). */
+export async function bmsh4RowsDecode(ab: ArrayBuffer, minCopies: number, minTris: number): Promise<Bmsh4Rows> {
+  const w = decoder();
+  if (w) {
+    const id = nextId++;
+    try {
+      const out = await new Promise<Bmsh4Rows>((res, rej) => {
+        rowsPending.set(id, { res, rej });
+        w.postMessage({ id, ab, rows: [minCopies, minTris] }, [ab]);
+      });
+      bmsh4Stats.worker++;
+      return out;
+    } catch (e) {
+      if (!ab.byteLength) throw e;
+    }
+  }
+  bmsh4Stats.page++;
+  return bmsh4Rows(ab, minCopies, minTris);
+}
+const rowsPending = new Map<number, { res: (r: Bmsh4Rows) => void; rej: (e: Error) => void }>();

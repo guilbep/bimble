@@ -690,6 +690,8 @@ async function linksMain() {
   BUILD = "native", MODEL = "links";
   await openTab();
   await S("Page.navigate", { url: pageUrl() });
+  let linksMaxHeap = 0; // SIZE3: the JS heap + array buffers at most during the open (polled every 250 ms)
+  const linksHeapPoll = setInterval(() => { S("Runtime.getHeapUsage").then((h) => { linksMaxHeap = Math.max(linksMaxHeap, h.usedSize + (h.backingStorageSize ?? 0)); }).catch(() => {}); }, 250);
   await waitFor("the page ready", 240000, () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.links && window.__bbGl.links.length === ${LINKS})`), 50);
   if (GPU) { // GPU1: the WebGPU renderer must be the one drawing
     await waitFor("the renderer", 30000, () => ev("(window.__bbPerf?.snapshot().renderer.reason ?? '') !== 'starting…'"), 50);
@@ -700,7 +702,9 @@ async function linksMain() {
   await whichGpu();
   await quiet(30000);
   const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, preview: g.proxyPreview ? g.proxyPreview.at : null, meshAt: g.meshAt ?? null, full: g.fullFrameMs ?? null,
-    fetch: g.meshFetchMs, bytes: g.meshBytes }; })()`);
+    fetch: g.meshFetchMs, bytes: g.meshBytes, detailedAt: g.linksDetailedAt ?? null, peakDecoded: g.openPeakDecoded ?? null, decodes: g.decodes ?? null }; })()`);
+  clearInterval(linksHeapPoll);
+  out.maxHeap = linksMaxHeap, out.detailedAt = g0.detailedAt, out.openPeakDecoded = g0.peakDecoded, out.decodes = g0.decodes; // SIZE3
   out.firstPicture = g0.preview !== null && g0.preview !== undefined ? Math.min(g0.preview, g0.first) : g0.first;
   out.fromProxies = g0.preview !== null && g0.preview !== undefined;
   out.firstFrameMs = g0.first, out.meshAt = g0.meshAt, out.complete = g0.full, out.meshFetchMs = g0.fetch, out.meshBytes = g0.bytes;
@@ -727,11 +731,13 @@ async function linksMain() {
   // the JS heap and array buffers after a collection
   out.cacheSections = sumSections(files.map((f) => `${f}.bimbleview`));
   out.meshServed = await ev("window.__bbGl.meshBytesServed ?? window.__bbGl.meshBytes ?? null");
-  out.hostRssMb = rssMb(host.pid);
+  out.hostRssMb = rssMb(host.pid), out.hostAnonMb = anonMb(host.pid); // SIZE3: anonymous apart (the caches' mapped pages are file pages)
   await S("HeapProfiler.collectGarbage").catch(() => {});
   await sleep(500);
   { const h = await S("Runtime.getHeapUsage"); out.jsHeap = h.usedSize, out.arrayBuffers = h.backingStorageSize ?? null; }
   out.rss = chromeRss();
+  console.log(`SIZE3: open: JS heap + array buffers at most ${mb(out.maxHeap)} MB, decoded at most ${mb(out.openPeakDecoded)} MB, decodes ${JSON.stringify(out.decodes)}, ` +
+    `links in view detailed at ${out.detailedAt?.toFixed(0)} ms (first picture ${out.firstPicture?.toFixed(0)} ms); host anonymous ${out.hostAnonMb.toFixed(0)} MB`);
   console.log(`memory: caches ${JSON.stringify(out.cacheSections)}; mesh served ${out.meshServed}; host RSS ${out.hostRssMb.toFixed(0)} MB; ` +
     `tab RSS ${out.rss.renderer.toFixed(0)} MB, GPU process ${out.rss.gpu.toFixed(0)} MB; JS heap ${mb(out.jsHeap)} MB (+ ${mb(out.arrayBuffers)} MB array buffers); GPU ${mb(out.gpuBytes)} MB`);
   if (PIXELS) { mkdirSync(PIXELS, { recursive: true }); await pixels(); }
@@ -785,6 +791,7 @@ function procTree(root) {
   while (todo.length) { const p = todo.pop(); out.push(p); todo.push(...(kids.get(p) ?? [])); }
   return out;
 }
+const anonMb = (pid) => { try { return Number(/RssAnon:\s+(\d+)/.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1] ?? 0) / 1024; } catch { return 0; } }; // SIZE3
 const rssMb = (pid) => { try { return Number(/VmRSS:\s+(\d+)/.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1] ?? 0) / 1024; } catch { return 0; } };
 const cmd = (pid) => { try { return readFileSync(`/proc/${pid}/cmdline`, "utf8"); } catch { return ""; } };
 /** The browser's processes by kind (MB of RSS): renderer (the tab), gpu, others. */
@@ -861,7 +868,7 @@ async function folderMain() {
         await openTab();
         const tNav = Date.now();
         await S("Page.navigate", { url: pageUrl() });
-        const heapPoll = setInterval(() => { S("Runtime.getHeapUsage").then((h) => { heapNow = h.usedSize + (h.backingStorageSize ?? 0); maxHeap = Math.max(maxHeap, heapNow); }).catch(() => {}); }, 1000);
+        const heapPoll = setInterval(() => { S("Runtime.getHeapUsage").then((h) => { heapNow = h.usedSize + (h.backingStorageSize ?? 0); maxHeap = Math.max(maxHeap, heapNow); }).catch(() => {}); }, 250); // SIZE3: 250 ms (1 s missed the open's peaks)
         try {
           await W(waitFor("the page ready", 900000, () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.links && window.__bbGl.links.length === ${n})`), 200));
           out.readyWallMs = Date.now() - tNav;
@@ -869,7 +876,9 @@ async function folderMain() {
           out.renderer = GPU_SEEN.webgl;
           await quiet(120000);
           const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, preview: g.proxyPreview ? g.proxyPreview.at : null, full: g.fullFrameMs ?? null,
-            fetch: g.meshFetchMs, bytes: g.meshBytes, draw: (g.linkDraw ?? []).map((l) => l.xf ? l.xf.t : null), far: g.farLinks ?? null, detail: (g.linkDetail ?? []).filter((x) => x.detail).length }; })()`);
+            fetch: g.meshFetchMs, bytes: g.meshBytes, draw: (g.linkDraw ?? []).map((l) => l.xf ? l.xf.t : null), far: g.farLinks ?? null, detail: (g.linkDetail ?? []).filter((x) => x.detail).length,
+            detailedAt: g.linksDetailedAt ?? null, peakDecoded: g.openPeakDecoded ?? null, decodes: g.decodes ?? null, linkGpu: g.linkGpuUsed ?? null, budget: g.linkGpuBudget ?? null }; })()`);
+          out.detailedAt = g0.detailedAt, out.openPeakDecoded = g0.peakDecoded, out.decodes = g0.decodes, out.linkGpuUsed = g0.linkGpu, out.linkGpuBudget = g0.budget; // SIZE3
           out.firstPicture = g0.preview ?? g0.first, out.fromProxies = g0.preview != null, out.firstFrameMs = g0.first, out.complete = g0.full;
           out.meshBytes = g0.bytes, out.detailLoaded = g0.detail, out.linkT = g0.draw, out.farKm = g0.far ? g0.far.map((x) => x.km) : null;
           await ev("(window.__bbGl.bench.snap(0, 0), 0)");
@@ -891,6 +900,7 @@ async function folderMain() {
           out.jsHeap = h.usedSize, out.arrayBuffers = h.backingStorageSize ?? null;
           out.maxHeap = maxHeap;
           out.rss = chromeRss();
+          out.hostRestMb = rssMb(host.pid), out.hostAnonMb = anonMb(host.pid); // SIZE3: the host at rest after the page's requests
           out.survived = (await ev("1 + 1")) === 2;
         } finally { clearInterval(heapPoll); }
       } catch (e) {

@@ -438,7 +438,7 @@ async function main() {
   await evalJs(`window.__bbGl.bench.look(${JSON.stringify(near)}, 140000)`);
 
   // ---- SIZE3 (B): an open that keeps no link's arrays (the open's decoded budget at 0): each link read in the
-  // worker, its boxes kept and its arrays dropped; the links in view asked again one at a time, largest first:
+  // worker as its rows and boxes only (gl/bmsh4.ts bmsh4Rows: one block at a time, never its whole arrays); the links in view asked again one at a time, largest first:
   // the same picture once every link the frame wants is on the GPU. Fails on the code before SIZE3: every link's
   // arrays read before the first upload (no openKeepBytes, no linksDetailedAt). ----
   // (both pictures after a reload of every link: the first with the open's default budget, the second with 0)

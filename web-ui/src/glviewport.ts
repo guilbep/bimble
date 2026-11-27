@@ -91,7 +91,7 @@ import { cutProxies, fitProxies, parseBprx, standIns, usableCells, type Proxies 
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
 import { gpuBudget, linkGpu, linkDetail } from "./gl/linkmem"; // LNK3D (D)
 import { farModels, linkFar } from "./gl/farlinks"; // REAL1
-import { bmsh4Decode, bmsh4Stats } from "./gl/bmsh4"; // SIZE2; SIZE3: in a worker
+import { bmsh3Size, bmsh4Decode, bmsh4RowsDecode, bmsh4Stats, type Bmsh4Rows } from "./gl/bmsh4"; // SIZE2; SIZE3: in a worker
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
 import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
@@ -220,6 +220,13 @@ function elementBox(P: Float32Array, a: number, n: number, pl: Float32Array | nu
     if (z > z1) z1 = z;
   }
   out[6 * at] = x0, out[6 * at + 1] = y0, out[6 * at + 2] = z0, out[6 * at + 3] = x1, out[6 * at + 4] = y1, out[6 * at + 5] = z1;
+}
+
+/** SIZE3 (B): a link's mesh from its rows and boxes (gl/bmsh4.ts bmsh4Rows, read in the worker): no heavy arrays. */
+function rowsMesh(r: Bmsh4Rows): Bmsh {
+  return { rev: r.rev, origin: r.origin, ids: r.ids, cats: r.cats, v0: r.v0, nv: r.nv, i0: r.i0, ni: r.ni, s0: r.s0, ns: r.ns,
+    pos: new Float32Array(0), idx: new Uint32Array(0), edges: new Float32Array(0), normals: new Int8Array(0), size: r.size,
+    shape: r.shape, place: r.place, dropped: { ...r.counts, boxes: r.boxes } };
 }
 
 /** SIZE3 (B): link mesh `m` without its heavy arrays (its boxes and lengths kept, its rows compact): the decoded
@@ -793,7 +800,7 @@ export interface MeshSource {
   linkProxies?(k: number): Promise<{ status: number; bytes: ArrayBuffer }>;
   /** SIZE2: link k's mesh on its own (GET /mesh?link=k, BMSH version 4 read back as version 3 by gl/bmsh4.ts),
    *  with the bytes served. Present: `mesh()` answers the links' heads only (LNKS version 3). */
-  linkMesh?(k: number, name: string, key: number): Promise<{ bytes: ArrayBuffer; served: number }>;
+  linkMesh?(k: number, name: string, key: number, keep?: number): Promise<{ bytes?: ArrayBuffer; rows?: Bmsh4Rows; served: number }>;
 }
 
 /** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
@@ -868,12 +875,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (!r.ok) throw new Error(`mesh: HTTP ${r.status} ${await r.text()}`);
       return r.arrayBuffer();
     },
-    linkMesh: async (k: number, name: string, key: number) => { // SIZE2; SIZE2FIX: the link by its name and the heads' key
+    linkMesh: async (k: number, name: string, key: number, keep?: number) => { // SIZE2; SIZE2FIX: by its name and the heads' key; SIZE3: `keep`: past these decoded bytes, its rows and boxes only
       const r = await fetch(`${base}/mesh?t=${t}&link=${k}&name=${encodeURIComponent(name)}&key=${key}`, { cache: "no-store" });
       if (r.status === 204) throw new Superseded(name); // removed, replaced or read again since the heads: not an error
       if (!r.ok) throw new Error(`mesh of link ${k}: HTTP ${r.status} ${await r.text()}`);
       const ab = await r.arrayBuffer();
       const served = ab.byteLength;
+      if (keep !== undefined && bmsh3Size(ab) > keep) return { rows: await bmsh4RowsDecode(ab, INSTANCE_MIN_COPIES, INSTANCE_MIN_TRIS), served };
       return { bytes: await bmsh4Decode(ab, 2 ** 31), served }; // SIZE3: off the page's thread
     },
     proxies: async (budget: number) => { // 3D2
@@ -1752,6 +1760,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     try {
       const name = m.links?.[x.k - 1]?.name ?? "";
       const r = await ask(x.k - 1, name, linkKeys[x.k - 1] ?? 0);
+      if (!r.bytes) return;
       const lm = parseBmsh(r.bytes, 0, true);
       stats.meshBytesServed = (stats.meshBytesServed ?? 0) + r.served;
       if (mesh !== m || lm.ids.length !== x.e1 - x.e0 || lm.rev !== linkKeys[x.k - 1]) return; // another mesh since (it is asked again whole)
@@ -1951,13 +1960,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         stats.openPeakDecoded = 0;
         for (const k of order) {
           const h = heads[k]!;
-          const r = await source.linkMesh(k, h.name, h.key);
+          const keep = stats.openKeepBytes ?? OPEN_KEEP_BYTES;
+          const r = await source.linkMesh(k, h.name, h.key, Math.max(0, keep - kept)); // (past what is left: its rows and boxes only, in the worker)
           served += r.served;
-          let lm = parseBmsh(r.bytes, 0, true);
+          let lm = r.rows ? rowsMesh(r.rows) : parseBmsh(r.bytes!, 0, true);
           if (lm.ids.length !== h.nE || lm.rev !== h.key) throw new Superseded(h.name); // (the host checks it too)
           const b = lm.pos.byteLength + lm.idx.byteLength + lm.edges.byteLength + lm.normals.byteLength;
           stats.openPeakDecoded = Math.max(stats.openPeakDecoded, kept + b);
-          if (kept + b > (stats.openKeepBytes ?? OPEN_KEEP_BYTES)) lm = dropArrays(lm);
+          if (!lm.dropped && kept + b > keep) lm = dropArrays(lm);
           else kept += b;
           h.m = lm;
         }
