@@ -217,7 +217,7 @@ static void run_tile(nv_loader *L, nv_job *j) {
             uint64_t at = (uint64_t)toc->blob_at + t.off;
             if (!sec || at > sn || t.len > sn - at) snprintf(j->err, sizeof j->err, "tiles: a proxy out of the section");
             else buf_append(&b, (const char *)sec + at, t.len), kind = 2;
-        } else if (!s->open || s->tiles_scene != j->ident || s->tiles_status != 200) x.gone = 1;
+        } else if ((!s->open && !s->view) || s->tiles_scene != j->ident || s->tiles_status != 200) x.gone = 1;
         else {
             cc_tiles_src src = {s->tiles_scene, NULL};
             cc_error e;
@@ -262,7 +262,7 @@ static void run_model_tiles(nv_loader *L, nv_job *j) {
         uint32_t rev;
         pthread_rwlock_wrlock(&L->ses);
         cc_session *s = j->ses;
-        int st = s->open ? cc_mesh_tiles(s, 100000, "toc", 3, &p, &n, &rev) : 404;
+        int st = s->open || s->view ? cc_mesh_tiles(s, 100000, "toc", 3, &p, &n, &rev) : 404;
         if (st == 200 && s->tiles && s->tiles_scene) {
             if (s->tiles_scene != j->ident) j->cancelled = 1;
             else if ((j->section = malloc(s->tiles->out.len + 1))) {

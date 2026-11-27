@@ -242,6 +242,8 @@ struct App {
     int model_tiles;             /* 0 none, 1 building, 2 drawn by tiles, 3 failed (drawn as a part) */
     const void *model_ident;     /* the session's scene the pyramid was asked for */
     double model_off[3];
+    char (*model_ids)[22];       /* a view file opened (no mesh answer): its elements' ids for the tiles */
+    uint32_t model_elem0, model_nE;
     uint64_t tri_live;           /* the moving budget's triangles for the walker (0: none) */
     double tiles_checked;
     int truth;                   /* --truth: each 3D frame drawn with and without occlusion, the id buffers compared */

@@ -490,8 +490,8 @@ static void frame(App *a) {
      * frame fits in ~16 ms, and shrinks back when there is room; still frames are always whole */
     if (drew3d && a->moving && a->adaptive && a->moving_fps > 0) { /* the target: settings moving_fps (30: 33 ms) */
         double target = 1000.0 / a->moving_fps;
-        if (a->frame_ms > target * 0.6 && a->cut_live < 16) a->cut_live = a->cut_live < 1 ? 1 : a->cut_live * 1.5f;
-        else if (a->frame_ms < target * 0.25 && a->cut_live > a->moving_cut) a->cut_live = a->cut_live / 1.5f < a->moving_cut ? a->moving_cut : a->cut_live / 1.5f;
+        if (a->frame_ms > target * 0.75 && a->cut_live < 16) a->cut_live = a->cut_live < 1 ? 1 : a->cut_live * 1.5f; /* NUI2: 0.6 -> 0.75 and 0.25 -> 0.45: nearer the target, more detail while moving */
+        else if (a->frame_ms < target * 0.45 && a->cut_live > a->moving_cut) a->cut_live = a->cut_live / 1.5f < a->moving_cut ? a->moving_cut : a->cut_live / 1.5f;
     }
     if (drew3d) {
         uint32_t picked = 0;

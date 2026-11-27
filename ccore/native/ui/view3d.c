@@ -36,6 +36,7 @@ void scene_reset(App *a) {
     if (a->model_part) nv_render_remove(a->r, a->model_part), a->model_part = NULL;
     if (a->model_ts) nv_render_remove_tileset(a->r, a->model_ts), nv_tileset_unref(a->dev, a->model_ts), a->model_ts = NULL;
     a->model_tiles = 0, a->model_ident = NULL;
+    free(a->model_ids), a->model_ids = NULL, a->model_nE = 0;
     a->have_origin = 0, a->next_elem = NV_ELEM0, a->draw_key = -1, a->fitted = 0;
     a->selected = 0;
     a->ids_dirty = 1;
@@ -71,12 +72,33 @@ static void model_part(App *a) {
         ok = nv_load_bytes(&sc, p, n, &lo, err, sizeof err) == 0 && nv_finish(&sc) == 0;
         memcpy(a->model_off, lo.off, sizeof a->model_off);
     }
-    const void *scene_now = a->ses->open ? (const void *)cc_session_scene(a->ses) : NULL;
+    const void *scene_now = a->ses->open || a->ses->view ? (const void *)cc_session_scene(a->ses) : NULL;
+    if (st != 200) slog("the open model's mesh: %d %.*s", st, (int)(n < 200 ? n : 200), st != 404 && p ? p : "");
+    else slog("the open model's mesh: %u elements", n >= 52 ? ((const uint32_t *)p)[3] : 0);
+    free(a->model_ids), a->model_ids = NULL, a->model_nE = 0;
+    const cc_scene *vs = st != 200 && a->use_tiles && scene_now ? cc_session_scene(a->ses) : NULL;
+    if (vs && vs->nelements) { /* NUI2: a view file opened as it is (no mesh answer): drawn by tiles alone, its ids and colours here */
+        uint32_t nE = (uint32_t)vs->nelements;
+        uint32_t *col = malloc(nE * 4ull);
+        a->model_ids = malloc(nE * 22ull);
+        if (col && a->model_ids) {
+            if (!a->have_origin) memcpy(a->origin0, vs->origin, sizeof a->origin0), a->have_origin = 1;
+            memcpy(a->core_origin, vs->origin, sizeof a->core_origin);
+            for (int i = 0; i < 3; i++) a->model_off[i] = vs->origin[i] - a->origin0[i];
+            a->model_elem0 = take_elems(a, nE), a->model_nE = nE;
+            for (uint32_t i = 0; i < nE; i++) {
+                memcpy(a->model_ids[i], vs->elements[i].id.c, 22);
+                col[i] = nv_category_colour((int)vs->elements[i].category < 8 ? (int)vs->elements[i].category : 7);
+            }
+            nv_render_add_colours(a->r, a->model_elem0, nE, col);
+        } else free(a->model_ids), a->model_ids = NULL;
+        free(col);
+    }
     nv_ses_unwr(a->loader);
     if (a->model_part) nv_render_remove(a->r, a->model_part), a->model_part = NULL;
     if (a->model_ts) nv_render_remove_tileset(a->r, a->model_ts), nv_tileset_unref(a->dev, a->model_ts), a->model_ts = NULL;
     a->model_tiles = 0, a->model_ident = NULL;
-    if (ok && sc.nelements && a->use_tiles && scene_now) { /* NUI2: the open model by tiles too: its pyramid built by a loader */
+    if (((ok && sc.nelements) || a->model_ids) && a->use_tiles && scene_now) { /* NUI2: the open model by tiles too: its pyramid built by a loader */
         nv_job *j = calloc(1, sizeof *j);
         if (j) {
             j->kind = NV_JOB_MODEL_TILES, j->ses = a->ses, j->uid = 0xFFFFFFFFu, j->ident = scene_now;
@@ -260,19 +282,21 @@ void scene_tick(App *a) {
         int i = slot_of(a, j->uid);
         SLink *L = i >= 0 ? &a->links_s[i] : NULL;
         if (j->kind == NV_JOB_MODEL_TILES) { /* the open model's pyramid: drawn by tiles from now (its part kept for its ids) */
-            if (j->ident == a->model_ident && a->model_tiles == 1 && a->model_part && j->section && j->section_n >= 48) {
+            if (j->ident == a->model_ident && a->model_tiles == 1 && (a->model_part || a->model_ids) && j->section && j->section_n >= 48) {
                 uint32_t toc, nocc;
                 memcpy(&toc, j->section + 24, 4), memcpy(&nocc, j->section + 20, 4);
                 char err[256] = "";
-                const nv_scene *ms = nv_part_scene(a->model_part);
+                uint32_t me0 = a->model_part ? nv_part_scene(a->model_part)->elem0 : a->model_elem0;
+                uint32_t mne = a->model_part ? nv_part_scene(a->model_part)->nelements : a->model_nE;
                 nv_tileset *ts = toc <= j->section_n && (uint64_t)nocc * 36 <= j->section_n - toc
-                                     ? nv_tileset_new(j->section, toc, j->nelements, nocc ? (const void *)(j->section + toc) : NULL, nocc, ms->elem0, 1, 0, a->model_off, 0, err, sizeof err)
+                                     ? nv_tileset_new(j->section, toc, j->nelements, nocc ? (const void *)(j->section + toc) : NULL, nocc, me0, 1, 0, a->model_off, 0, err, sizeof err)
                                      : NULL;
-                if (ts && j->nelements == ms->nelements) {
+                if (ts && j->nelements == mne) {
                     nv_tileset_keep_section(ts, j->section, j->section_n), j->section = NULL;
                     nv_render_add_tileset(a->r, ts);
                     a->model_ts = ts, a->model_tiles = 2;
-                    nv_part_set_shown(a->model_part, 0);
+                    if (a->model_part) nv_part_set_shown(a->model_part, 0);
+                    a->ids_dirty = 1, a->fitted = 0;
                     slog("the open model: drawn by tiles (%u tiles, built in %.0f ms)", nv_tileset_toc(ts)->ntiles, j->ms);
                 } else {
                     if (ts) nv_tileset_unref(a->dev, ts);
@@ -406,8 +430,8 @@ void scene_tick(App *a) {
         if (L->proxy && nv_part_shown(L->proxy) != L->visible) nv_part_set_shown(L->proxy, L->visible), a->dirty = 1;
         if (L->detail && nv_part_shown(L->detail) != L->visible) nv_part_set_shown(L->detail, L->visible), a->dirty = 1;
     }
-    if (!a->fitted && (a->model_part || a->nlinks)) {
-        int any = a->model_part != NULL;
+    if (!a->fitted && (a->model_part || a->model_ts || a->nlinks)) {
+        int any = a->model_part != NULL || a->model_ts != NULL;
         for (int i = 0; i < a->nlinks; i++) any |= a->links_s[i].proxy || a->links_s[i].detail || a->links_s[i].ts;
         if (any) app_fit(a), a->fitted = 1;
     }
@@ -436,7 +460,8 @@ int scene_complete(App *a) {
 int scene_box(App *a, double lo[3], double hi[3]) {
     double b[65][6];
     int n = 0;
-    if (a->model_part) {
+    if (a->model_ts) nv_tileset_box(a->model_ts, b[n], b[n] + 3), n += b[n][0] <= b[n][3];
+    else if (a->model_part) {
         const nv_scene *s = nv_part_scene(a->model_part);
         if (s->bmin[0] <= s->bmax[0]) memcpy(b[n], s->bmin, 24), memcpy(b[n] + 3, s->bmax, 24), n++;
     }
@@ -481,6 +506,7 @@ void scene_ids(App *a) {
     size_t total = 0;
     for (uint32_t k = 0; k < nv_render_nparts(a->r); k++) total += nv_part_scene(nv_render_part(a->r, k))->nelements;
     for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].ids) total += a->links_s[i].nelem;
+    total += a->model_nE;
     size_t cap = 64;
     while (cap < 2 * total + 2) cap *= 2;
     a->id_slot = calloc(cap, sizeof *a->id_slot);
@@ -493,6 +519,9 @@ void scene_ids(App *a) {
             for (size_t h = id_hash(ids[e]) & (cap - 1);; h = (h + 1) & (cap - 1))
                 if (!a->id_slot[h]) { a->id_slot[h] = s->elem0 + e + 1; break; }
     }
+    for (uint32_t e = 0; a->model_ids && e < a->model_nE; e++)
+        for (size_t h = id_hash(a->model_ids[e]) & (cap - 1);; h = (h + 1) & (cap - 1))
+            if (!a->id_slot[h]) { a->id_slot[h] = a->model_elem0 + e + 1; break; }
     for (int i = 0; i < a->nlinks; i++) {
         const SLink *L = &a->links_s[i];
         for (uint32_t e = 0; L->ids && e < L->nelem; e++)
@@ -500,6 +529,8 @@ void scene_ids(App *a) {
                 if (!a->id_slot[h]) { a->id_slot[h] = L->elem0 + e + 1; break; }
     }
 }
+/* a view file drawn by tiles alone: its element's id (NULL none) */
+static const char *model_id(App *a, uint32_t e) { return a->model_ids && e >= a->model_elem0 && e < a->model_elem0 + a->model_nE ? a->model_ids[e - a->model_elem0] : NULL; }
 /* a tile link's element (global e): its slot, its id */
 static const SLink *tile_link_of(App *a, uint32_t e) {
     for (int i = 0; i < a->nlinks; i++)
@@ -512,6 +543,11 @@ uint32_t scene_find(App *a, const char *id, size_t n) {
     if (n != 22 || !a->id_cap) return 0;
     for (size_t h = id_hash(id) & (a->id_cap - 1); a->id_slot[h]; h = (h + 1) & (a->id_cap - 1)) {
         uint32_t e = a->id_slot[h] - 1, loc;
+        const char *mid = model_id(a, e);
+        if (mid) {
+            if (!memcmp(mid, id, 22)) return e + 1;
+            continue;
+        }
         const SLink *TL = tile_link_of(a, e);
         if (TL) {
             if (!memcmp(TL->ids[e - TL->elem0], id, 22)) return e + 1;
@@ -525,6 +561,8 @@ uint32_t scene_find(App *a, const char *id, size_t n) {
 /* The id and link of a global element: 1 found (`link` "" for the open model's). */
 int scene_elem(App *a, uint32_t elem, char id[23], char *link, size_t nlink) {
     uint32_t loc;
+    const char *mid = model_id(a, elem);
+    if (mid) { memcpy(id, mid, 22), id[22] = 0, link[0] = 0; return 1; }
     const SLink *TL = tile_link_of(a, elem);
     if (TL) {
         memcpy(id, TL->ids[elem - TL->elem0], 22), id[22] = 0;
