@@ -106,6 +106,14 @@ make native-test                  # = ccore/ci/run.sh native (the CI job ccore-n
   its box). `BIMBLE_TILES_DEBUG=1`: one line a frame (walk, commands, tests, tiles loaded and wanted);
   `BIMBLE_TILES_SURPLUS=1`: at each `shot`, where the leaves' triangles went (of elements shown, pass 1, pass 2,
   and of elements not shown by cause). `frames_in_flight` (2): the next frame recorded while the GPU draws this one.
+- **NUI3** (ADR 0084 decisions 19-25): `occlusion_test` (2: each element's own box), `cluster_tris` (512),
+  `occlusion_tiles`, `occlusion_cold` (1: still frames), `hiz_pair`, `loaders` (4), `shell_mode` (priority: the cross-link
+  shell attached); off by default and measured: `occlusion_split`, `seen_step`, `still_ramp`, `pace_tiles`, `page_grow`.
+  `BIMBLE_TILES_SURPLUS=2` lists the largest elements drawn but not shown; `BIMBLE_SKIP_CS` leaves compute passes out (a
+  driver's crash); driver steps `ids_ref` / `tiles_reset` (the time to the first correct picture), `swheel`, `pinch`,
+  `drop`, `box_numbers`. The desktop: `desktop/install.sh` in the archive (menu entry, icon, .bimble/.bimbleview/.ifc for
+  the user only; app id `ch.bimble.bimble`), Ctrl+K the command palette. `ccore/test/native_geo_test.mjs`: a building at
+  2,600 km draws as at 0.
 - A crash: `ccore/native/symbolize.sh [session folder]` turns the session log's raw stack into functions and
   lines with `ccore/out/app/debug/<build id>.debug` (kept by `native/build.sh app`, the last 20 builds).
 
