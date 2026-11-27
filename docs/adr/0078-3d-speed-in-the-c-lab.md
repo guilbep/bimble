@@ -786,10 +786,15 @@ Out-of-core indexing for a 5 GB IFC: the indexing job reads its cache in place, 
 
 From ticket VIS1 (amendment 7):
 
-- **`draw_visible` on a real project of links**: on a local folder of 17 IFC files the culled still frame left out
-  seen elements (decision 47); the synthetic sweep cannot show it. To find: the ground truth's missing elements'
-  boxes against their triangles (a box that does not hold its geometry), the links' rows read before their arrays went
-  (SIZE3's `preBox`), copies placed with a turn. `drive.mjs --project … --do 'camera close; truth …'` reproduces it.
+- **`draw_visible` on a real project of links** (first lead): on a local folder of 17 IFC files the culled still frame
+  left out seen elements (decision 47), and the plain frustum test already loses 17 there. The native renderer's truth
+  test on the same folder (tiles and two-pass occlusion) misses none and its `check_tiles` finds every element inside
+  its leaf's box: the cache's boxes are right, the PAGE's own element boxes are the suspect (SIZE3's `preBox`, boxes
+  of turned or instanced copies, long members). Reproduce: `node ccore/tools/drive.mjs --project <the .bimble>
+  --cache-dir <scratch> --size 1492x790 --dpr 2 --settings '{"link_gpu_mb":4096}' --do 'wait ready; wait idle; camera
+  close; js g.noProxies = true; js g.visible = false; truth all ref; js g.visible = true; truth visible; eval
+  g.bench.missing()'`. Under SwiftShader one element (9 pixels) of one inside camera of the synthetic sweep is missed
+  too (not on the GPU): `lab_visible` runs its sweep only with `LAB_GPU=vulkan` and says so.
 - **The fill counts what culling left out**: a slice's budget is spent on items the mask drops (many empty slices on a
   large project): the budget's cut should count the kept items only.
 

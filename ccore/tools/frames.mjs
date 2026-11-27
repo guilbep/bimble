@@ -402,7 +402,7 @@ async function measure() {
   out.stillMedian = med(still.ms), out.stillTris = still.tris, out.stillDraws = still.draws;
   // 3D2 (step 2): the same still frame without its edge pass (what edges cost)
   const ne = await ev(`(() => { const b = window.__bbGl.bench, g = window.__bbGl, ms = []; g.noEdges = true; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
-    g.noEdges = false; b.frame(0, false); return { ms, segs: g.q2 ? g.q2.edgeSegs : null }; })()`);
+    g.noEdges = false; b.frame(0, false); return { ms, segs: g.q2 ? (g.q2.edgeMode === "screen" ? "on screen" : g.q2.edgeSegs) : null }; })()`);
   out.stillNoEdgesMedian = med(ne.ms), out.stillEdgeSegs = ne.segs;
   out.stillProxy = await ev("window.__bbGl.proxies ? { cells: window.__bbGl.proxies.drawnCells, tris: window.__bbGl.proxies.drawnTris } : null");
   // 3D2: the same still frame without proxies (the full detail), and the two pictures compared at the home camera
@@ -528,7 +528,7 @@ function comparePixels() {
 }
 
 // ---- the report ----
-const fmt = (v, d = 0) => (v === null || v === undefined || Number.isNaN(v) ? "–" : Number(v).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d }));
+const fmt = (v, d = 0) => (typeof v === "string" ? v : v === null || v === undefined || Number.isNaN(v) ? "–" : Number(v).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d })); // (VIS1: "on screen": edges found on screen, no segments)
 const mb = (v) => (v === null || v === undefined ? "–" : (v / 1048576).toFixed(1));
 function table(rows) {
   const L = [];
@@ -721,7 +721,7 @@ async function linksMain() {
     return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
   out.still = med(still.ms), out.stillTris = still.tris, out.stillDraws = still.draws;
   const ne = await ev(`(() => { const b = window.__bbGl.bench, g = window.__bbGl, ms = []; g.noEdges = true; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
-    g.noEdges = false; const r = { ms, segs: g.q2 ? g.q2.edgeSegs : null }; b.frame(0, false); r.segs = g.q2 ? g.q2.edgeSegs : null; return r; })()`);
+    g.noEdges = false; const r = { ms, segs: g.q2 ? g.q2.edgeSegs : null }; b.frame(0, false); r.segs = g.q2 ? (g.q2.edgeMode === "screen" ? "on screen" : g.q2.edgeSegs) : null; return r; })()`);
   out.stillNoEdges = med(ne.ms), out.edgeSegs = ne.segs;
   const close = await ev(`(() => { const b = window.__bbGl.bench, ms = []; b.snap(0, 0); b.zoom(0.25); for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
     return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
