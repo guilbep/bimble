@@ -1427,3 +1427,51 @@ its bytes (a session without links answers as before; a `.bimble` without notes 
   gives its cells, triangles, bytes and time. Rust has none of this (no proxies of links, a mesh rebuilt
   on every visibility change). Tests: `test/lab_links_3d.mjs`, `test/hlod_test.c` (hostile BPRX),
   `test/viewfile_test.c` (the HLOD section), `test/lab_mission1_links.mjs` (the mesh bytes stay on a hide).
+
+## 40. Arcs by deflection; a boolean that takes nothing keeps its operand (ticket TESS1, ADR 0085)
+
+**What.** The display reader (`cc_ifc_read`, `cc_ifc_read_progress`, and `cc_ifc_read_with` with a
+detail) reads at three levels (`cc_ifc_detail`, `src/ifc_read.h`):
+
+- **exact**: Rust's reader, byte for byte (arcs and circles as chords within 0.5 mm, at most 15
+  degrees each, at least 8 for any sweep; boolean results as the kernel gives them).
+- **standard**, the default (links, read-only opens): chords within 2 mm and at most 18 degrees (20
+  a circle, under scene.c's 20-degree crease angle: a cylinder's side keeps no edge line), at least
+  8 a full turn and in proportion for an arc; the count depends on the radius, the sweep and the
+  detail only, so copies of a shape stay copies. A boolean result or an opening cut whose result has
+  its operand's volume (within 1 mm³ + 1e-9) and area (1 mm² + 1e-9) took nothing away: the operand
+  is drawn as the file gives it, not as the kernel split it. A kernel result (the outermost boolean,
+  a host after its openings) has its repeated-point triangles dropped and its coplanar regions
+  (points within 0.01 mm of the plane) triangulated again by earcut keeping every boundary point
+  (`cc_boolean_merge_coplanar`, `src/boolean.c`; a closed solid stays closed).
+- **light**: chords within 10 mm, at most 30 degrees (12 a circle: facet edges drawn); booleans as
+  standard.
+
+Given meshes (faceted breps, face sets, surface models) are kept as the file gives them at every
+level. The import (`cc_ifc_import`) stays exact: its meshes are model data.
+
+**Why.** The owner's folder: Bimble drew 1.2 to 1.8 times IfcOpenShell's triangles on slabs, walls,
+columns, beams, fittings and proxies. The causes (ADR 0085): the 0.5 mm chord rule (a 300 mm column
+55 chords, a 5 m radius 223) and the kernel re-splitting hosts that an opening does not touch.
+
+**What Rust sees.** At exact, everything as before. At standard: fewer triangles on curved
+bodies (a round column r 250: 196 -> 96; its mesh volume, which quantities use, 0.79 % lower; an
+I-shape's 0.19 % higher: its fillets) and on hosts of openings that cut nothing; the shape moves by
+at most 2 mm (light: 10 mm). Element counts, classes, names, storeys, materials and the shared
+copies are the same.
+
+**Goldens.** Rust's `golden/ifc/read/*` and the C-own `golden/ifc_c/read/*` are read at exact and
+unchanged; Rust's `golden/schedule/ifc-*` likewise (quantity_test reads at exact). The inputs that
+standard reads otherwise have C-own goldens in `golden/ifc_c/standard/<name>/` (14 of 50:
+booleans, circle_column, csg_round, curves, deep_nesting, ellipse, indexed_arc, ishape_beam,
+lshape_fillet, opening_beside, revolved, revolved_full, rounded_rect, ushape_slope_fillet;
+`CCORE_WRITE_GOLDEN=1 test/run.sh ifc_read`); for the others the suite checks that standard is
+still the exact golden byte for byte (Rust's, or the C-own one of section 10). Each input at standard and light: the same elements and shared
+copies, never more triangles, the box within 2 / 10 mm and the volume within 2 % / 5 % of exact.
+New fixture: `golden/ifc_c/fixtures/opening_beside.ifc`.
+
+**Where.** `ccore/src/ifc_geom.h` (`Tess`, `tess_for`, `arc_segments`, `same_solid`,
+`merge_tris`, `boolean_finish`), `ccore/src/ifc_read.c` (`cut`, `cc_ifc_read_with`),
+`ccore/src/boolean.c` (`cc_boolean_merge_coplanar`), `ccore/tools/ifc_dump.c` (`--detail`); tests
+`ccore/test/ifc_read_test.c` (`details`, `opening_beside`), `ccore/test/boolean_test.c`
+(`merge_tests`), `ccore/test/quantity_test.c` (`ifc_detail_volumes`).
