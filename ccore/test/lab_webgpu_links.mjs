@@ -201,7 +201,9 @@ async function main() {
   const find = (link) => evalJs(`(() => { const r = document.getElementById("bimble").getBoundingClientRect(), g = window.__bbGl;
     for (let y = r.top + 40; y < r.bottom - 40; y += 9) for (let x = r.left + 40; x < r.right - 40; x += 9) { const h = g.pickInfoAt(x, y); if (h && h.link === ${JSON.stringify(link)}) return { x, y, ...h }; } return null; })()`);
   await evalJs(`(window.__bbGl.bench.look(${JSON.stringify(near)}, 140000), window.__bbGl.bench.frame(0, false), 0)`);
-  const hit2 = await find("link_2.ifc"), hit4 = await find("link_4.ifc");
+  // (a link's detail may still be on its way: SIZE3 asks the links' meshes as they are needed; a pick finds it once it is in)
+  const findSoon = (link) => waitFor(`an element of ${link} under a pixel`, 20000, async () => { await evalJs("(window.__bbGl.bench.frame(0, false), 0)"); return find(link); }).catch(() => null);
+  const hit2 = await findSoon("link_2.ifc"), hit4 = await findSoon("link_4.ifc");
   check("elements of link_2 and link_4 under some pixels (WebGL2's pick)", !!hit2 && !!hit4, JSON.stringify([hit2?.id, hit4?.id]));
 
   const STATES = [
