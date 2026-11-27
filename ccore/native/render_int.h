@@ -27,6 +27,7 @@ typedef struct {
     uint64_t tris_pass1, tris_standin_always;
     uint32_t tiles_drawn, tiles_pass1, ntests_read;
     int read_vis, read_vis_planned, budget_full, squeeze, groups, seen_planned;
+    uint64_t noroom_frame;
     uint32_t nmap;
     SDL_GPUComputePipeline *seen;
     SDL_GPUBuffer *seen_buf;

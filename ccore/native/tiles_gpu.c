@@ -610,7 +610,7 @@ void nv_render_remove_tileset(R *r, nv_tileset *ts) {
 }
 void nv_render_tiles_opts(R *r, const nv_tiles_opts *o) { r->tl.o = *o, r->tl.groups = o->groups, page_limit = o->budget ? o->budget + o->budget / 4 : 0; }
 /* a tile that found no room: the least recently used released at the next frame, down to 80 % of the budget */
-void nv_render_tiles_squeeze(R *r) { r->tl.squeeze = 1; }
+void nv_render_tiles_squeeze(R *r) { r->tl.squeeze = 1, r->tl.noroom_frame = r->tl.frame ? r->tl.frame : 1; }
 nv_tiles_opts nv_render_get_tiles_opts(const R *r) { return r->tl.o; }
 
 /* ---- pipelines ---- */
@@ -1391,6 +1391,9 @@ uint32_t nv_render_tiles_want(R *r, nv_tile_want *out, uint32_t cap) {
                                                                                                    T->want_n += T->want_n < 256;
     }
     uint64_t room = T->o.budget ? (T->gpu_bytes + inflight_bytes < T->o.budget ? T->o.budget - T->gpu_bytes - inflight_bytes : 0) : UINT64_MAX;
+    /* a tile found no room in the pages lately (their ranges are not contiguous): nothing more asked for 30 frames, the
+     * budget said full (else the same tiles were asked, refused, released and asked again: never complete) */
+    if (T->noroom_frame && T->frame - T->noroom_frame < 30) room = 0;
     for (uint32_t i = 0; i < T->want_n && n < cap; i++) {
         nv_tile_want *w = &T->want[i];
         if (w->ts->g[w->tile] || w->ts->st[w->tile] != 0) continue;
