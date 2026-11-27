@@ -322,6 +322,8 @@ static int run_step(App *a, Step *s, double now) {
         char p[1200];
         outpath(a, p, sizeof p, arg);
         app_shot(a, p);
+        nv_render_stats st = nv_render_get_stats(a->r); /* NUI2: what that picture drew (per view: the A/B against what is visible) */
+        fprintf(stderr, "drive: shot %s: %llu triangles, %u tiles, %u draws, %u commands\n", arg, (unsigned long long)st.tris, st.tiles, st.draws, st.commands);
         return 1;
     }
     if (!strcmp(op, "copy_report")) { /* Performance › Copy, as the button does: the clipboard and a file; stderr says where */
