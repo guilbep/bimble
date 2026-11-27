@@ -243,7 +243,7 @@ void shell_top(App *a) {
     ImDrawList_AddRectFilled(dl, V2(cx, 11 * s), V2(cx + cs.x + 16 * s, 33 * s), unsaved ? C_OCHRE : C_SUNK, 11 * s, 0);
     ImDrawList_AddText_Vec2(dl, V2(cx + 8 * s, 13 * s), C_INK, chip, NULL);
     igSetCursorScreenPos(V2(W - 90 * s, 7 * s));
-    if (text_button(a, "save", T(a, "quick.saveButton"), 1, 0)) tool_run_action(a, "save");
+    if (text_button(a, "save", T(a, "quick.saveButton"), unsaved || !editable ? 1 : 0, 0)) tool_run_action(a, "save"); /* clay only with something to save */
     igEnd();
 
     /* ---- the tab bar (TabsBar.vue): three groups split by a line ---- */
@@ -337,7 +337,22 @@ void shell_status(App *a) {
         if (on) ImDrawList_AddRectFilled(dl, V2(bx, y + 4 * s), V2(bx + 36 * s, y + 28 * s), C_INK, 12 * s, 0);
         ImDrawList_AddText_FontPtr(dl, a->f_text, 13 * s, V2(bx + 10 * s, y + 8 * s), on ? C_CREAM : C_INK, k ? "EN" : "FR", NULL, 0, NULL);
     }
-    ImDrawList_AddText_FontPtr(dl, a->f_mono, 12.5f * s, V2(lx - ps.x - 16 * s, y + 9 * s), C_INK, perf, NULL, 0, NULL);
+    /* Performance (StatusBar.vue's button: the panel) */
+    const char *pl = T(a, "perf.open");
+    ImVec2 pls = igCalcTextSize(pl, NULL, false, -1);
+    float px0 = lx - pls.x * s - 28 * s;
+    igSetCursorScreenPos(V2(px0, y + 4 * s));
+    if (igInvisibleButton("perfbtn", V2(pls.x * s + 16 * s, 24 * s), 0)) a->dialog = DLG_PERF;
+    ImDrawList_AddText_FontPtr(dl, a->f_text, 13 * s, V2(px0 + 8 * s, y + 8 * s), igIsItemHovered(0) ? C_INK : C_STONE, pl, NULL, 0, NULL);
+    ImDrawList_AddText_FontPtr(dl, a->f_mono, 12.5f * s, V2(px0 - ps.x - 12 * s, y + 9 * s), C_INK, perf, NULL, 0, NULL);
+    if (a->selected) { /* the selection's chip */
+        char sel[64];
+        snprintf(sel, sizeof sel, "%s", T(a, "status.selectedOne"));
+        ImVec2 ss = igCalcTextSize(sel, NULL, false, -1);
+        float cx0 = px0 - ps.x - 24 * s - ss.x * s - 16 * s;
+        ImDrawList_AddRectFilled(dl, V2(cx0, y + 5 * s), V2(cx0 + ss.x * s + 16 * s, y + 27 * s), C_PINK, 11 * s, 0);
+        ImDrawList_AddText_FontPtr(dl, a->f_text, 13 * s, V2(cx0 + 8 * s, y + 8 * s), C_INK, sel, NULL, 0, NULL);
+    }
     igEnd();
 }
 

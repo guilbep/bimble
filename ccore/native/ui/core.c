@@ -129,7 +129,7 @@ void core_refresh(App *a) {
     core_query(a, "actions", NULL, &a->actions);
     core_query(a, "capabilities", NULL, &a->caps);
     core_query(a, "state", NULL, &a->state);
-    core_query(a, "views", NULL, &a->views);
+    core_query(a, "open_views", NULL, &a->views); /* the views the viewer shows: storeys' plans and ceilings, links' plans (M1LINKS) */
     core_query(a, "links_panel", NULL, &a->links);
     core_query(a, "status", NULL, &a->status);
     core_query(a, "link_notes", NULL, &a->notes);
@@ -331,7 +331,8 @@ void core_visibility(App *a) {
         const JrVal *o = sb ? jr_get(sb, "origin_mm") : NULL;
         if (o && o->type == JR_ARR && o->n == 3) for (int i = 0; i < 3; i++) org[i] = o->items[i].num;
         for (int i = 0; on && i < 3; i++) lo[i] += org[i] - a->origin0[i], hi[i] += org[i] - a->origin0[i];
-        nv_render_set_clip(a->r, on, lo, hi);
+        if (a->view_name[0] && a->view_clip) nv_render_set_clip(a->r, 1, a->view_lo, a->view_hi); /* a plan or section: its own box */
+        else nv_render_set_clip(a->r, on, lo, hi);
         a->box_on = on;
         memcpy(a->box_min, lo, sizeof lo), memcpy(a->box_max, hi, sizeof hi);
     }

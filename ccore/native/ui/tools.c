@@ -239,11 +239,16 @@ void view_set(App *a, const char *name) {
     const JrVal *v = a->views.root;
     if (v && v->type == JR_OBJ) v = jr_get(v, "views");
     const JrVal *row = NULL;
-    for (size_t k = 0; name && v && v->type == JR_ARR && k < v->n; k++)
-        if (!strcmp(js(&v->items[k], "name"), name)) row = &v->items[k];
+    for (size_t k = 0; v && v->type == JR_ARR && k < v->n; k++)
+        if (name ? !strcmp(js(&v->items[k], "name"), name) : !strcmp(js(&v->items[k], "type"), "three_d")) row = &v->items[k];
     Buf b, o;
     buf_init(&b), buf_init(&o);
-    if (!row) {
+    if (!name || !row) { /* the 3D view: its tab active again in the core (a plan's clip off) */
+        if (row) {
+            buf_puts(&b, "{\"op\":\"open\",\"tab\":{\"type\":\"view\",\"id\":"), json_str(&b, js(row, "id")), buf_puts(&b, "}}");
+            core_call(a, "tab", NULL, buf_cstr(&b), &o);
+        }
+        nv_render_set_clip(a->r, 0, NULL, NULL);
         a->view_name[0] = 0;
         view_home(a);
         core_visibility(a); /* the section box (if on) again */
@@ -258,6 +263,7 @@ void view_set(App *a, const char *name) {
         return;
     }
     snprintf(a->view_name, sizeof a->view_name, "%s", name);
+    a->view_clip = 0;
     Json c = {0};
     core_query(a, "view_clip", NULL, &c);
     const JrVal *clip = c.root ? jr_get(c.root, "clip") : NULL, *mn = clip ? jr_get(clip, "min") : NULL, *mx = clip ? jr_get(clip, "max") : NULL;
@@ -268,7 +274,13 @@ void view_set(App *a, const char *name) {
             double k = a->core_origin[i] - a->origin0[i];
             lo[i] = mn->items[i].num + k, hi[i] = mx->items[i].num + k;
         }
+        const JrVal *cut = jr_get(c.root, "cut"); /* a plan: what is below its cut height (the cut itself as on paper: not yet) */
+        if (cut && cut->type == JR_NUM) {
+            double z = cut->num + a->core_origin[2] - a->origin0[2];
+            if (z > lo[2] && z < hi[2]) hi[2] = z;
+        }
         nv_render_set_clip(a->r, 1, lo, hi);
+        memcpy(a->view_lo, lo, sizeof lo), memcpy(a->view_hi, hi, sizeof hi), a->view_clip = 1;
         double slo[3], shi[3];
         int any = scene_box(a, slo, shi);
         for (int i = 0; i < 2 && any; i++) lo[i] = fmax(lo[i], slo[i]), hi[i] = fmin(hi[i], shi[i]); /* the fit: what the box holds */

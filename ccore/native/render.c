@@ -917,6 +917,6 @@ int nv_cam_project(const nv_camera *c, const double p[3], double w, double h, do
 }
 
 void nv_render_set_clip(R *r, int on, const double mn[3], const double mx[3]) {
-    for (int i = 0; i < 3; i++) r->clip_min[i] = on ? (float)mn[i] : 0, r->clip_max[i] = on ? (float)mx[i] : 0;
+    for (int i = 0; i < 3; i++) r->clip_min[i] = on && mn ? (float)mn[i] : 0, r->clip_max[i] = on && mx ? (float)mx[i] : 0;
     r->clip_min[3] = on ? 1.f : 0.f;
 }

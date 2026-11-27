@@ -212,7 +212,7 @@ static void opening_tick(App *a) {
         double mb = g && *g ? atof(g) : jnum(jr_get(a->settings.root, "values"), "link_gpu_mb", 768);
         a->gpu_budget = (uint64_t)(mb * 1048576.0);
     }
-    a->view_name[0] = 0, a->cam.ortho = 0, a->view_cut = 0;
+    a->view_name[0] = 0, a->cam.ortho = 0, a->view_clip = 0;
     a->cam.yaw = -55 * NV_PI / 180, a->cam.pitch = 28 * NV_PI / 180;
     json_free(&a->measure), json_free(&a->sel_el);
     a->dirty = 1;
@@ -229,7 +229,7 @@ static void frame(App *a) {
         scene_tick(a);
     }
     float s = a->scale, W = (float)a->lw, H = (float)a->lh;
-    float top = 178 * s, bottom = 32 * s, left = 296 * s, right = a->selected ? 340 * s : 0;
+    float top = 178 * s, bottom = 32 * s, left = 296 * s, right = 0; /* LeftPanel.vue: Properties under the navigator */
     a->vx = left, a->vy = top + 38 * s, a->vw = W - left - right, a->vh = H - top - bottom - 38 * s;
     float px = a->offscreen ? 1.0f : SDL_GetWindowPixelDensity(a->win);
     uint32_t vpw = (uint32_t)(a->vw * px), vph = (uint32_t)(a->vh * px);
@@ -239,8 +239,9 @@ static void frame(App *a) {
     if (a->screen_kind != SCR_MAIN) home_screen(a);
     else {
         shell_top(a);
-        panel_navigator(a, 0, top, left, H - top - bottom);
-        if (right > 0) panel_properties(a, W - right, top, right, H - top - bottom);
+        float side = H - top - bottom, nav = a->selected ? (float)floor(side * 0.45) : side;
+        panel_navigator(a, 0, top, left, nav);
+        if (a->selected) panel_properties(a, 0, top + nav, left, side - nav);
         igSetNextWindowPos(V2(left, top), 0, V2(0, 0)); /* the view tabs */
         igSetNextWindowSize(V2(W - left - right, 38 * s), 0);
         igBegin("##viewtabs", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);

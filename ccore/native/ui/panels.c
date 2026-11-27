@@ -81,15 +81,16 @@ void panel_navigator(App *a, float x, float y, float w, float h) {
     const JrVal *v = a->views.root;
     if (v && v->type == JR_OBJ) v = jr_get(v, "views");
     if (tree_row(a, "views", T(a, "nav.views"), "", 0, 1)) {
-        igPushID_Str("v3d");
-        if (igSelectable_Bool(T(a, "view.three_d"), !a->view_name[0], 0, V2(0, 0))) view_set(a, NULL);
-        igPopID();
+        int any3d = 0;
         for (size_t k = 0; v && v->type == JR_ARR && k < v->n; k++) {
-            const char *name = js(&v->items[k], "name"), *kind = js(&v->items[k], "kind");
+            const char *name = js(&v->items[k], "name"), *type = js(&v->items[k], "type");
+            int is3d = !strcmp(type, "three_d");
+            any3d |= is3d;
             char lab[300];
-            snprintf(lab, sizeof lab, "%s  ·  %s##view%zu", name, kind, k);
-            if (igSelectable_Bool(lab, !strcmp(a->view_name, name), 0, V2(0, 0))) view_set(a, name);
+            snprintf(lab, sizeof lab, "%s##view%zu", is3d ? T(a, "view.three_d") : name, k);
+            if (igSelectable_Bool(lab, is3d ? !a->view_name[0] : !strcmp(a->view_name, name), 0, V2(0, 0))) view_set(a, is3d ? NULL : name);
         }
+        if (!any3d && igSelectable_Bool(T(a, "view.three_d"), !a->view_name[0], 0, V2(0, 0))) view_set(a, NULL);
         igTreePop();
     }
     /* Links (query links_panel models), each with its eye */
@@ -192,7 +193,8 @@ void panel_properties(App *a, float x, float y, float w, float h) {
     igSetNextWindowPos(V2(x, y), 0, V2(0, 0));
     igSetNextWindowSize(V2(w, h), 0);
     igBegin("##props", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    ImDrawList_AddLine(igGetWindowDrawList(), V2(x, y), V2(x, y + h), C_LINE, 1 * s, 0);
+    ImDrawList_AddLine(igGetWindowDrawList(), V2(x, y), V2(x + w, y), C_LINE, 1 * s, 0);
+    ImDrawList_AddLine(igGetWindowDrawList(), V2(x + w - 1, y), V2(x + w - 1, y + h), C_LINE, 1 * s, 0);
     igPushFont(a->f_disp, 15);
     igTextUnformatted(T(a, "props.title"), NULL);
     igPopFont();

@@ -165,8 +165,8 @@ struct App {
     int box_on, box_drag;      /* the section box (scene mm) and its handle held */
     double box_min[3], box_max[3];
     char view_name[128];       /* the view shown ("" the 3D view) */
-    double view_cut_z;         /* a plan's cut height (scene mm; NAN none) */
-    int view_cut;
+    double view_lo[3], view_hi[3]; /* the view's clip (scene mm) while a plan or section is shown */
+    int view_clip;
     /* the shell */
     int screen_kind;           /* SCR_* */
     int show;                  /* SHOW_VIEW / SHOW_PAGE */
