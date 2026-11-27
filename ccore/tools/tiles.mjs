@@ -300,6 +300,9 @@ async function report(label, H, nlinks, open, conv, buildMs) {
     const cam = fr["far@1"].cam;
     res.pngs = [];
     for (let l = 0; l < res.maxLevels; l++) {
+      let lt = 0; // the level's triangles (leaves above it too): pictures of at most 12 M triangles (a JS rasteriser)
+      for (const p of pys) for (let i = 0; i < p.toc.ntiles; i++) if (p.toc.level[i] === Math.min(l, p.toc.levels - 1) || (p.toc.flags[i] & T.TILE_LEAF && p.toc.level[i] < l)) lt += p.toc.tris[i];
+      if (lt > 12e6) { res.pngs.push(`level ${l}: ${fmt(lt)} triangles, not drawn`); continue; }
       const file = join(PNG, `tile1-${label}-level${l}.png`);
       const n = await picture(H, pys, cam, file, { level: l });
       res.pngs.push(`${file} (${fmt(n)} triangles)`);

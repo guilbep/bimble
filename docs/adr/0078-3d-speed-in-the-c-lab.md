@@ -8,6 +8,9 @@
   path; no file format, no golden). Amendment 2 (ticket 3D2) adds the BPRX answer beside BMSH and
   `src/hlod.c`, `src/bvh.c`: as low. Amendment 3 (ticket LNK3D) adds a section to the link cache
   (format 4: older caches are converted again), two queries and a key in the change JSON with links: low.
+  Amendment 6 (ticket TILE1) adds a section `TILE` to the link cache (format 7: a format 6 cache is
+  indexed again from itself, not converted), three `/mesh` answers and one wasm call; nothing on the page's
+  draw path yet: low.
 
 ## Context / Problem
 
@@ -415,6 +418,195 @@ With the host's rows answers (the folder converted fresh by the same build, load
 in view detailed at 3.3 s, complete 3.8 s; still 109 ms, moving 84 ms; the links' detail took 1.68 GB at the first
 quiet frame (every link on screen is "needed" and kept past the budget: the budget releases only links off screen or
 far; a tile pyramid per link, not a whole link, is the unit that would bound it), 0.94 GB of GPU in all later.
+
+## Amendment 6 (27 Nov 2026, ticket TILE1): a tile pyramid per link, baked at conversion, served by tile
+
+The owner, on his folder of 17 linked IFC files (110.5 M triangles): the lab draws 68 to 74 M triangles per still frame
+for 2.4 M pixels; the page's cost is triangle throughput; whole links are the unit of fetch, upload and release. "we should
+have several resolutions like for tiling maps!". Choices by Claude on ticket TILE1 under the same delegation; the page's
+frame over tiles is ticket VIS1's, a native viewer's NAT2's: both read what is below. Code: `ccore/src/tiles.{h,c}`
+(builder, reader, walker), `hlod_grid.h` (hlod.c's clusters shared), `session/link_cache.c` (indexing),
+`session/mesh.c` + `host/server.c` (answers), `src/wasm_api.c` (`host_tiles`), `web-ui/src/gl/tiles.ts` (decoder).
+
+31. **The tree: a loose octree per link, large elements high.** Over the link's elements in its own frame (scene mm, the
+   frame of its rows). A cell is split while it holds more than 40,000 triangles, copies counted (`CC_TILES_LEAF_TRIS`;
+   the ticket's 20 to 60 k), at most 16 levels deep; an element goes to the child holding its centre when its largest
+   extent fits the child's side (so it lies in the child's loose cube, twice the child), else it stays in the cell: such
+   elements (slabs, facades, long walls) become the cell's OWN leaves, cut in Morton order of their centres into chunks
+   of the same target. A cell with one octant and nothing of its own is not kept (the chain of empty levels collapsed).
+   Every element with geometry is in exactly one leaf; each tile's subtree is one range of an element list in depth
+   first order. Above the octree's root, a chain of coarser proxies of the whole, each at most a quarter of the one
+   below, ends at 512 triangles or fewer (`CC_TILES_ROOT_TRIS`): a link seen from afar costs a few hundred.
+   **Alternative:** hlod.c's cells (every element in a leaf by its centre: a slab in a leaf whose box is the slab's, the
+   leaves' boxes overlapping) or a box tree (cells that do not halve: the error does not either).
+32. **Proxies: vertex clustering on one lattice, each cluster placed where its quadric is least.** hlod.c's clusters
+   (Rossignac & Borrel on power-of-two grids from the root's corner; a parent clusters its children's clusters) now carry
+   their members' box and the sum of their faces' plane quadrics (area weighted), merged by addition; a cluster's point
+   is the quadric's minimum by a pseudo inverse around the mean (Lindstrom 2000, "out-of-core simplification"), kept in
+   the members' box. Each proxy at most a quarter of its children's triangles and 16,384 (`CC_TILES_PROXY_TRIS`), the grid
+   coarsened until it fits; per material family, its parts' categories kept (the colour of far geometry).
+   **Alternative:** quadric edge collapse per tile (Garland & Heckbert): not built. Measured why it would not change the
+   numbers that matter: on the 20,026-element frame and the buildings scene the largest deviation of every level comes
+   from parts that vanish below the grid (a 2.5 m wall, a 0.8 m chair: 70 to 100 % of each level's error, `TILES_DEBUG`),
+   which edge collapse at the same triangle count removes too; quadric placement left those maxima unchanged (to the mm)
+   and keeps corners where the cluster is not one face. Edge collapse is a few hundred lines more per tile and slower
+   (a heap of edges per tile, against a sort of keys); left for when a picture shows the difference.
+33. **The error: a sampled two-sided distance, not the grid's bound.** A proxy's error (mm) = the largest distance, over
+   up to 16,384 points of the level below (each child's vertices and triangle centres, strided), to the proxy's
+   triangles, and over the proxy's points to the level below's triangles (its children's clusters), plus the largest
+   child error and half the 16-bit quantum's diagonal. A point of an element that vanished counts at most that
+   element's middle extent (its omission draws no more wrong than its size). The walker needs it monotone: a parent's
+   error includes its children's. Measured on the test's buildings scene against the real detail: proxy points at most
+   0.62 of the stated error from the detail, detail points of surface-like elements at most 0.37 of it from the proxy
+   (720 samples, none outside). **Alternative 1:** hlod.c's `grid × √3` (the bound of a point's move): measured 4.2 times
+   the real worst; every site view of the synthetic sets then drew every leaf. **Alternative 2:** the farthest member of
+   a cluster from its point (rigorous one way): 1.7 times the grid bound's tightness only, still 3 to 10 times what the
+   picture shows on beams (points move along the surface, which changes nothing on screen). Cost: the build's time
+   rises about five times on the synthetic sets (the distance queries: a 32³ grid of triangles per tile, rings searched).
+34. **Leaves are not copied: a leaf is its elements' blocks in `ELEM`.** The tile table lists a leaf's elements; the answer
+   (`TLF1`) gathers their BMG1 blocks from the mapped cache (each shape once per leaf, its copies as placements: copies
+   stay instanced). Measured on the synthetic links (17 x 93 k triangles): the leaves as served 9.40 MB (5.9 bytes a
+   triangle, edges included); a copy of them in the section would add those bytes to a cache of 22.36 MB (+42 %), or
+   15.82 MB (+71 %) in a raw 21-bit layout; decoding every leaf in JavaScript took 142 ms (11 M triangles a second; a
+   raw layout's copy 2.8 ms). **Alternative:** the leaves duplicated in tile order (one read a tile; a native viewer maps
+   it raw): chosen against by bytes (the cache budget: under 15 % of the IFC) since a leaf's blocks are contiguous enough
+   in the mapping and the decode happens off the drawing thread (worker, native thread).
+35. **Proxies raw and uncompressed: `TPX1`.** u16 positions in the tile's box, u16 indices under 65,536 vertices: 9 bytes
+   a triangle measured (synthetic links: 1.84 MB for 204,425 proxy triangles), uploadable as they are by a native viewer
+   mapping the file. Deflate per tile saves 37 % on proxies (1.16 MB) but 91 % on the leaves' answers (BMG1's regular
+   varints): left for HTTP (`Content-Encoding` on `tile=` answers when the web version streams over a network), not on
+   disk. **Alternative:** BMG1 for proxies too (one codec): about the same bytes, a decode pass for every reader.
+36. **Compact vertices for the GPU** (`tiles.ts` `pack16`, `pack21`; C `cc_tiles_lattice`, `cc_tiles_pack21`): proxies
+   their stored u16 (6 bytes a vertex; the quantum ≤ 1/65,535 of the tile, far under its error); leaves on the link's
+   1/16 mm lattice (BMG1's step), 21 bits an axis in two u32 (8 bytes), the shift growing only past 131 m: two leaves
+   put a shared vertex on one lattice point (no crack; the test and `link_tiles_test` check it), within 1/32 mm of the
+   cache's point. Bytes per triangle on the GPU, synthetic links (0.50 vertex a triangle): today's merged f32 positions,
+   a u32 element id per vertex and u32 indices, 20 bytes; leaves as above with u16 indices, 10; proxies, 9.
+   **Alternative:** u16 for leaves too (6 bytes a vertex): a 60 m leaf's quantum is 0.9 mm and a vertex shared by two
+   leaves of different boxes lands up to 0.5 mm apart in each: a crack of a pixel at half a metre.
+37. **Occluders: a separate conservative set per tile; proxies are never occluders.** Up to 64 real triangles a tile, the
+   largest by area (at least 1/64 of the tile's extent squared), of opaque classes (`IfcWall*`, `IfcSlab`, `IfcRoof`,
+   `IfcFooting`, `IfcColumn`, `IfcBeam`, `IfcCovering`; never the glass family); an inner tile keeps its children's
+   largest. A subset of real surfaces never hides what is in front of one. 36 bytes a triangle, at most 2.3 KB a tile; built
+   while the leaves are read (no extra pass). **Alternative:** shrunken proxies of opaque elements (a second simplified
+   mesh per tile, never outside the solid: a constrained simplification); boxes of elements whose volume fills them (a
+   wall with a window is not conservative).
+38. **Back faces:** a flag per element (in the list's order) "closed and outward": the mesh welded by position, every
+   directed edge met once by its reverse, the signed volume positive (a mirrored placement turns it: the reader flips
+   the front face, as for any mirrored copy). Proxies' parts carry the field, 0 today (clustered meshes are not closed).
+39. **The section and the cache's life** (ADR 0079 amendment): `TILE` written by the indexing job after `HLOD`, before
+   `PRPZ`, from the cache's bytes read in place (one mesh decoded at a time; a shape once per leaf), in steps (cancellable;
+   a crash leaves the incomplete cache, indexed again at the next open), deterministic (a build in steps of 777 or 1,000
+   triangles gives the bytes of one build). `CC_LINK_CACHE_FORMAT` 7; a format 6 cache matches (its geometry sections are
+   format 7's), is served at once and indexed again from itself (HLOD and TILE baked, SRCE turned complete and 7): never
+   read again from the IFC (`link_tiles_test`). Readers skip `TILE` (Rust's and C's: a later addition); this one keeps
+   its place (`has_tiles`, `tiles_off`, `tiles_len`) and leaves it on disk as `HLOD`. **The `HLOD` section stays** until the
+   page draws by tiles (VIS1): the page is unchanged by this ticket; its BPRX could later be served from the pyramid's
+   levels, then `HLOD` dropped.
+40. **Serving** (`session/mesh.h`): `GET /mesh?link=k&name=&key=&tiles=toc` the table of contents; `…&tile=a,b,c` (4,096
+   at most) a `TILS` answer; the link rule of SIZE2FIX (a named or keyed request is never a 404: 204 superseded, with
+   `X-Superseded: 1`); 202 "indexing" while its job runs; 204 with `X-Tiles: none` for a large link whose cache has no
+   `TILE`; a link without a cache (an IFC under 1 MiB, a `.bimbleview` linked as it is) gets its pyramid built at once
+   when it has at most 2 M triangles. The open scene (a model, an IFC, a view file): `GET /mesh?tiles=toc&step=N` builds
+   it in steps after the open (202 "done total"), then answers as a link; an opened view file that holds a `TILE` (a
+   cache opened as it is) is served from it. The section is checked (`cc_tiles_check`) on every answer. The wasm call
+   `host_tiles(link, budget, req)` gives the same answers (`ccore.ts` `ccoreTiles`; native: `bimble.ts` `fetchTiles`).
+   `GET /mesh?tiles_frame=…` runs the reference walker over every link for one camera (the tools' and NAT2's check).
+41. **The reference walker** (`cc_tiles_select`): the frontier starts at the root; the tile of largest projected error
+   (error × k / distance from the eye to its box, k = viewport height / (2 tan(fov/2)); orthographic: × px per mm) is
+   replaced by its children in view while that error is over the threshold and the frontier's triangles stay within the
+   budget; a tile without a proxy, or one the reader marks (a hidden or selected element under it: proxies keep no
+   element boundary), is always replaced; boxes out of the frustum are dropped; the answer front to back. 1 to 30 ms for
+   the synthetic sets' cameras (including a JSON answer). It ignores occlusion: VIS1's depth pyramid over the occluders.
+
+### The contract (VIS1, NAT2)
+
+Section `TILE` (little-endian; offsets from the section's first byte):
+
+| offset | type | field |
+|---|---|---|
+| 0 | char[4] | "TIL1" |
+| 4 | u32 | version, 1 |
+| 8 | u32 | nT, tiles |
+| 12 | u32 | nE, the link's rows (BMSH row order = the view file's element order) |
+| 16 | u32 | nL, the element list's length (elements with geometry) |
+| 20 | u32 | nO, occluder triangles |
+| 24 | u32 | toc bytes = 48 + 80 nT + 4 nL + pad4(nL) + 36 nO; the blobs start at pad8(toc) |
+| 28 | u32 | the leaf target (triangles) |
+| 32 | u64 | blob bytes |
+| 40 | u32 | levels |
+| 44 | u32 | 0 |
+| 48 | 80 × nT | tiles, depth-first preorder (tile 0 the root; a subtree is ids [i, i + skip)) |
+| … | u32 × nL | element rows, depth first (a subtree's elements one range) |
+| … | u8 × nL, pad 4 | per list entry: 1 closed and outward, 2 opaque occluder class |
+| … | f32[9] × nO | occluder triangles, link scene mm |
+| pad8(toc) | blobs | a `TPX1` per proxy tile, in post-order (a subtree's proxies one byte range) |
+
+A tile (80 bytes):
+
+| offset | type | field |
+|---|---|---|
+| 0 | u32 | parent (0xFFFFFFFF: the root) |
+| 4 | u32 | skip: tiles in its subtree, itself included (first child id + 1; next sibling c + skip(c)) |
+| 8 | u16 | children |
+| 10 | u8 | level (root 0) |
+| 11 | u8 | flags: 1 LEAF (content: its elements' detail, `TLF1`), 2 PROXY (content: `TPX1`), 4 OWN (a leaf of its parent's large elements), 8 has occluders |
+| 12 | f32[6] | box, min xyz, max xyz, link scene mm: holds its content and every descendant's |
+| 36 | f32 | error mm: 0 a leaf; a proxy's (decision 33); +inf an inner tile without proxy (descend) |
+| 40 | u32, u32 | el0, nel: its subtree's elements list[el0 .. el0 + nel) |
+| 48 | u64 | its blob's offset from the blobs' start (4-aligned); 0 for a leaf |
+| 56 | u32 | blob bytes |
+| 60 | u32 | triangles its content draws (a leaf: copies counted) |
+| 64 | u32 | vertices of its content (a leaf: own meshes and each distinct shape once) |
+| 68 | u32, u16 | first occluder, occluders |
+| 74 | u16 | 0 |
+| 76 | u32 | detail triangles under it (saturating) |
+
+`TPX1` (a proxy): "TPX1", u32 nv, u32 ni, u32 parts; per part {u32 category (concrete 0 … other 7), u32 flags (1 closed
+and outward: 0 today), u32 first index, u32 indices}; u16[3] × nv (p = lo + q (hi − lo) / 65535, the tile's box); pad 4;
+indices u16 × ni (nv ≤ 65,536) else u32. No edges, no normals (edges are found on screen).
+
+Answers: `tiles=toc` the section's bytes [0, toc); `tile=a,b,c`: "TILS", u32 count, per tile {u32 id, u32 kind (0
+none, 1 leaf, 2 proxy), u32 bytes, the bytes, pad 4}. `TLF1` (a leaf): "TLF1", u32 id, u32 nel, u32 blocks; per element
+{u32 row, u32 block, f32[12] placement: columns x, y, z, then t; the identity for an own mesh}; u32 × blocks (bytes); the
+BMG1 blocks (`meshcodec.h`; edges included, a decoder skips them). `tiles.ts` gives per leaf the own meshes merged
+(one vertex block, one index block, runs of {row, first index, count}) and per shape its vertices, indices and instances.
+
+What a reader does: read the table once per link (a few hundred kB: 0.32 MB for 17 synthetic links), walk it each frame
+by `cc_tiles_select`'s rule (or its own with occlusion), ask the tiles it lacks in batches, draw proxies as they are
+(u16 positions, the tile box as uniforms), leaves with their element runs (hide, select, pick by the state texel),
+descend under a hidden or selected element (proxies have no element boundary), and use each tile's occluders before
+deciding what to draw.
+
+### Evidence (ticket TILE1)
+
+`ccore/test/tiles_test.c` (C, also under ASan and UBSan), on a synthetic buildings scene made by the test (6 buildings of
+4 storeys: slabs, facades, glass, furniture as two shared shapes placed turned and mirrored, thin pipes; 1,608 elements,
+173,664 triangles), built from the scene and from its view file read in place: every element in exactly one leaf; every
+leaf's answer is its elements' world meshes within the codec's 0.05 mm; the proxies' error honoured (above); each proxy at
+most a quarter of its children, the root under 512; slabs no deeper than furniture; the same bytes twice and in steps;
+the walker front to back, within a budget, a marked tile descended; 4,000 damaged sections and nine named damages (a
+cycle, a child outside its parent, a range past the list, an element twice, absurd counts…) refused or read without a
+crash; a 397,488-triangle element and non-finite vertices bounded; a build cancelled after one step freed.
+`ccore/test/link_tiles_test.mjs` (host and `tiles.ts`): the phases (202 while indexing), the cache format 7 with `TILE`,
+the table and every tile decoded by the page's decoder, the request rules, the walker's frame, a format 6 cache indexed
+again from itself, a small link and the open model, 2,000 damaged answers in `tiles.ts`.
+
+`ccore/tools/tiles.mjs`, native host (clang), 1920 × 1080, 60°: far = everything in view, close = a fifth of that
+distance, inside = a third into the box at eye height (`ccore/out/tiles/tiles.md`, per-level pictures beside it):
+
+| set | detail triangles | tiles (leaves / proxies), levels | triangles per level, root first | far at 1 px / 2 px | close at 1 px | inside at 1 px | pyramid bytes |
+|---|---|---|---|---|---|---|---|
+| 17 synthetic links (`links_synth.mjs`, 30 m apart) | 1,581,408 | 136 (85 / 51), 4 | 748 / 19,652 / 184,025 / 1,581,408 | 184,025 / 184,025 (1.66 MB to fetch) | 680,184 | 631,536 | 2.16 MB |
+| mesh-heavy (700 × 1,000) | 695,264 | 88 (69 / 19), 5 | 148 / 3,936 / 32,438 / 230,146 / 584,040 | 302,102 / 230,146 | 391,112 | 375,072 | 1.46 MB |
+| 20,026 elements | 270,288 | 38 (32 / 6), 4 | 152 / 1,108 / 46,568 / 270,288 | 270,288 / 270,288 | 227,040 | 161,844 | 0.55 MB |
+| buildings (18 x 10 storeys, 400 parts a storey) | 6,691,680 | 627 (529 / 98), 7 | 60 / 1,584 / 7,620 / 52,968 / 318,410 / 3.3 M / 3.5 M | 6,691,680 / 6,165,312 | 3,965,580 | 3,771,300 | 4.86 MB |
+
+The synthetic links' caches: 22.36 MB for 271.83 MB of IFC (8.2 %; `TILE` 2.16 MB, 0.8 %); indexing 4.0 s for the 17 (of
+which the pyramids 3.6 s), the largest process's peak 77 MB. At 1 px the 20,026-element frame and the buildings draw
+all their detail even from the site view: their beams, walls and furniture are 0.3 to 2.5 m and a pixel there is 0.15 to
+0.25 m: the error rule is right to keep them; what is inside the buildings (95 % of the buildings scene's triangles) is
+hidden, which is occlusion's work (VIS1's depth pyramid over decision 37's occluders), not the levels'.
 
 ## What is left
 
