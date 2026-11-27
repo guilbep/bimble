@@ -319,8 +319,24 @@ static void settings_dialog(App *a) {
 #define LINK_GPU_OFF 65536
 /* NUI2: an optimisation's value: the session's settings when they know the key (the web lab's: VIS1 adds draw_visible,
  * still_px, cull_back), else the app's own (native.json, a run's --set), else the default */
+/* the user's settings file as written (a key VIS1 shares is in it only once set: its absence means the core's default,
+ * which may be the page's, not this renderer's; then the native default holds) */
+static Json raw_settings;
+static void raw_settings_load(App *a) {
+    json_free(&raw_settings);
+    const char *f = a->settings.root ? js(a->settings.root, "file") : "";
+    FILE *fp = *f ? fopen(f, "rb") : NULL;
+    if (!fp) return;
+    char buf[65536];
+    size_t n = fread(buf, 1, sizeof buf - 1, fp);
+    fclose(fp);
+    json_parse(&raw_settings, buf, n);
+}
 static double opt_num(App *a, const char *key, double dflt) {
     const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL, *x = v ? jr_get(v, key) : NULL;
+    if (x && raw_settings.root && raw_settings.root->type == JR_OBJ && !jr_get(raw_settings.root, key) &&
+        (!strcmp(key, "draw_visible") || !strcmp(key, "still_px") || !strcmp(key, "cull_back") || !strcmp(key, "moving_fps")))
+        x = NULL; /* never set by the user: the native default (the A/B tables), not the page's */
     double run = nset_num(key, NAN);
     const char *nv = nset_get(key);
     if (!isnan(run) && nv) return run; /* a run's --set or the app's own file first: the A/B runs set any key */
@@ -342,7 +358,8 @@ static int opt_str_is(const char *key, const char *val, int dflt) {
 #define D_TILES 1
 void optimisations_apply(App *a) {
     const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL;
-    a->moving_fps = (int)opt_num(a, "moving_fps", 30);
+    raw_settings_load(a);
+    a->moving_fps = (int)opt_num(a, "moving_fps", 60); /* NUI2: the owner's target (60 fps) when he never set it */
     a->adaptive = a->moving_fps > 0;
     a->hlod = !v || !jr_get(v, "moving_proxies") || jb(v, "moving_proxies");
     if (nset_get("moving_proxies")) a->hlod = nset_num("moving_proxies", 1) != 0;
@@ -384,14 +401,14 @@ void optimisations_ui(App *a) {
     const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL;
     igPushFont(a->f_semi, 14), igTextUnformatted(T(a, "native.optimisations"), NULL), igPopFont();
     igTextColored(col4(C_STONE), "%s", T(a, "settings.moving"));
-    int fps = (int)jnum(v, "moving_fps", 30);
+    int fps = a->moving_fps;
     static const int FPS[] = {0, 15, 30, 60};
     char lab[64], nb[16];
     for (int k = 0; k < 4; k++) {
         snprintf(nb, sizeof nb, "%d", FPS[k]);
         const char *l = FPS[k] ? Tf(a, lab, sizeof lab, "settings.moving.fps", "{fps}", nb) : T(a, "settings.moving.0");
         if (k) igSameLine(0, 10 * s);
-        if (igRadioButton_Bool(l, fps == FPS[k])) set_setting(a, "moving_fps", nb), optimisations_apply(a);
+        if (igRadioButton_Bool(l, fps == FPS[k])) set_setting(a, "moving_fps", nb), nset_set("moving_fps", nb, 0), optimisations_apply(a);
     }
     bool px = !v || !jr_get(v, "moving_proxies") || jb(v, "moving_proxies");
     if (igCheckbox(T(a, "settings.proxies"), &px)) set_setting(a, "moving_proxies", px ? "true" : "false"), optimisations_apply(a);
