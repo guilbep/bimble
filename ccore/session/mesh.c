@@ -736,51 +736,72 @@ static void view_in(const cc_tiles_frame_q *q, double c, double sn, const double
     v->eye[0] = c * e[0] + sn * e[1], v->eye[1] = -sn * e[0] + c * e[1], v->eye[2] = e[2];
 }
 
-static int frame_one(cc_session *s, const char *name, const cc_tiles_src *src, const uint8_t *sec, size_t sn, uint32_t ne,
-                     const cc_tiles_frame_q *q, double c, double si, const double o[3], JsonW *w, double tot[6]) {
+typedef struct { /* one pyramid's part of a frame */
+    const char *name;
+    cc_tiles_src src;
+    const uint8_t *sec;
+    size_t sn;
+    uint32_t ne;
+    double c, si, o[3];
     cc_tiles_toc toc;
+    uint32_t *ids, n;
+    uint8_t *hid;
+    uint64_t tris;
+    double sel_ms;
+} FrameP;
+
+static int frame_select(cc_session *s, FrameP *f, const cc_tiles_frame_q *q) {
     cc_error err;
-    (void)s;
-    if (cc_tiles_check(sec, sn, 1, ne, &toc, &err)) return -1;
+    if (cc_tiles_check(f->sec, f->sn, 1, f->ne, &f->toc, &err)) return -1;
     cc_tiles_view v;
-    view_in(q, c, si, o, &v);
-    uint32_t *ids = malloc(((size_t)toc.ntiles + 1) * sizeof *ids);
-    if (!ids) return -1;
-    uint64_t tris = 0, pb = 0, lb = 0, nl = 0, np = 0;
+    view_in(q, f->c, f->si, f->o, &v);
+    f->ids = malloc(((size_t)f->toc.ntiles + 1) * sizeof *f->ids);
+    f->hid = calloc((size_t)f->toc.ntiles + 1, 1);
+    if (!f->ids || !f->hid) return -1;
     double t0 = s->pf->now_ms(s->pf->ctx);
-    uint32_t n = cc_tiles_select(&toc, &v, q->error_px, q->budget, NULL, ids, toc.ntiles, &tris);
-    double sel_ms = s->pf->now_ms(s->pf->ctx) - t0;
-    cc_tile r;
-    if (toc.ntiles) cc_tiles_get(&toc, 0, &r);
+    f->n = cc_tiles_select(&f->toc, &v, q->error_px, q->budget, NULL, f->ids, f->toc.ntiles, &f->tris);
+    f->sel_ms = s->pf->now_ms(s->pf->ctx) - t0;
+    return 0;
+}
+
+static void frame_write(FrameP *f, const cc_tiles_frame_q *q, JsonW *w, double tot[8]) {
+    cc_error err;
+    uint64_t tris = 0, pb = 0, lb = 0, nl = 0, np = 0, ht = 0, hn = 0;
     Buf a;
     buf_init(&a);
-    for (uint32_t i = 0; i < n; i++) {
+    for (uint32_t i = 0; i < f->n; i++) {
         cc_tile t;
-        cc_tiles_get(&toc, ids[i], &t);
+        cc_tiles_get(&f->toc, f->ids[i], &t);
+        if (f->hid[i]) { hn++, ht += t.tris; continue; }
+        tris += t.tris;
         if (t.flags & CC_TILE_PROXY) pb += t.len, np++;
-        else if (q->leaf_bytes) {
-            buf_clear(&a);
-            if (!cc_tiles_leaf_answer(src, &toc, ids[i], &a, &err)) lb += a.len;
+        else {
+            if (q->leaf_bytes) {
+                buf_clear(&a);
+                if (!cc_tiles_leaf_answer(&f->src, &f->toc, f->ids[i], &a, &err)) lb += a.len;
+            }
             nl++;
-        } else nl++;
+        }
     }
     buf_free(&a);
+    cc_tile r;
+    if (f->toc.ntiles) cc_tiles_get(&f->toc, 0, &r);
     jw_obj_begin(w);
-    jw_key(w, "detail"), jw_u64(w, toc.ntiles ? r.detail : 0);
+    jw_key(w, "detail"), jw_u64(w, f->toc.ntiles ? r.detail : 0);
+    jw_key(w, "hidden_tiles"), jw_u64(w, hn);
+    jw_key(w, "hidden_triangles"), jw_u64(w, ht);
     jw_key(w, "leaf_bytes"), jw_u64(w, lb);
     jw_key(w, "leaves"), jw_u64(w, nl);
-    jw_key(w, "name"), jw_str(w, name);
+    jw_key(w, "name"), jw_str(w, f->name);
     jw_key(w, "proxies"), jw_u64(w, np);
     jw_key(w, "proxy_bytes"), jw_u64(w, pb);
-    jw_key(w, "select_ms"), jw_f64(w, sel_ms);
-    jw_key(w, "tiles"), jw_u64(w, n);
-    jw_key(w, "toc_bytes"), jw_u64(w, toc.toc);
+    jw_key(w, "select_ms"), jw_f64(w, f->sel_ms);
+    jw_key(w, "tiles"), jw_u64(w, np + nl);
+    jw_key(w, "toc_bytes"), jw_u64(w, f->toc.toc);
     jw_key(w, "triangles"), jw_u64(w, tris);
     jw_obj_end(w);
-    tot[0] += (double)tris, tot[1] += (double)n, tot[2] += (double)pb, tot[3] += (double)lb, tot[4] += (double)toc.toc;
-    tot[5] += toc.ntiles ? (double)r.detail : 0;
-    free(ids);
-    return 0;
+    tot[0] += (double)tris, tot[1] += (double)(np + nl), tot[2] += (double)pb, tot[3] += (double)lb, tot[4] += (double)f->toc.toc;
+    tot[5] += f->toc.ntiles ? (double)r.detail : 0, tot[6] += (double)ht, tot[7] += (double)hn;
 }
 
 /* the world box of a pyramid's root, placed (R about Z, then o) */
@@ -814,41 +835,64 @@ static void frame_place(JsonW *w, const char *name, double c, double sn, const d
 int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
     JsonW w;
     jw_init(&w, out, 0);
-    double tot[6] = {0}, b[6] = {1e300, 1e300, 1e300, -1e300, -1e300, -1e300};
-    jw_obj_begin(&w);
-    jw_key(&w, "links"), jw_arr_begin(&w);
+    double tot[8] = {0}, b[6] = {1e300, 1e300, 1e300, -1e300, -1e300, -1e300};
+    FrameP *fp = calloc(s->nlinks + 2, sizeof *fp);
+    if (!fp) return -1;
+    size_t nf = 0;
     if (s->tiles_status == 200 && s->tiles && s->tiles_scene) { /* the open scene's pyramid, once built (cc_mesh_tiles) */
-        cc_tiles_src src = {s->tiles_scene, NULL};
-        const double *o = s->tiles_scene->origin;
-        const uint8_t *sec = (const uint8_t *)s->tiles->out.p;
-        size_t sn = s->tiles->out.len;
-        if (q->bounds_only) grow_world(sec, sn, 1, 0, o, b), frame_place(&w, "(open)", 1, 0, o);
-        else frame_one(s, "(open)", &src, sec, sn, (uint32_t)s->tiles_scene->nelements, q, 1, 0, o, &w, tot);
+        FrameP *f = &fp[nf++];
+        f->name = "(open)", f->src.scene = s->tiles_scene, f->sec = (const uint8_t *)s->tiles->out.p, f->sn = s->tiles->out.len;
+        f->ne = (uint32_t)s->tiles_scene->nelements, f->c = 1, f->si = 0;
+        memcpy(f->o, s->tiles_scene->origin, sizeof f->o);
     }
     for (size_t i = 0; i < s->nlinks; i++) {
         cc_link *l = &s->links[i];
         if (!l->kind || !l->visible) continue;
         const char *p;
         size_t n;
-        int st = cc_link_tiles(s, i, NULL, 0, 0, 0, "toc", 3, &p, &n); /* builds a small link's at once */
-        (void)p, (void)n;
-        if (st != 200) continue;
-        cc_tiles_src src = {NULL, NULL};
-        if (l->vf) src.vf = l->vf;
-        else if (l->ifc) src.scene = &l->ifc->scene;
-        else src.scene = cc_link_raw_scene(l);
-        const uint8_t *sec = NULL;
-        size_t sn = 0;
-        if (l->vf && l->vf->has_tiles && l->vf->lazy) sec = l->vf->base + l->vf->tiles_off, sn = (size_t)l->vf->tiles_len;
-        else if (s->link_tiles_uid == l->uid + 1) sec = (const uint8_t *)s->link_tiles.p, sn = s->link_tiles.len;
-        if (!sec) continue;
-        double c, si, t[3], o[3];
-        cc_link_placement(s, l, &c, &si, t);
+        if (cc_link_tiles(s, i, NULL, 0, 0, 0, "toc", 3, &p, &n) != 200) continue; /* builds a small link's at once */
+        FrameP *f = &fp[nf];
+        if (l->vf) f->src.vf = l->vf;
+        else if (l->ifc) f->src.scene = &l->ifc->scene;
+        else f->src.scene = cc_link_raw_scene(l);
+        if (l->vf && l->vf->has_tiles && l->vf->lazy) f->sec = l->vf->base + l->vf->tiles_off, f->sn = (size_t)l->vf->tiles_len;
+        else if (s->link_tiles_uid == l->uid + 1) f->sec = (const uint8_t *)s->link_tiles.p, f->sn = s->link_tiles.len;
+        if (!f->sec) continue;
+        double t[3];
+        cc_link_placement(s, l, &f->c, &f->si, t);
         const double *lo = cc_link_rows(l)->origin;
-        o[0] = c * lo[0] - si * lo[1] + t[0], o[1] = si * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
-        if (q->bounds_only) grow_world(sec, sn, c, si, o, b), frame_place(&w, l->name, c, si, o);
-        else frame_one(s, l->name, &src, sec, sn, (uint32_t)cc_link_rows(l)->nelements, q, c, si, o, &w, tot);
+        f->o[0] = f->c * lo[0] - f->si * lo[1] + t[0], f->o[1] = f->si * lo[0] + f->c * lo[1] + t[1], f->o[2] = lo[2] + t[2];
+        f->name = l->name, f->ne = (uint32_t)cc_link_rows(l)->nelements;
+        nf++;
     }
+    jw_obj_begin(&w);
+    jw_key(&w, "links"), jw_arr_begin(&w);
+    if (q->bounds_only)
+        for (size_t i = 0; i < nf; i++) grow_world(fp[i].sec, fp[i].sn, fp[i].c, fp[i].si, fp[i].o, b), frame_place(&w, fp[i].name, fp[i].c, fp[i].si, fp[i].o);
+    else {
+        for (size_t i = 0; i < nf; i++)
+            if (frame_select(s, &fp[i], q)) fp[i].n = 0;
+        if (q->occlusion) { /* one depth buffer for every pyramid: every drawn tile's occluders, then each tile's box */
+            cc_tiles_occ z;
+            double t0 = s->pf->now_ms(s->pf->ctx);
+            if (!cc_tiles_occ_init(&z, q->eye, q->at, q->tan_half, q->w, q->h, q->w >= 1280 ? 640 : 320)) {
+                for (size_t i = 0; i < nf; i++)
+                    for (uint32_t k = 0; k < fp[i].n; k++) cc_tiles_occ_draw(&z, &fp[i].toc, fp[i].ids[k], fp[i].c, fp[i].si, fp[i].o);
+                for (size_t i = 0; i < nf; i++)
+                    for (uint32_t k = 0; k < fp[i].n; k++) {
+                        cc_tile t;
+                        cc_tiles_get(&fp[i].toc, fp[i].ids[k], &t);
+                        fp[i].hid[k] = (uint8_t)cc_tiles_occ_hidden(&z, t.box, fp[i].c, fp[i].si, fp[i].o);
+                    }
+            }
+            cc_tiles_occ_free(&z);
+            tot[7] += 0, (void)t0;
+        }
+        for (size_t i = 0; i < nf; i++)
+            if (fp[i].ids) frame_write(&fp[i], q, &w, tot);
+    }
+    for (size_t i = 0; i < nf; i++) free(fp[i].ids), free(fp[i].hid);
+    free(fp);
     jw_arr_end(&w);
     if (q->bounds_only) {
         jw_key(&w, "bounds"), jw_arr_begin(&w);
@@ -857,6 +901,8 @@ int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out) {
     } else {
         jw_key(&w, "bytes"), jw_u64(&w, (uint64_t)(tot[2] + tot[3]));
         jw_key(&w, "detail"), jw_u64(&w, (uint64_t)tot[5]);
+        jw_key(&w, "hidden_tiles"), jw_u64(&w, (uint64_t)tot[7]);
+        jw_key(&w, "hidden_triangles"), jw_u64(&w, (uint64_t)tot[6]);
         jw_key(&w, "leaf_bytes"), jw_u64(&w, (uint64_t)tot[3]);
         jw_key(&w, "proxy_bytes"), jw_u64(&w, (uint64_t)tot[2]);
         jw_key(&w, "tiles"), jw_u64(&w, (uint64_t)tot[1]);

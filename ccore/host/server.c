@@ -650,6 +650,7 @@ static void handle_one(Conn *c, int *again) {
                 if (query_param(query, "err", &x)) ok &= parse_nums(x, &q.error_px, 1);
                 if (query_param(query, "budget", &x) && parse_nums(x, &nb, 1) && nb > 0) q.budget = (uint64_t)nb;
                 q.leaf_bytes = query_param(query, "leaf_bytes", &x) && str_eq(x, "1");
+                q.occlusion = query_param(query, "occ", &x) && str_eq(x, "1");
                 double th = fov * 3.141592653589793 / 360.0; /* tan by its series: no libm here */
                 q.tan_half = th + th * th * th / 3 + 2 * th * th * th * th * th / 15 + 17 * th * th * th * th * th * th * th / 315;
                 Buf fb;

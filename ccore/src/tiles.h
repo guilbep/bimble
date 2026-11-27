@@ -181,4 +181,26 @@ typedef struct {
 } cc_tiles_view;
 uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double error_px, uint64_t budget,
                          const uint8_t *descend, uint32_t *out, uint32_t cap, uint64_t *tris);
+
+/* ---- the reference occlusion: a small depth buffer of the tiles' occluders (conservative) ----
+ * A camera in world mm (eye, forward, right, up unit vectors; k = pixels per unit of tan: height / (2 tan(fov/2))),
+ * a buffer of w x h cells (a coarse copy of the screen, w x h of the viewport / cell), sampled at the cells' corners. An
+ * occluder triangle (link frame, placed by R(c, s) about Z then o: world = R p + o) writes the corners it holds (edges
+ * included: two triangles of one face leave no seam), its depth there; a cell is covered at the farthest of its four
+ * corners; a box is hidden when every cell it covers is covered nearer than the box's nearest point. Conservative but
+ * for a hole narrower than a cell between two occluders (the tools use cells of 3 px). A triangle or box reaching behind the near plane is never used to hide
+ * and never hidden. Every tile drawn should put its occluders in first (a box is not hidden by its own occluders: they
+ * lie inside it). */
+typedef struct {
+    double eye[3], fwd[3], right[3], up[3], k, near_mm;
+    int w, h;          /* cells */
+    double cell;       /* viewport pixels a cell */
+    float *depth;      /* (w + 1) x (h + 1) corner samples, +inf: nothing */
+} cc_tiles_occ;
+int cc_tiles_occ_init(cc_tiles_occ *z, const double eye[3], const double at[3], double tan_half, double w_px, double h_px, int cells_w);
+void cc_tiles_occ_free(cc_tiles_occ *z);
+/* tile i's occluders (toc->occ must be there) drawn; c, s, o: the link's placement */
+void cc_tiles_occ_draw(cc_tiles_occ *z, const cc_tiles_toc *toc, uint32_t i, double c, double s, const double o[3]);
+/* 1 when box (link frame, placed so) is hidden */
+int cc_tiles_occ_hidden(const cc_tiles_occ *z, const float box[6], double c, double s, const double o[3]);
 #endif

@@ -594,6 +594,51 @@ static int build(const cc_tiles_src *src, Buf *out, uint64_t step, double *ms) {
     return rc;
 }
 
+/* the reference occlusion: a wall's occluders hide a box behind it, not one in front, beside or half covered */
+static void occlusion(void) {
+    cc_tiles_occ z;
+    double eye[3] = {0, -20000, 1500}, at[3] = {0, 0, 1500}, o[3] = {0, 0, 0};
+    int ok = cc_tiles_occ_init(&z, eye, at, 0.57735, 1920, 1080, 320) == 0;
+    /* a section of one tile whose occluders are a wall 20 m wide, 6 m tall at y = 0 (two triangles) */
+    uint8_t sec[CC_TILES_HEAD + CC_TILES_REC + 8 + 72];
+    memset(sec, 0, sizeof sec);
+    memcpy(sec, "TIL1", 4);
+    uint32_t u[] = {1, 1, 0, 0, 2, CC_TILES_HEAD + CC_TILES_REC};
+    memcpy(sec + 4, u, sizeof u);
+    uint8_t *r = sec + CC_TILES_HEAD;
+    uint32_t none = CC_TILES_NONE, one = 1;
+    memcpy(r, &none, 4), memcpy(r + 4, &one, 4);
+    r[11] = CC_TILE_LEAF | CC_TILE_OCC;
+    float bx[6] = {-10000, -10, -1500, 10000, 10, 4500};
+    memcpy(r + 12, bx, 24);
+    uint16_t two = 2;
+    memcpy(r + 72, &two, 2);
+    float tr[18] = {-10000, 0, -1500, 10000, 0, -1500, 10000, 0, 4500, -10000, 0, -1500, 10000, 0, 4500, -10000, 0, 4500};
+    memcpy(sec + CC_TILES_HEAD + CC_TILES_REC, tr, sizeof tr);
+    cc_tiles_toc toc;
+    cc_error e;
+    ok = ok && cc_tiles_check(sec, CC_TILES_HEAD + CC_TILES_REC + 72, 0, CC_TILES_NONE, &toc, &e) == 0 && toc.occ;
+    if (ok) cc_tiles_occ_draw(&z, &toc, 0, 1, 0, o);
+    if (getenv("TILES_DUMP")) {
+        int nset = 0;
+        for (int i = 0; i < (z.w + 1) * (z.h + 1); i++) nset += z.depth[i] < 1e30f;
+        printf("  occlusion: %d of %d cells set, ok %d, nocc %u, centre %g, k %g, w %d h %d\n", nset, z.w * z.h, ok, toc.nocc,
+               z.depth[(size_t)(z.h / 2) * (z.w + 1) + z.w / 2], z.k, z.w, z.h);
+    }
+    float behind[6] = {-2000, 3000, 0, 2000, 6000, 3000}, front[6] = {-2000, -6000, 0, 2000, -3000, 3000};
+    float beside[6] = {15000, 3000, 0, 19000, 6000, 3000}, half[6] = {8000, 3000, 0, 12000, 6000, 3000}, above[6] = {-2000, 3000, 4000, 2000, 6000, 9000};
+    check_true("occlusion: a box behind the wall is hidden", ok && cc_tiles_occ_hidden(&z, behind, 1, 0, o));
+    check_true("occlusion: a box in front of it, beside it, half covered or above it is not",
+               ok && !cc_tiles_occ_hidden(&z, front, 1, 0, o) && !cc_tiles_occ_hidden(&z, beside, 1, 0, o) && !cc_tiles_occ_hidden(&z, half, 1, 0, o) &&
+                   !cc_tiles_occ_hidden(&z, above, 1, 0, o));
+    double o2[3] = {0, 30000, 0}; /* the wall placed 30 m away (a link's placement): the box now in front of it */
+    cc_tiles_occ_free(&z);
+    cc_tiles_occ_init(&z, eye, at, 0.57735, 1920, 1080, 320);
+    if (ok) cc_tiles_occ_draw(&z, &toc, 0, 1, 0, o2);
+    check_true("occlusion: through a placement", ok && !cc_tiles_occ_hidden(&z, behind, 1, 0, o));
+    cc_tiles_occ_free(&z);
+}
+
 static void lattice(void) {
     float a[6] = {0, 0, 0, 30000, 20000, 3500}, b[6] = {30000, 0, 0, 61000, 20000, 3500};
     int ka, kb;
@@ -754,5 +799,6 @@ int main(void) {
         cc_scene_free(&s0);
     }
     lattice();
+    occlusion();
     return report("tiles");
 }

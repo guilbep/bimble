@@ -124,11 +124,12 @@ function cameras(b) {
 async function frames(H, bounds) {
   const cams = cameras(bounds), out = {};
   for (const [name, cam] of Object.entries(cams))
-    for (const err of [1, 2]) {
-      const q = `tiles_frame=1&eye=${cam.eye.join(",")}&at=${cam.at.join(",")}&fov=60&w=1920&h=1080&err=${err}&leaf_bytes=1`;
-      const t0 = performance.now(), g = await H.get(q), ms = performance.now() - t0;
-      out[`${name}@${err}`] = { ...json(g.bytes), ms, cam };
-    }
+    for (const err of [1, 2])
+      for (const occ of [0, 1]) {
+        const q = `tiles_frame=1&eye=${cam.eye.join(",")}&at=${cam.at.join(",")}&fov=60&w=1920&h=1080&err=${err}&leaf_bytes=1&occ=${occ}`;
+        const t0 = performance.now(), g = await H.get(q), ms = performance.now() - t0;
+        out[`${name}@${err}${occ ? "o" : ""}`] = { ...json(g.bytes), ms, cam };
+      }
   return out;
 }
 
@@ -320,10 +321,10 @@ function md(rs) {
     const b = r.conv ? `index ${fmt(r.conv.reduce((n, c) => n + c.indexMs, 0))} ms (tiles ${fmt(r.conv.reduce((n, c) => n + c.tilesMs, 0))} ms), peak ${MB(Math.max(...r.conv.map((c) => c.indexPeak)))}` : `${fmt(r.buildMs)} ms in the host`;
     L.push(`| ${r.label} | ${fmt(r.detail)} | ${fmt(r.tiles)} (${fmt(r.leaves)} / ${fmt(r.proxies)}) | ${r.maxLevels} | ${r.levels.map(fmt).join(" / ")} | ${r.errs.map(fmt).join(" / ")} | ${MB(r.sectionBytes)} (${MB(r.tocBytes)}) | ${fmt(r.occ)} (${MB(r.occBytes)}) | ${b} |`);
   }
-  L.push("", "| set | view | 1 px: tiles, tris, bytes to fetch | 2 px: tiles, tris, bytes | walk |", "|---|---|---|---|---|");
+  L.push("", "| set | view | 1 px: tiles, tris, bytes to fetch | 2 px: tiles, tris, bytes | 1 px with occlusion: tris (hidden), bytes | 2 px with occlusion | walk |", "|---|---|---|---|---|---|---|");
   for (const r of rs) for (const v of ["far", "close", "inside"]) {
-    const a = r.frames[`${v}@1`], b = r.frames[`${v}@2`];
-    L.push(`| ${r.label} | ${v} | ${fmt(a.tiles)}, ${fmt(a.triangles)}, ${MB(a.bytes)} | ${fmt(b.tiles)}, ${fmt(b.triangles)}, ${MB(b.bytes)} | ${a.ms.toFixed(0)} ms |`);
+    const a = r.frames[`${v}@1`], b = r.frames[`${v}@2`], ao = r.frames[`${v}@1o`], bo = r.frames[`${v}@2o`];
+    L.push(`| ${r.label} | ${v} | ${fmt(a.tiles)}, ${fmt(a.triangles)}, ${MB(a.bytes)} | ${fmt(b.tiles)}, ${fmt(b.triangles)}, ${MB(b.bytes)} | ${fmt(ao.triangles)} (${fmt(ao.hidden_triangles)}), ${MB(ao.bytes)} | ${fmt(bo.triangles)} (${fmt(bo.hidden_triangles)}) | ${a.ms.toFixed(0)} / ${ao.ms.toFixed(0)} ms |`);
   }
   L.push("", "| set | first picture (tables + roots) | leaves served (BMG1 from ELEM) | deflated | raw 21-bit | proxies raw / deflated | leaf decode / copy |", "|---|---|---|---|---|---|---|");
   for (const r of rs) L.push(`| ${r.label} | ${MB(r.first.bytes)}, ${fmt(r.first.tris)} tris | ${MB(r.leafServed)} | ${MB(r.leafDeflated)} | ${MB(r.leafRaw21)} | ${MB(r.proxyBytes)} / ${MB(r.proxyDeflated)} | ${r.decodeMs.toFixed(0)} / ${r.copyMs.toFixed(1)} ms |`);

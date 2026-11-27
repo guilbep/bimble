@@ -81,12 +81,13 @@ void cc_mesh_tiles_free(cc_session *s);
 /* TILE1: what the reference walker (tiles.h cc_tiles_select) draws for one camera in the host's world mm, per link (its
  * eye and frustum moved into the link's frame by its placement): tiles, triangles, proxy bytes and (leaf_bytes) the
  * leaves' answers' bytes, the tables' bytes; or (bounds_only) the world box of every link's root. JSON into `out`.
- * The native host serves it as GET /mesh?tiles_frame=1&eye=x,y,z&at=x,y,z&fov=deg&w=&h=&err=px&budget=&leaf_bytes=1
- * (tiles_frame=bounds: the box). Tools and tests (ccore/tools/tiles.mjs). */
+ * The native host serves it as GET /mesh?tiles_frame=1&eye=x,y,z&at=x,y,z&fov=deg&w=&h=&err=px&budget=&leaf_bytes=1&occ=1
+ * (tiles_frame=bounds: the box; occ=1: tiles hidden by the drawn tiles' occluders left out, counted apart). Tools and tests (ccore/tools/tiles.mjs). */
 typedef struct {
     double eye[3], at[3], tan_half, w, h, error_px;
     uint64_t budget;
     int leaf_bytes, bounds_only;
+    int occlusion; /* the drawn tiles' occluders in one depth buffer (tiles.h cc_tiles_occ): tiles hidden left out */
 } cc_tiles_frame_q;
 int cc_tiles_frame(cc_session *s, const cc_tiles_frame_q *q, Buf *out);
 #endif

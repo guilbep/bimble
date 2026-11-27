@@ -1855,3 +1855,102 @@ uint32_t cc_tiles_select(const cc_tiles_toc *toc, const cc_tiles_view *v, double
     free(h), free(fin);
     return n;
 }
+
+/* ---- the reference occlusion (tiles.h) ---- */
+
+int cc_tiles_occ_init(cc_tiles_occ *z, const double eye[3], const double at[3], double tan_half, double w_px, double h_px, int cells_w) {
+    memset(z, 0, sizeof *z);
+    double f[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]}, up[3] = {0, 0, 1};
+    double l = cc_sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    if (!(l > 0) || !(tan_half > 0) || !(w_px > 0) || !(h_px > 0) || cells_w < 8 || cells_w > 4096) return -1;
+    for (int k = 0; k < 3; k++) f[k] /= l, z->eye[k] = eye[k], z->fwd[k] = f[k];
+    if (f[2] > 0.999 || f[2] < -0.999) up[0] = 0, up[1] = 1, up[2] = 0;
+    double r[3] = {f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]};
+    l = cc_sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+    for (int k = 0; k < 3; k++) z->right[k] = r[k] / l;
+    z->up[0] = z->right[1] * f[2] - z->right[2] * f[1], z->up[1] = z->right[2] * f[0] - z->right[0] * f[2], z->up[2] = z->right[0] * f[1] - z->right[1] * f[0];
+    z->w = cells_w, z->cell = w_px / cells_w, z->h = (int)(h_px / z->cell + 0.5);
+    if (z->h < 1) z->h = 1;
+    z->k = h_px / (2 * tan_half) / z->cell; /* in cells */
+    z->near_mm = 100;
+    size_t ns = (size_t)(z->w + 1) * (z->h + 1); /* samples at the cells' corners */
+    z->depth = malloc(ns * sizeof *z->depth);
+    if (!z->depth) return -1;
+    for (size_t i = 0; i < ns; i++) z->depth[i] = 1.0f / 0.0f;
+    return 0;
+}
+
+void cc_tiles_occ_free(cc_tiles_occ *z) {
+    free(z->depth);
+    memset(z, 0, sizeof *z);
+}
+
+/* a link-frame point to the camera: x, y in cells (from the buffer's corner), depth (mm along forward) */
+static void occ_proj(const cc_tiles_occ *z, const double p[3], double c, double s, const double o[3], double out[3]) {
+    double w3[3] = {c * p[0] - s * p[1] + o[0] - z->eye[0], s * p[0] + c * p[1] + o[1] - z->eye[1], p[2] + o[2] - z->eye[2]};
+    double d = w3[0] * z->fwd[0] + w3[1] * z->fwd[1] + w3[2] * z->fwd[2];
+    double x = w3[0] * z->right[0] + w3[1] * z->right[1] + w3[2] * z->right[2], y = w3[0] * z->up[0] + w3[1] * z->up[1] + w3[2] * z->up[2];
+    out[2] = d;
+    if (d > 0) out[0] = z->w / 2.0 + z->k * x / d, out[1] = z->h / 2.0 - z->k * y / d;
+}
+
+void cc_tiles_occ_draw(cc_tiles_occ *z, const cc_tiles_toc *toc, uint32_t i, double c, double s, const double o[3]) {
+    if (!toc->occ || i >= toc->ntiles || !z->depth) return;
+    cc_tile t;
+    cc_tiles_get(toc, i, &t);
+    for (uint32_t q = t.occ0; q < t.occ0 + t.nocc && q < toc->nocc; q++) {
+        double P[3][3];
+        int ok = 1;
+        for (int v = 0; v < 3; v++) {
+            double p[3] = {rdf(toc->occ + 36 * (size_t)q + 12 * v), rdf(toc->occ + 36 * (size_t)q + 12 * v + 4), rdf(toc->occ + 36 * (size_t)q + 12 * v + 8)};
+            occ_proj(z, p, c, s, o, P[v]);
+            ok &= P[v][2] > z->near_mm;
+        }
+        if (!ok) continue;
+        /* 1 / depth is affine in screen space over a plane: its value at the cells' corners from three corners */
+        double iz[3] = {1 / P[0][2], 1 / P[1][2], 1 / P[2][2]};
+        double ax = P[1][0] - P[0][0], ay = P[1][1] - P[0][1], bx = P[2][0] - P[0][0], by = P[2][1] - P[0][1], den = ax * by - ay * bx;
+        if (!(den > 1e-9 || den < -1e-9)) continue;
+        double gx = ((iz[1] - iz[0]) * by - (iz[2] - iz[0]) * ay) / den, gy = ((iz[2] - iz[0]) * ax - (iz[1] - iz[0]) * bx) / den;
+        double x0 = P[0][0], x1 = P[0][0], y0 = P[0][1], y1 = P[0][1];
+        for (int v = 1; v < 3; v++) {
+            x0 = P[v][0] < x0 ? P[v][0] : x0, x1 = P[v][0] > x1 ? P[v][0] : x1;
+            y0 = P[v][1] < y0 ? P[v][1] : y0, y1 = P[v][1] > y1 ? P[v][1] : y1;
+        }
+        int px0 = x0 < 0 ? 0 : (int)x0 + 1, px1 = x1 > z->w ? z->w : (int)x1, py0 = y0 < 0 ? 0 : (int)y0 + 1, py1 = y1 > z->h ? z->h : (int)y1;
+        double sg = den > 0 ? 1 : -1, eps = 1e-9 * (den > 0 ? den : -den);
+        for (int py = py0; py <= py1; py++) /* each corner sample inside it (edges included): the nearest occluder there */
+            for (int px = px0; px <= px1; px++) {
+                int in = 1;
+                for (int e = 0; e < 3 && in; e++) {
+                    const double *a = P[e], *b = P[(e + 1) % 3];
+                    double cr = (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0]);
+                    if (cr * sg < -eps) in = 0;
+                }
+                double v = iz[0] + gx * (px - P[0][0]) + gy * (py - P[0][1]);
+                if (!in || !(v > 0)) continue;
+                float d = (float)(1 / v) * 1.0001f; /* rounded away from the eye */
+                float *cell = &z->depth[(size_t)py * (z->w + 1) + px];
+                if (d < *cell) *cell = d;
+            }
+    }
+}
+
+int cc_tiles_occ_hidden(const cc_tiles_occ *z, const float box[6], double c, double s, const double o[3]) {
+    if (!z->depth) return 0;
+    double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300, dmin = 1e300;
+    for (int k = 0; k < 8; k++) {
+        double p[3] = {k & 1 ? box[3] : box[0], k & 2 ? box[4] : box[1], k & 4 ? box[5] : box[2]}, q[3];
+        occ_proj(z, p, c, s, o, q);
+        if (!(q[2] > z->near_mm)) return 0;
+        dmin = q[2] < dmin ? q[2] : dmin;
+        x0 = q[0] < x0 ? q[0] : x0, x1 = q[0] > x1 ? q[0] : x1, y0 = q[1] < y0 ? q[1] : y0, y1 = q[1] > y1 ? q[1] : y1;
+    }
+    if (x1 < 0 || y1 < 0 || x0 >= z->w || y0 >= z->h) return 0; /* off the buffer: the frustum's business */
+    int cx0 = x0 < 0 ? 0 : (int)x0, cx1 = x1 >= z->w ? z->w - 1 : (int)x1, cy0 = y0 < 0 ? 0 : (int)y0, cy1 = y1 >= z->h ? z->h - 1 : (int)y1;
+    for (int cy = cy0; cy <= cy1; cy++) /* a cell is covered at the farthest of its corners */
+        for (int cx = cx0; cx <= cx1; cx++)
+            for (int k = 0; k < 4; k++)
+                if (!(z->depth[(size_t)(cy + (k >> 1)) * (z->w + 1) + cx + (k & 1)] < dmin)) return 0;
+    return 1;
+}
