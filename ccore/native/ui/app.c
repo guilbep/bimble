@@ -444,6 +444,12 @@ static void frame(App *a) {
     a->ui_ms = t_ui - t0;
     a->t_ui_done = t_ui;
     int drew3d = 0, pick = a->pick_pending;
+    /* NUI3: tiles arriving (or wanted) draw again only when no 3D frame is left on the GPU (pace_tiles): such frames never
+     * queue behind each other (a still frame's time is its own, not two frames'), and an input finds the GPU free */
+    if (a->dirty_tiles && !a->dirty) {
+        if (a->pend.f && SDL_QueryGPUFence(a->dev, a->pend.f)) app_finish_frame(a);
+        if (!a->pace_tiles || !a->pend.f) a->dirty = 1, a->dirty_tiles = 0;
+    } else if (a->dirty) a->dirty_tiles = 0;
     if ((a->dirty || pick) && a->show == SHOW_VIEW && a->screen_kind == SCR_MAIN && a->r) {
         int mv = a->moving && a->adaptive && a->moving_fps > 0;
         float cut = mv ? (a->cut_live > a->still_cut ? a->cut_live : a->still_cut) : a->still_cut;
@@ -481,6 +487,12 @@ static void frame(App *a) {
     /* NUI2, frames in flight (frames_in_flight, 2 by default): this frame was recorded while the GPU drew the previous one;
      * the previous one is finished here (its fence: its read-backs, the pick, the numbers), then this one submitted and
      * finished at the next frame. 1: each frame waits for its own fence (the truth test always: it compares this frame). */
+    if (a->pend.f && !drew3d && a->pace_tiles && !SDL_QueryGPUFence(a->dev, a->pend.f)) { /* NUI3: a frame of the UI alone does not wait */
+        SDL_SubmitGPUCommandBuffer(cmd);                                                    /* for the 3D frame on the GPU */
+        if (a->offscreen && a->resize_script && a->frames % 3 == 2) app_resize_step(a);
+        a->frames++;
+        return;
+    }
     if (a->pend.f) {
         SDL_WaitForGPUFences(a->dev, true, &a->pend.f, 1), SDL_ReleaseGPUFence(a->dev, a->pend.f), a->pend.f = NULL;
         frame_done(a, &a->pend, app_now());
@@ -753,6 +765,7 @@ int main(int argc, char **argv) {
         }
     a->bench_skip = (unsigned)nset_num("bench_skip", 0);
     a->in_flight = (int)nset_num("frames_in_flight", 2) > 1 ? 2 : 1; /* NUI2 */
+    a->pace_tiles = nset_num("pace_tiles", 0) != 0;                     /* NUI3: measured worse for still frames: off */
     { /* the local session log: on in a window unless session_log is false; offscreen only when BIMBLE_LOG_DIR is set */
         const char *ld = getenv("BIMBLE_LOG_DIR");
         a->session_log = (int)nset_num("session_log", a->offscreen ? (ld && *ld) : 1);
@@ -818,6 +831,7 @@ int main(int argc, char **argv) {
     while (!a->quit) {
         SDL_Event ev;
         int had = 0;
+        if (a->pend.f && SDL_QueryGPUFence(a->dev, a->pend.f)) app_finish_frame(a); /* NUI3: a frame done is seen done at once */
         drive_step(a, app_now());
         while (SDL_PollEvent(&ev)) {
             had = 1;
@@ -832,11 +846,17 @@ int main(int argc, char **argv) {
             }
         }
         /* idle: wait for an event; loading (the open, a conversion, the loader): poll every few ms */
-        int busy = a->dirty || a->moving || a->pick_pending || a->drag || a->box_drag;
+        int busy = a->dirty || a->moving || a->pick_pending || a->drag || a->box_drag || (a->dirty_tiles && !a->pend.f);
         int loading = a->screen_kind == SCR_OPENING || nv_loader_busy(a->loader) || a->links_busy;
         if (!had && !busy && n > 2) {
-            if (!a->offscreen) SDL_WaitEventTimeout(NULL, loading ? 8 : 100);
+            if (!a->offscreen) SDL_WaitEventTimeout(NULL, a->dirty_tiles ? 2 : loading ? 8 : 100);
             else SDL_Delay(a->steps ? 1 : 4);
+        }
+        /* NUI3: nothing new while a 3D frame is on the GPU: no frame of the UI alone queued behind it (they flooded the
+         * GPU's queue: a still frame waited behind them) */
+        if (a->pace_tiles && !had && !a->dirty && !a->pick_pending && a->pend.f && a->pend.drew3d && !SDL_QueryGPUFence(a->dev, a->pend.f)) {
+            SDL_Delay(1);
+            continue;
         }
         frame(a);
         n++;

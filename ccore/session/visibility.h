@@ -41,6 +41,11 @@ typedef struct {
     int section_on;
     int has_box;
     float min[3], max[3]; /* scene coordinates (mm relative to the scene origin), f32 as ClipBox */
+    /* MEAS3 (ADR 0087): the box's frame. min, max (and the drag's boxes) are relative to `base` (f64 mm, in the
+     * box's turned frame): 0 unless a fit, a turn or box_set put the box more than CC_VIS_FAR_MM from the scene
+     * origin (links at national coordinates); then base is the box's centre in 1 m steps and min, max stay small.
+     * The box in scene coordinates: min + base, max + base (f64). */
+    double base[3];
     /* The face drag (a tool, ADR 0068 rule 2): the face held and the box while it moves. */
     int drag_face; /* -1: none */
     double drag_t0;
@@ -63,8 +68,25 @@ typedef struct {
     int true_north;
     int has_alt;
     float alt_min[3], alt_max[3], alt_yaw, made_min[3], made_max[3];
+    double alt_base[3], made_base[3]; /* MEAS3: their frames (as `base`) */
     /* ---- end ISS71 ---- */
 } cc_vis;
+
+/* ---- MEAS3 (ADR 0087) ---- the box at national coordinates */
+#define CC_VIS_FAR_MM 1e6 /* a box whose centre is farther than this from the scene origin gets a base */
+/* 1 if a point (or offset) is farther than CC_VIS_FAR_MM from the scene origin on some axis (not finite: 0). */
+int cc_vis_far(const double p[3]);
+/* cc_vis_grow with an f64 offset and bounds: the element's points in its own scene's frame (f32, small), moved
+ * and turned in f64. */
+void cc_vis_grow_d(const cc_scene *sc, size_t k, const double off[3], float yaw, double lo[3], double hi[3]);
+/* The box = [mn, mx] (scene coordinates in the frame of v->yaw, f64): base 0 and min, max = (float)mn, mx when
+ * its centre is within CC_VIS_FAR_MM, else base = its centre in 1 m steps. 0, or -1 when empty or not finite. */
+int cc_vis_set_box_d(cc_vis *v, const double mn[3], const double mx[3]);
+/* cc_vis_fit_bounds over f64 bounds (the same box, bit for bit, for f32 bounds near the origin). */
+int cc_vis_fit_bounds_d(cc_vis *v, const double lo[3], const double hi[3], double margin);
+/* The box in scene coordinates (min + base, max + base), f64; `drag`: the box the drag shows. */
+void cc_vis_box_abs(const cc_vis *v, int drag, double mn[3], double mx[3]);
+/* ---- end MEAS3 ---- */
 
 /* ---- ISS71 ---- Box to selection (issue #71): the selection's bounds grown by 1 m on every side. */
 #define CC_BOX_SELECTION_MARGIN_MM 1000.0f
@@ -79,7 +101,7 @@ int cc_vis_fit_bounds(cc_vis *v, const float lo[3], const float hi[3], float mar
  * gives the same box back); else around `sel_lo`..`sel_hi` (the selection in the new frame, NULL:
  * none) grown by CC_BOX_SELECTION_MARGIN_MM; else around the current box's corners in the new
  * frame. Without a box only the yaw changes (the next fit uses it). */
-void cc_vis_orient(cc_vis *v, float yaw, const float *sel_lo, const float *sel_hi);
+void cc_vis_orient(cc_vis *v, float yaw, const double *sel_lo, const double *sel_hi); /* MEAS3: f64 bounds */
 /* ---- end ISS71 ---- */
 
 void cc_vis_init(cc_vis *v);

@@ -350,7 +350,7 @@ void scene_tick(App *a) {
                 if (!j->gt && !strncmp(j->err, "no room", 7)) nv_tileset_queued(j->ts, j->tile, 0), nv_render_tiles_squeeze(a->r);
                 else if (j->gt || !j->cancelled) nv_tileset_attach(a->r, j->ts, j->tile, j->gt), j->gt = NULL;
                 else nv_tileset_queued(j->ts, j->tile, 0);
-                a->dirty = 1;
+                a->dirty_tiles = 1;
             }
             nv_job_free(a->dev, j);
             continue;
@@ -363,7 +363,7 @@ void scene_tick(App *a) {
                     if (!j->gt && j->err[0]) slog("link %s: tile %u: %s", L->name, j->tile, j->err);
                     nv_tileset_attach(a->r, j->ts, j->tile, j->gt), j->gt = NULL;
                 } else nv_tileset_queued(j->ts, j->tile, 0);
-                a->dirty = 1;
+                a->dirty_tiles = 1;
             }
             a->load_ms_total += j->ms;
             nv_job_free(a->dev, j);
@@ -422,7 +422,7 @@ void scene_tick(App *a) {
             L->tiles_inflight++, a->tile_jobs++;
             nv_loader_submit(a->loader, j);
         }
-        if (nw) a->dirty = 1;
+        if (nw) a->dirty_tiles = 1;
         /* a link whose cache gets its section TILE later (its indexing job): drawn by tiles once it is there */
         if (app_now() - a->tiles_checked > 1000) {
             a->tiles_checked = app_now();

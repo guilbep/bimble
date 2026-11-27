@@ -825,6 +825,14 @@ int cc_paper_dxf_query(struct cc_session *s, const cc_scene *sc, int view, const
             }
             for (size_t k = 0; k < nv && !vw; k++)
                 if (!cc_gid_cmp(&views[k].id, &id)) vw = &views[k];
+            if (!vw && s->open && s->nlinks) { /* MEAS3: a plan from links (M1LINKS, session-only) as view_svg finds it */
+                if (cc_sv_list(s, &a, &views, &nv)) {
+                    buf_puts(out, "out of memory");
+                    goto end;
+                }
+                for (size_t k = 0; k < nv && !vw; k++)
+                    if (!cc_gid_cmp(&views[k].id, &id)) vw = &views[k];
+            }
         }
     }
     if (!sh && !vw) {

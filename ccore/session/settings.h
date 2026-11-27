@@ -81,7 +81,7 @@ typedef struct {
      * outside fetched and drawn first, tiles.h CC_TILES_SEL_PRIORITY) | "off" (plain order) | "filter" (EXPERIMENTAL: the outside
      * walk leaves out what the shell says is inside; can hide visible elements, measured 0 to 1.2 % of the seen elements per
      * frame on a real project). Not Rust's: as `renderer`, written once set. */
-    char shell_mode[12]; /* (VIS2: 12, "priority" and its NUL are 9 bytes: the NUL once landed in the next field) */
+    char shell_mode[12]; /* "priority" needs 9 bytes: 8 let its NUL spill into the next field */
     /* VIS2: the web page's session log with the native host (host/server.c POST /session_log: the page's frames, inputs,
      * errors and report under $XDG_STATE_HOME/bimble/web-sessions/<UTC>-<pid>/), true by default; false: nothing written.
      * Not Rust's: as `renderer`, written once set off. */

@@ -117,6 +117,51 @@ int cc_link_level_find(const cc_session *s, cc_str key, size_t *link) {
 
 static int link_drawn(const cc_link *k) { return k->kind && k->visible; }
 
+/* MEAS3 (ADR 0087): the box over the open scene and the drawn links when a drawn link is farther than
+ * CC_VIS_FAR_MM from the open scene's origin: every element's points in its own scene's frame (f32, small),
+ * moved by its link's offset in f64; the box set with its base (visibility.h). 1 when it did (the box set or
+ * left as it was: nothing visible), 0 when no link is far (the f32 box below, as Rust's). */
+static int fit_far(cc_session *s, cc_vis *v, const cc_scene *sc) {
+    int far = 0;
+    for (size_t i = 0; i < s->nlinks && !far; i++) {
+        const cc_link *k = &s->links[i];
+        if (!link_drawn(k)) continue;
+        const cc_scene *ls = cc_link_scene(k);
+        double off[3] = {ls->origin[0] - sc->origin[0], ls->origin[1] - sc->origin[1], ls->origin[2] - sc->origin[2]};
+        far = cc_vis_far(off);
+    }
+    if (!far) return 0;
+    double lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300};
+    static const double zero[3] = {0, 0, 0};
+    for (size_t k = 0; k < sc->nelements; k++)
+        if (v->reveal || !cc_vis_hidden(v, &sc->elements[k].id)) cc_vis_grow_d(sc, k, zero, v->yaw, lo, hi);
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        if (!link_drawn(k)) continue;
+        const cc_scene *ls = cc_link_scene(k);
+        double off[3] = {ls->origin[0] - sc->origin[0], ls->origin[1] - sc->origin[1], ls->origin[2] - sc->origin[2]};
+        if (!(off[0] - off[0] == 0.0 && off[1] - off[1] == 0.0 && off[2] - off[2] == 0.0)) continue;
+        char id[22];
+        for (size_t e = 0; e < ls->nelements; e++) {
+            if (!v->reveal) {
+                cc_link_id(k, e, id);
+                cc_gid g;
+                memcpy(g.c, id, 22);
+                if (cc_gid_valid(id, 22) && cc_vis_hidden(v, &g)) continue;
+            }
+            cc_vis_grow_d(ls, e, off, v->yaw, lo, hi);
+        }
+    }
+    if (!(lo[0] <= hi[0] && lo[1] <= hi[1] && lo[2] <= hi[2])) return 1;
+    double mn[3], mx[3];
+    for (int k = 0; k < 3; k++) { /* cc_vis_fit's margin (1 mm + 1e-5 of the size) */
+        double m = 1.0 + (hi[k] - lo[k]) * 1e-5;
+        mn[k] = lo[k] - m, mx[k] = hi[k] + m;
+    }
+    cc_vis_set_box_d(v, mn, mx);
+    return 1;
+}
+
 void cc_vis_fit_session(cc_session *s, cc_vis *v, const cc_scene *sc, const cc_gid *primary) {
     size_t nl = 0;
     for (size_t i = 0; i < s->nlinks; i++) nl += link_drawn(&s->links[i]);
@@ -125,6 +170,7 @@ void cc_vis_fit_session(cc_session *s, cc_vis *v, const cc_scene *sc, const cc_g
         if (v->has_box || primary) return;
     }
     if (!sc) return;
+    if (fit_far(s, v, sc)) return; /* MEAS3: a link at national coordinates: the box in f64, with its base */
     float inf = 1e30f * 1e30f, lo[3] = {inf, inf, inf}, hi[3] = {-inf, -inf, -inf};
     static const float zero[3] = {0, 0, 0};
     for (size_t k = 0; k < sc->nelements; k++)
@@ -151,6 +197,7 @@ void cc_vis_fit_session(cc_session *s, cc_vis *v, const cc_scene *sc, const cc_g
         float d = hi[k] - lo[k], m = 1.0f + d * 1e-5f;
         v->min[k] = lo[k] - m, v->max[k] = hi[k] + m;
     }
+    memset(v->base, 0, sizeof v->base); /* MEAS3 */
     v->has_box = 1;
 }
 

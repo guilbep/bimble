@@ -158,6 +158,8 @@ struct App {
     float vx, vy, vw, vh;      /* the viewport rect (logical px) */
     uint32_t vpw, vph;         /* its pixels */
     int dirty;                 /* the 3D picture must be drawn again */
+    int dirty_tiles;           /* NUI3: tiles arrived or are wanted: drawn again when the GPU has no 3D frame left (pace_tiles) */
+    int pace_tiles;            /* NUI3 (native.json pace_tiles, on): frames for tiles only when the last 3D frame is done */
     int moving;                /* a drag or a wheel in the last 150 ms */
     double last_move;
     float moving_cut, still_cut, cut_live; /* cut_live: the moving budget's cut now */
