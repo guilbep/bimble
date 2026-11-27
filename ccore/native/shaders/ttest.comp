@@ -8,7 +8,9 @@
 // found visible and large on screen is tested again in pieces (up to o.x a side, about o.y pixels each): visible when a
 // piece is (the union of the pieces is the box: still exact; each piece has its own nearest depth and a smaller rectangle).
 layout(local_size_x = 64) in;
-layout(set = 0, binding = 0, r32f) uniform readonly image2D hiz;
+// NUI3: the pyramid read through a sampler (texelFetch), not a read-only storage image: lavapipe 25.2 (Mesa's llvmpipe,
+// Ubuntu 24.04) jumped to a null function in this shader with the storage image (a SIGSEGV in its JIT code)
+layout(set = 0, binding = 0) uniform sampler2D hiz;
 struct Test { vec4 c; vec4 ax; vec4 ay; vec4 az; uvec4 g; }; // g.x own gate, g.y its stand-in's gate (0 none)
 layout(std430, set = 0, binding = 1) readonly buffer Tests { Test test[]; };
 layout(std430, set = 1, binding = 0) buffer Gates { uint gate[]; };
@@ -35,7 +37,7 @@ bool piece(vec4 C, vec4 X, vec4 Y, vec4 Z) {
     float lim = zmax * 1.00001;
     for (int y = a.y >> L; y <= (b.y >> L); y++)
         for (int x = a.x >> L; x <= (b.x >> L); x++)
-            if (!(lim < imageLoad(hiz, ivec2(lv[L].x + min(x, lv[L].y - 1), min(y, lv[L].z - 1))).r)) return true;
+            if (!(lim < texelFetch(hiz, ivec2(lv[L].x + min(x, lv[L].y - 1), min(y, lv[L].z - 1)), 0).r)) return true;
     return false;
 }
 
