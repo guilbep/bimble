@@ -22,6 +22,7 @@ import { GpuCull } from "./cull";
 import { BU, TU, type GpuDevice } from "./device";
 import { DEPTH, DRAW_BYTES, Pipelines, type PipeKey } from "./pipelines";
 import { xfRows, type ModelXf } from "../gl/cull";
+import { relMvp } from "../gl/origin"; // VIS2
 import { BACKGROUND, BOX, CHUNK, EDGE, GHOST, GHOST_ALPHA, GHOST_EDGE, OUTLINE, REFERENCE_EDGE, Scene, SLOT } from "./scene";
 import { GL_NAMES, type GpuDb, type GpuLinkPrx, type GpuModels, type GpuRenderer, type GpuView } from "./switch";
 
@@ -59,7 +60,8 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
   const pipes = new Pipelines(device, format);
   const scene = new Scene(device);
   const cull = new GpuCull(device);
-  const frameU = device.createBuffer({ size: 144, usage: BU.UNIFORM | BU.COPY_DST });
+  const frameU = device.createBuffer({ size: 160, usage: BU.UNIFORM | BU.COPY_DST }); // (VIS2: + the render origin)
+  let ro = [0, 0, 0]; // VIS2: this frame's render origin (GpuView.ro)
   const cube: number[] = []; // the unit cube's 12 edges
   for (let i = 0; i < 8; i++) for (let k = 0; k < 3; k++) if (!((i >> k) & 1)) cube.push(i & 1, (i >> 1) & 1, (i >> 2) & 1, (i | (1 << k)) & 1, ((i | (1 << k)) >> 1) & 1, ((i | (1 << k)) >> 2) & 1);
   const cubeBuf = scene.buf(0, BU.VERTEX, new Float32Array(cube));
@@ -163,13 +165,17 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
     const dir = [e[0]! - tg[0]!, e[1]! - tg[1]!, e[2]! - tg[2]!], dl = Math.hypot(dir[0]!, dir[1]!, dir[2]!) || 1;
     const nd = dir.map((x) => x / dl);
     const lt = [nd[0]! - 0.3, nd[1]! - 0.2, nd[2]! + 0.9], ll = Math.hypot(lt[0]!, lt[1]!, lt[2]!) || 1;
-    const u = new Float32Array(36);
-    u.set(v.mvp, 0);
-    u.set(v.ortho ? [nd[0]!, nd[1]!, nd[2]!, 1] : [e[0]!, e[1]!, e[2]!, 0], 16);
+    ro = v.ro ?? [0, 0, 0];
+    // VIS2: everything relative to the render origin (gl/origin.ts): the matrix, the eye, the box's frame
+    const cy = Math.cos(box?.yaw ?? 0), sy = Math.sin(box?.yaw ?? 0), q = [cy * ro[0]! + sy * ro[1]!, cy * ro[1]! - sy * ro[0]!, ro[2]!];
+    const u = new Float32Array(40);
+    u.set(relMvp(v.mvp, ro), 0);
+    u.set(v.ortho ? [nd[0]!, nd[1]!, nd[2]!, 1] : [e[0]! - ro[0]!, e[1]! - ro[1]!, e[2]! - ro[2]!, 0], 16);
     u.set([lt[0]! / ll, lt[1]! / ll, lt[2]! / ll, 0], 20);
-    u.set([box?.min[0] ?? 0, box?.min[1] ?? 0, box?.min[2] ?? 0, box ? 1 : 0], 24);
-    u.set([box?.max[0] ?? 0, box?.max[1] ?? 0, box?.max[2] ?? 0, CUT_SHADE], 28);
-    u.set([Math.cos(box?.yaw ?? 0), Math.sin(box?.yaw ?? 0), v.plan ? v.zbias : 0, AMBIENT], 32);
+    u.set([(box?.min[0] ?? 0) - (box ? q[0]! : 0), (box?.min[1] ?? 0) - (box ? q[1]! : 0), (box?.min[2] ?? 0) - (box ? q[2]! : 0), box ? 1 : 0], 24);
+    u.set([(box?.max[0] ?? 0) - (box ? q[0]! : 0), (box?.max[1] ?? 0) - (box ? q[1]! : 0), (box?.max[2] ?? 0) - (box ? q[2]! : 0), CUT_SHADE], 28);
+    u.set([cy, sy, v.plan ? v.zbias : 0, AMBIENT], 32);
+    u.set([ro[0]!, ro[1]!, ro[2]!, 0], 36);
     device.queue.writeBuffer(frameU, 0, u);
   };
   /** The per-draw uniforms (model, use_list, base, el_col; colour rgba; the model's rows and plain colour), SLOT apart,
@@ -183,7 +189,7 @@ export function createRenderer(glCanvas: HTMLCanvasElement, d: GpuDevice, statsO
       new Uint32Array(sb, SLOT * i, 4).set(slots.slice(8 * i, 8 * i + 4));
       const f = new Float32Array(sb, SLOT * i + 16, 20), r = rows(slots[8 * i]!);
       f.set(slots.slice(8 * i + 4, 8 * i + 8), 0);
-      f.set(xfRows(r.xf, ROW), 4);
+      f.set(xfRows({ c: r.xf.c, s: r.xf.s, t: [r.xf.t[0] - ro[0]!, r.xf.t[1] - ro[1]!, r.xf.t[2] - ro[2]!] }, ROW), 4); // (VIS2: relative)
       if (r.plain) f.set([r.plain[0]! / 255, r.plain[1]! / 255, r.plain[2]! / 255, 1], 16);
     }
     device.queue.writeBuffer(drawsBuf, 0, sb);

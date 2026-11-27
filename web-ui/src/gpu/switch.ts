@@ -86,7 +86,8 @@ export interface GpuView {
   /** The selection's elements are not under a proxy (proxies.rs usable). */
   selected: (e: number) => boolean;
   prx: Proxies | null; proxiesOn: boolean;
-  mvp: Float32Array; eye: number[]; target: number[];
+  /** The scene's view-projection (f64, VIS2) and the render origin the GPU draws relative to (gl/origin.ts). */
+  mvp: ArrayLike<number>; ro?: number[]; eye: number[]; target: number[];
   /** The eye at infinity (a plan, a section, an orthographic 3D view); a plan or a section shown. */
   ortho: boolean; plan: boolean; mirror: boolean;
   clip: { min: number[]; max: number[]; yaw?: number } | null;

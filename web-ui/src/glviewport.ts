@@ -992,7 +992,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   });
   const gpuView = (): GpuView => {
     const { e, mvp } = matrices(), m = mesh, sel = new Set(state.value.linked ? [] : state.value.selection), k = (2 * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.height);
-    return { mesh: m, boxes, shown, colour: elColour, selected: (el) => sel.has(m?.ids[el] ?? ""), prx, proxiesOn: proxiesOn(), mvp: Float32Array.from(mvp), eye: e, target,
+    return { mesh: m, boxes, shown, colour: elColour, selected: (el) => sel.has(m?.ids[el] ?? ""), prx, proxiesOn: proxiesOn(), mvp, ro: [...ro], eye: e, target,
       ortho: plan !== null || ortho3d(), plan: plan !== null, mirror: mirror(), clip: clipBox(), edges: pressed("edges", true), camKey: camKey(),
       held: () => drag !== null, fps: userSettings.value?.values.moving_fps ?? 30, mmPerPx: plan ? () => (2 * half) / Math.max(1, canvas.height) : ortho3d() ? () => distance * k : (d) => d * k,
       zbias: plan ? (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1) : 0, w: canvas.width, h: canvas.height,
