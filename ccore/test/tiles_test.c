@@ -711,6 +711,35 @@ int main(void) {
         buf_free(&hb);
         cc_scene_free(&h.s);
     }
+    /* many elements as large as the site (all the root's own): grouped, no tile with more than 16 children */
+    {
+        Synth h;
+        memset(&h, 0, sizeof h);
+        arena_init(&h.s.arena, 0);
+        ecap = 0;
+        for (int i = 0; i < 1200; i++) {
+            M m = {0};
+            double y0 = (i % 40) * 1000.0, z0 = (i / 40) * 400.0;
+            box(&m, (double[3]){0, y0, z0}, (double[3]){100000, y0 + 100, z0 + 100}, 6); /* 432 triangles, 100 m long */
+            add_el(&h, "IfcBeam", CC_CAT_STEEL, -1, to_mesh(&h.s.arena, &m), NULL);
+        }
+        cc_tiles_src hs = {&h.s, NULL};
+        Buf hb;
+        cc_tiles_toc toc;
+        int ok = build(&hs, &hb, UINT64_MAX, NULL) == 0 && cc_tiles_check((const uint8_t *)hb.p, hb.len, 1, 1200, &toc, &e) == 0;
+        uint32_t most = 0, own = 0;
+        for (uint32_t i = 0; ok && i < toc.ntiles; i++) {
+            cc_tile t;
+            cc_tiles_get(&toc, i, &t);
+            if (t.nchildren > most) most = t.nchildren;
+            own += (t.flags & CC_TILE_OWN) != 0;
+        }
+        char w[160];
+        snprintf(w, sizeof w, "many site-long elements: %u own leaves, at most %u children a tile", own, most);
+        check_true(w, ok && own > 8 && most <= 16);
+        buf_free(&hb);
+        cc_scene_free(&h.s);
+    }
     /* an empty scene */
     {
         cc_scene s0;

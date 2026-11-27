@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "hlod_grid.h"
+#include "jobs.h"
 #include "math.h"
 #include "meshcodec.h"
 #include "scene_build.h"
@@ -158,11 +159,32 @@ typedef struct {
     Occ *occ;
     uint32_t nocc;
     uint32_t id, level;
+    int occ_heap;             /* its occluders were malloc'd by a worker (a leaf), not in the arena */
     double (*smp)[4];         /* points of its content (vertices and triangle centres, strided) and the size of what they are
                                * on (an element's middle extent: its omission costs no more; a proxy's: unbounded), until
                                * its parent used them */
     uint32_t nsmp;
 } Node;
+
+typedef struct { /* a worker's leaf state (leaves are read in parallel: cc_jobs) */
+    Grid g;
+    Arena dec;                /* decoded shapes of the leaf */
+    Arena tmp;                /* an own mesh, per element */
+    cc_mesh *shapes;          /* per shape: decoded for this leaf (nv = UINT32_MAX: not yet) */
+    uint8_t *shape_flag;      /* per shape: closed and outward (bit 0), 0x80 not known yet */
+    uint32_t *touched, ntouched;
+    float (*wpos)[3];
+    Key *keys;
+    uint8_t *has;
+    size_t cwpos;
+    Occ occ[CC_TILES_OCC];
+    uint32_t nocc;
+    uint64_t leaf_verts;
+    double (*lsmp)[4];        /* the leaf's samples */
+    uint32_t nlsmp, clsmp;
+    uint64_t lstride, lcount;
+    int bad;
+} LW;
 
 struct cc_tiles_work {
     cc_tiles_src src;
@@ -175,34 +197,15 @@ struct cc_tiles_work {
     float (*box)[6];          /* per scene element */
     uint64_t *tris;           /* per scene element, placed */
     uint8_t *eflag;           /* per scene element: CC_TILES_EL_* */
-    uint8_t *shape_flag;      /* per shape: closed and outward (bit 0), 0x80 unknown */
     double origin[3], g0;
     uint32_t *order, norder, at; /* post-order */
     Clusters *cl;             /* per node until its parent used them */
     Buf blobs;
-    /* the leaf in progress */
-    int open;
-    Grid g;
-    uint32_t j;               /* its next element */
-    Arena dec;                /* decoded shapes of the leaf */
-    Arena tmp;                /* an own mesh, per element */
-    cc_mesh *shapes;          /* per shape: decoded for this leaf (nv = UINT32_MAX: not yet) */
-    uint8_t *shape_seen;
-    uint32_t *touched, ntouched;
-    float (*wpos)[3];
-    Key *keys;
-    uint8_t *has;
-    size_t cwpos;
-    Occ occ[CC_TILES_OCC];
-    uint32_t nocc;
-    uint64_t leaf_verts;
-    int chain_done;
-    double (*lsmp)[4];        /* the leaf in progress: its samples */
-    uint32_t nlsmp, clsmp;
-    uint64_t lstride, lcount;
+    LW *lw;                   /* per worker (cc_jobs): the leaves being read */
+    size_t nlw;
 };
 
-#define CC_TILES_SAMPLES 16384u /* points kept per tile to measure its parent's error */
+#define CC_TILES_SAMPLES 4096u /* points kept per tile to measure its parent's error */
 
 static double lattice_size(const cc_tiles_work *w, uint32_t e) {
     double g = w->g0;
@@ -229,13 +232,19 @@ static void work_free(cc_tiles_work *w) {
     if (!w) return;
     if (w->cl)
         for (uint32_t i = 0; i < w->nnodes; i++) cc_hg_clusters_free(&w->cl[i]);
-    for (uint32_t i = 0; w->nodes && i < w->nnodes; i++) free(w->nodes[i].smp);
-    free(w->lsmp);
-    cc_hg_grid_free(&w->g);
-    free(w->cl), free(w->nodes), free(w->els), free(w->box), free(w->tris), free(w->order), free(w->eflag), free(w->shape_flag);
-    free(w->shapes), free(w->shape_seen), free(w->touched), free(w->wpos), free(w->keys), free(w->has);
+    for (uint32_t i = 0; w->nodes && i < w->nnodes; i++) {
+        free(w->nodes[i].smp);
+        if (w->nodes[i].occ_heap) free(w->nodes[i].occ);
+    }
+    for (size_t i = 0; w->lw && i < w->nlw; i++) {
+        LW *L = &w->lw[i];
+        free(L->lsmp), cc_hg_grid_free(&L->g), free(L->shapes), free(L->shape_flag), free(L->touched), free(L->wpos), free(L->keys), free(L->has);
+        arena_free(&L->dec), arena_free(&L->tmp);
+    }
+    free(w->lw);
+    free(w->cl), free(w->nodes), free(w->els), free(w->box), free(w->tris), free(w->order), free(w->eflag);
     buf_free(&w->blobs);
-    arena_free(&w->arena), arena_free(&w->dec), arena_free(&w->tmp);
+    arena_free(&w->arena);
     free(w);
 }
 
@@ -308,25 +317,34 @@ int cc_tiles_start(cc_tiles *t, const cc_tiles_src *src, const cc_tiles_opts *o,
     if (!w->o.leaf_tris) w->o.leaf_tris = 1;
     if (!w->o.proxy_tris) w->o.proxy_tris = 1;
     if (!w->o.res) w->o.res = 1;
-    arena_init(&w->arena, 0), arena_init(&w->dec, 0), arena_init(&w->tmp, 0);
+    arena_init(&w->arena, 0);
     buf_init(&w->blobs);
     size_t ne = src_n(src), ns = src_nshapes(src);
     if (ne >= CC_TILES_MAX_TILES) return fail(err, "too many elements for tiles");
     w->box = malloc((ne + 1) * sizeof *w->box);
     w->tris = malloc((ne + 1) * sizeof *w->tris);
     w->els = malloc((ne + 1) * sizeof *w->els);
-    w->shapes = malloc((ns + 1) * sizeof *w->shapes);
     w->eflag = calloc(ne + 1, 1);
-    w->shape_flag = malloc(ns + 1);
-    if (w->shape_flag) memset(w->shape_flag, 0x80, ns + 1);
-    w->shape_seen = calloc(ns + 1, 1);
-    w->touched = malloc((ns + 1) * sizeof *w->touched);
+    w->nlw = cc_jobs_threads();
+    w->lw = calloc(w->nlw, sizeof *w->lw);
+    for (size_t i = 0; w->lw && i < w->nlw; i++) {
+        LW *L = &w->lw[i];
+        arena_init(&L->dec, 0), arena_init(&L->tmp, 0);
+        L->shapes = malloc((ns + 1) * sizeof *L->shapes);
+        L->shape_flag = malloc(ns + 1);
+        L->touched = malloc((ns + 1) * sizeof *L->touched);
+        if (!L->shapes || !L->shape_flag || !L->touched) w->nlw = 0;
+        else {
+            memset(L->shape_flag, 0x80, ns + 1);
+            for (size_t k = 0; k < ns; k++) L->shapes[k].nv = UINT32_MAX;
+        }
+    }
     uint32_t *tmp = malloc((ne + 1) * sizeof *tmp);
     uint8_t *oct = malloc(ne + 1);
     MK *mk = malloc((ne + 1) * sizeof *mk);
     Pend *stack = malloc((8 * (size_t)CC_TILES_MAX_DEPTH + 16) * sizeof *stack);
     int rc = -1;
-    if (!w->box || !w->tris || !w->els || !w->shapes || !w->eflag || !w->shape_flag || !w->shape_seen || !w->touched || !tmp || !oct || !mk || !stack) {
+    if (!w->box || !w->tris || !w->els || !w->eflag || !w->lw || !w->nlw || !tmp || !oct || !mk || !stack) {
         fail(err, "out of memory");
         goto done;
     }
@@ -445,6 +463,26 @@ int cc_tiles_start(cc_tiles *t, const cc_tiles_src *src, const cc_tiles_opts *o,
                 kids[nk++] = q;
                 i = j;
             }
+            /* many own leaves: grouped 8 at a time under tiles of their own (their order kept), so that no tile has more
+             * than 16 children (a parent's proxy and error read its children's clusters and points at once) */
+            while (nk > 8) {
+                uint32_t ng = (nk + 7) / 8;
+                for (uint32_t g = 0; g < ng; g++) {
+                    uint32_t q = new_node(w, me);
+                    if (q == CC_TILES_NONE) { fail(err, "too many tiles"); goto done; }
+                    x = &w->nodes[me];
+                    uint32_t k0 = 8 * g, k1 = k0 + 8 < nk ? k0 + 8 : nk;
+                    uint32_t *gk = arena_alloc_n(&w->arena, k1 - k0, sizeof *gk, 4);
+                    if (!gk) { fail(err, "out of memory"); goto done; }
+                    Node *y = &w->nodes[q];
+                    y->el0 = w->nodes[kids[k0]].el0, y->nel = 0, y->cdepth = c.depth + 1;
+                    for (uint32_t k = k0; k < k1; k++) gk[k - k0] = kids[k], w->nodes[kids[k]].parent = q, y->nel += w->nodes[kids[k]].nel;
+                    y->kids = gk, y->nkids = k1 - k0;
+                    node_box(w, y);
+                    kids[g] = q;
+                }
+                nk = ng;
+            }
             for (uint32_t k = 0, a = x->el0 + cnt[8]; k < 8; k++) {
                 if (cnt[k]) {
                     uint32_t q = new_node(w, me);
@@ -480,7 +518,6 @@ int cc_tiles_start(cc_tiles *t, const cc_tiles_src *src, const cc_tiles_opts *o,
         else w->order[w->norder++] = n, s2--;
     }
     free(st), free(ix);
-    for (size_t i = 0; i < ns; i++) w->shapes[i].nv = UINT32_MAX;
     rc = 0;
 done:
     free(tmp), free(oct), free(mk), free(stack);
@@ -526,33 +563,35 @@ static double extent(const float *b) {
     return e;
 }
 
-static int lsmp_add(cc_tiles_work *w, const float *p, double size);
+static int lsmp_add(LW *L, const float *p, double size);
 
 static int u64_cmp(const void *a, const void *b) {
     uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
     return x < y ? -1 : x > y;
 }
-static const float (*weld_pos)[3];
+typedef struct {
+    float p[3];
+    uint32_t i;
+} WeldV;
 static int weld_cmp(const void *a, const void *b) {
-    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
-    int c = memcmp(weld_pos[x], weld_pos[y], 12);
-    return c ? c : (x < y ? -1 : x > y);
+    const WeldV *x = a, *y = b;
+    int c = memcmp(x->p, y->p, 12);
+    return c ? c : (x->i < y->i ? -1 : x->i > y->i);
 }
 /* Whether a mesh is closed and outward (in its own frame): vertices welded by position, every directed edge
- * met once by its reverse and never twice, the signed volume positive. Not thread-safe (weld_pos): the build
- * runs on one thread. */
+ * met once by its reverse and never twice, the signed volume positive. */
 static int closed_outward(const cc_mesh *m, Arena *a) {
     uint32_t nt = m->ni / 3;
     if (!nt || !m->nv) return 0;
-    uint32_t *ord = arena_alloc_n(a, m->nv, sizeof *ord, 4), *wid = arena_alloc_n(a, m->nv, sizeof *wid, 4);
+    WeldV *ord = arena_alloc_n(a, m->nv, sizeof *ord, 4);
+    uint32_t *wid = arena_alloc_n(a, m->nv, sizeof *wid, 4);
     uint64_t *e = arena_alloc_n(a, 3 * (size_t)nt, sizeof *e, 8);
     if (!ord || !wid || !e) return 0;
-    for (uint32_t i = 0; i < m->nv; i++) ord[i] = i;
-    weld_pos = (const float(*)[3])m->pos;
+    for (uint32_t i = 0; i < m->nv; i++) memcpy(ord[i].p, m->pos[i], 12), ord[i].i = i;
     qsort(ord, m->nv, sizeof *ord, weld_cmp);
     for (uint32_t i = 0, id = 0; i < m->nv; i++) {
-        if (i && memcmp(m->pos[ord[i]], m->pos[ord[i - 1]], 12)) id++;
-        wid[ord[i]] = id;
+        if (i && memcmp(ord[i].p, ord[i - 1].p, 12)) id++;
+        wid[ord[i].i] = id;
     }
     size_t ne = 0;
     double vol = 0;
@@ -585,66 +624,70 @@ static int closed_outward(const cc_mesh *m, Arena *a) {
 }
 
 /* element el's triangles into the leaf's grid; returns -1 on a decode or memory failure */
-static int leaf_element(cc_tiles_work *w, Node *x, uint32_t el) {
+static int leaf_element(cc_tiles_work *w, LW *L, Node *x, uint32_t el) {
     const cc_tiles_src *s = &w->src;
     int sh = src_shape(s, el);
     cc_mesh m;
     if (sh >= 0) {
         if ((size_t)sh >= src_nshapes(s)) return -1;
-        if (w->shapes[sh].nv == UINT32_MAX) {
-            if (src_block(s, (size_t)sh, &w->dec, &w->shapes[sh])) return -1;
-            w->touched[w->ntouched++] = (uint32_t)sh;
-            w->leaf_verts += w->shapes[sh].nv;
+        if (L->shapes[sh].nv == UINT32_MAX) {
+            if (src_block(s, (size_t)sh, &L->dec, &L->shapes[sh])) return -1;
+            L->touched[L->ntouched++] = (uint32_t)sh;
+            L->leaf_verts += L->shapes[sh].nv;
         }
-        m = w->shapes[sh];
-        if (w->shape_flag[sh] & 0x80) {
-            arena_trim(&w->tmp, (size_t)1 << 24);
-            w->shape_flag[sh] = (uint8_t)closed_outward(&m, &w->tmp);
+        m = L->shapes[sh];
+        if (L->shape_flag[sh] & 0x80) {
+            arena_trim(&L->tmp, (size_t)1 << 24);
+            L->shape_flag[sh] = (uint8_t)closed_outward(&m, &L->tmp);
         }
-        w->eflag[el] = w->shape_flag[sh] ? CC_TILES_EL_CLOSED : 0;
+        w->eflag[el] = L->shape_flag[sh] ? CC_TILES_EL_CLOSED : 0;
     } else {
-        arena_trim(&w->tmp, (size_t)1 << 24);
-        if (src_block(s, src_nshapes(s) + el, &w->tmp, &m)) return -1;
-        w->leaf_verts += m.nv;
-        w->eflag[el] = closed_outward(&m, &w->tmp) ? CC_TILES_EL_CLOSED : 0;
+        arena_trim(&L->tmp, (size_t)1 << 24);
+        if (src_block(s, src_nshapes(s) + el, &L->tmp, &m)) return -1;
+        L->leaf_verts += m.nv;
+        w->eflag[el] = closed_outward(&m, &L->tmp) ? CC_TILES_EL_CLOSED : 0;
     }
     if (opaque(s, el)) w->eflag[el] |= CC_TILES_EL_OPAQUE;
-    if (m.nv > w->cwpos) {
-        float(*p)[3] = realloc(w->wpos, (size_t)m.nv * sizeof *p);
-        if (p) w->wpos = p;
-        Key *k = realloc(w->keys, (size_t)m.nv * sizeof *k);
-        if (k) w->keys = k;
-        uint8_t *h = realloc(w->has, m.nv);
-        if (h) w->has = h;
+    if (m.nv > L->cwpos) {
+        float(*p)[3] = realloc(L->wpos, (size_t)m.nv * sizeof *p);
+        if (p) L->wpos = p;
+        Key *k = realloc(L->keys, (size_t)m.nv * sizeof *k);
+        if (k) L->keys = k;
+        uint8_t *h = realloc(L->has, m.nv);
+        if (h) L->has = h;
         if (!p || !k || !h) return -1;
-        w->cwpos = m.nv;
+        L->cwpos = m.nv;
     }
     const cc_placement32 *pl = src_pl(s, el);
     int mir = sh >= 0 && mirrors(pl);
     for (uint32_t i = 0; i < m.nv; i++) {
-        if (sh >= 0) place(pl, m.pos[i], w->wpos[i]);
-        else memcpy(w->wpos[i], m.pos[i], 12);
-        w->has[i] = (uint8_t)lattice_key(w, w->wpos[i], w->g.e, &w->keys[i]);
+        if (sh >= 0) place(pl, m.pos[i], L->wpos[i]);
+        else memcpy(L->wpos[i], m.pos[i], 12);
+        L->has[i] = (uint8_t)lattice_key(w, L->wpos[i], L->g.e, &L->keys[i]);
     }
-    Fam *f = &w->g.f[src_cat(s, el)];
-    uint32_t e0 = w->g.e; /* the grid the keys were made on (a fit below may coarsen it: keys moved up by the difference) */
+    Fam *f = &L->g.f[src_cat(s, el)];
+    uint32_t e0 = L->g.e; /* the grid the keys were made on (a fit below may coarsen it: keys moved up by the difference) */
     /* pass 1: each used vertex's quadric (its faces' planes, area weighted); pass 2: each used vertex once (an unused one
      * would only move a cluster's mean); pass 3: the triangles */
-    double(*vq)[10] = arena_alloc_n(&w->tmp, (size_t)m.nv + 1, sizeof *vq, 8);
-    uint8_t *used = arena_alloc_n(&w->tmp, (size_t)m.nv + 1, 1, 1);
+    double(*vq)[10] = arena_alloc_n(&L->tmp, (size_t)m.nv + 1, sizeof *vq, 8);
+    uint8_t *used = arena_alloc_n(&L->tmp, (size_t)m.nv + 1, 1, 1);
     if (!used || !vq) return -1;
     memset(used, 0, (size_t)m.nv + 1);
     memset(vq, 0, ((size_t)m.nv + 1) * sizeof *vq);
     for (uint32_t t = 0; t / 3 < m.ni / 3; t += 3) {
         uint32_t a = m.idx[t], b = m.idx[t + 1], c = m.idx[t + 2];
-        if (a >= m.nv || b >= m.nv || c >= m.nv || !w->has[a] || !w->has[b] || !w->has[c]) continue;
+        if (a >= m.nv || b >= m.nv || c >= m.nv || !L->has[a] || !L->has[b] || !L->has[c]) continue;
+
         double u[3], v[3], n[3];
-        for (int q = 0; q < 3; q++) u[q] = (double)w->wpos[b][q] - w->wpos[a][q], v[q] = (double)w->wpos[c][q] - w->wpos[a][q];
+        for (int q = 0; q < 3; q++) u[q] = (double)L->wpos[b][q] - L->wpos[a][q], v[q] = (double)L->wpos[c][q] - L->wpos[a][q];
         n[0] = u[1] * v[2] - u[2] * v[1], n[1] = u[2] * v[0] - u[0] * v[2], n[2] = u[0] * v[1] - u[1] * v[0];
         double l = cc_sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
         used[a] = used[b] = used[c] = 1;
+#ifdef TILES_NOQ
+        continue;
+#endif
         if (!(l > 0)) continue;
-        double area = l / 2, pa = n[0] / l, pb = n[1] / l, pc = n[2] / l, pd = -(pa * w->wpos[a][0] + pb * w->wpos[a][1] + pc * w->wpos[a][2]);
+        double area = l / 2, pa = n[0] / l, pb = n[1] / l, pc = n[2] / l, pd = -(pa * L->wpos[a][0] + pb * L->wpos[a][1] + pc * L->wpos[a][2]);
         double Q[10] = {pa * pa, pa * pb, pa * pc, pa * pd, pb * pb, pb * pc, pb * pd, pc * pc, pc * pd, pd * pd};
         for (int z = 0; z < 3; z++) {
             uint32_t x3 = z == 0 ? a : z == 1 ? b : c;
@@ -653,8 +696,8 @@ static int leaf_element(cc_tiles_work *w, Node *x, uint32_t el) {
     }
     for (uint32_t i = 0; i < m.nv; i++)
         if (used[i]) {
-            double sm[3] = {w->wpos[i][0], w->wpos[i][1], w->wpos[i][2]};
-            if (cc_hg_fam_vert(f, w->keys[i], sm, 1, NULL, vq[i])) return -1;
+            double sm[3] = {L->wpos[i][0], L->wpos[i][1], L->wpos[i][2]};
+            if (cc_hg_fam_vert(f, L->keys[i], sm, 1, NULL, vq[i])) return -1;
         }
     int opq = opaque(s, el);
     double esize; /* its middle extent */
@@ -669,29 +712,29 @@ static int leaf_element(cc_tiles_work *w, Node *x, uint32_t el) {
     for (uint32_t t = 0; t / 3 < m.ni / 3; t += 3) {
         uint32_t a = m.idx[t], b = m.idx[t + (mir ? 2 : 1)], c = m.idx[t + (mir ? 1 : 2)];
         if (a >= m.nv || b >= m.nv || c >= m.nv) continue;
-        int ok = w->has[a] && w->has[b] && w->has[c];
-        unsigned sh2 = w->g.e - e0;
-        if (ok && cc_hg_fam_tri(f, cc_hg_up(w->keys[a], sh2), cc_hg_up(w->keys[b], sh2), cc_hg_up(w->keys[c], sh2))) return -1;
+        int ok = L->has[a] && L->has[b] && L->has[c];
+        unsigned sh2 = L->g.e - e0;
+        if (ok && cc_hg_fam_tri(f, cc_hg_up(L->keys[a], sh2), cc_hg_up(L->keys[b], sh2), cc_hg_up(L->keys[c], sh2))) return -1;
         { /* the leaf's points: its first corner and its centre */
             float ctr[3];
-            for (int k = 0; k < 3; k++) ctr[k] = (w->wpos[a][k] + w->wpos[b][k] + w->wpos[c][k]) / 3.0f;
-            if ((finite3(w->wpos[a]) && lsmp_add(w, w->wpos[a], esize)) || (finite3(ctr) && lsmp_add(w, ctr, esize))) return -1;
+            for (int k = 0; k < 3; k++) ctr[k] = (L->wpos[a][k] + L->wpos[b][k] + L->wpos[c][k]) / 3.0f;
+            if ((finite3(L->wpos[a]) && lsmp_add(L, L->wpos[a], esize)) || (finite3(ctr) && lsmp_add(L, ctr, esize))) return -1;
         }
         if (opq && ok) {
             double u[3], v[3], n[3];
-            for (int q = 0; q < 3; q++) u[q] = (double)w->wpos[b][q] - w->wpos[a][q], v[q] = (double)w->wpos[c][q] - w->wpos[a][q];
+            for (int q = 0; q < 3; q++) u[q] = (double)L->wpos[b][q] - L->wpos[a][q], v[q] = (double)L->wpos[c][q] - L->wpos[a][q];
             n[0] = u[1] * v[2] - u[2] * v[1], n[1] = u[2] * v[0] - u[0] * v[2], n[2] = u[0] * v[1] - u[1] * v[0];
             double ar = cc_sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) / 2.0;
             if (ar >= amin && ar > 0) {
                 Occ o;
-                memcpy(o.t, w->wpos[a], 12), memcpy(o.t + 3, w->wpos[b], 12), memcpy(o.t + 6, w->wpos[c], 12);
+                memcpy(o.t, L->wpos[a], 12), memcpy(o.t + 3, L->wpos[b], 12), memcpy(o.t + 6, L->wpos[c], 12);
                 o.area = ar, o.el = el, o.tri = t / 3;
-                occ_keep(w->occ, &w->nocc, &o);
+                occ_keep(L->occ, &L->nocc, &o);
             }
         }
-        if ((t / 3) % 4096 == 4095 && cc_hg_grid_fit(&w->g, w->o.proxy_tris, 0)) return -1;
+        if ((t / 3) % 4096 == 4095 && cc_hg_grid_fit(&L->g, w->o.proxy_tris, 0)) return -1;
     }
-    return cc_hg_grid_fit(&w->g, w->o.proxy_tris, 0);
+    return cc_hg_grid_fit(&L->g, w->o.proxy_tris, 0);
 }
 
 /* ---- a cluster's point: where its quadric is least (Lindstrom 2000), kept in its members' box ---- */
@@ -746,27 +789,29 @@ static void rep(const Vert *x, double out[3]) {
 
 /* ---- the error: a sampled two-sided distance between a proxy and the level below ---- */
 
-static int lsmp_add(cc_tiles_work *w, const float *p, double size) { /* every lstride-th point of the leaf's content */
-    if (w->lcount++ % w->lstride) return 0;
-    if (w->nlsmp == w->clsmp) {
-        uint32_t c = w->clsmp ? 2 * w->clsmp : 1024;
-        double(*v)[4] = realloc(w->lsmp, (size_t)c * sizeof *v);
+static int lsmp_add(LW *L, const float *p, double size) { /* every lstride-th point of the leaf's content */
+    if (L->lcount++ % L->lstride) return 0;
+    if (L->nlsmp == L->clsmp) {
+        uint32_t c = L->clsmp ? 2 * L->clsmp : 1024;
+        double(*v)[4] = realloc(L->lsmp, (size_t)c * sizeof *v);
         if (!v) return -1;
-        w->lsmp = v, w->clsmp = c;
+        L->lsmp = v, L->clsmp = c;
     }
-    for (int k = 0; k < 3; k++) w->lsmp[w->nlsmp][k] = p[k];
-    w->lsmp[w->nlsmp][3] = size;
-    w->nlsmp++;
+    for (int k = 0; k < 3; k++) L->lsmp[L->nlsmp][k] = p[k];
+    L->lsmp[L->nlsmp][3] = size;
+    L->nlsmp++;
     return 0;
 }
 
-typedef struct { /* a uniform grid of items (points or triangles) for nearest queries */
+typedef struct { /* a uniform grid of triangles for nearest queries; per worker a stamp array (an item seen once a query) */
     double lo[3], h;
     int n[3];
-    uint32_t *start, *items, *stamp, mark;
+    uint32_t *start, *items, nitems;
+    uint32_t *stamp, *mark; /* nw x nitems, nw */
+    size_t nw;
 } UGrid;
 
-static void ug_free(UGrid *g) { free(g->start), free(g->items), free(g->stamp); }
+static void ug_free(UGrid *g) { free(g->start), free(g->items), free(g->stamp), free(g->mark); }
 
 static void ug_cell(const UGrid *g, const double *p, int c[3]) {
     for (int k = 0; k < 3; k++) {
@@ -790,8 +835,10 @@ static int ug_build(UGrid *g, uint32_t n, void (*box)(const void *, uint32_t, do
     for (int k = 0; k < 3; k++) if (g->n[k] > 33) g->n[k] = 33;
     size_t nc = (size_t)g->n[0] * g->n[1] * g->n[2];
     g->start = calloc(nc + 1, sizeof *g->start);
-    g->stamp = calloc((size_t)n + 1, sizeof *g->stamp);
-    if (!g->start || !g->stamp) return -1;
+    g->nitems = n, g->nw = cc_jobs_workers(1u << 30);
+    g->stamp = calloc(((size_t)n + 1) * g->nw, sizeof *g->stamp);
+    g->mark = calloc(g->nw, sizeof *g->mark);
+    if (!g->start || !g->stamp || !g->mark) return -1;
     for (int pass = 0; pass < 2; pass++) {
         for (uint32_t i = 0; i < n; i++) {
             int c0[3], c1[3];
@@ -813,7 +860,6 @@ static int ug_build(UGrid *g, uint32_t n, void (*box)(const void *, uint32_t, do
             g->start[0] = 0;
         }
     }
-    memset(g->stamp, 0, ((size_t)n + 1) * sizeof *g->stamp);
     return 0;
 }
 
@@ -857,11 +903,16 @@ typedef struct {
 } PS;
 
 /* the squared distance from p to the nearest item (rings of cells until no nearer can be) */
-static double ug_near(UGrid *g, const double *p, const PM *m) {
+static double ug_near(UGrid *g, size_t worker, const double *p, const PM *m, double cap2) { /* cap2: nothing farther matters */
     int c[3];
     ug_cell(g, p, c);
     double best = 1e300;
-    if (++g->mark == 0) g->mark = 1;
+    uint32_t *stamp = g->stamp + ((size_t)g->nitems + 1) * worker;
+    if (++g->mark[worker] == 0) { /* wrapped: start over */
+        memset(stamp, 0, ((size_t)g->nitems + 1) * sizeof *stamp);
+        g->mark[worker] = 1;
+    }
+    uint32_t mark = g->mark[worker];
     int maxr = g->n[0] > g->n[1] ? g->n[0] : g->n[1];
     maxr = maxr > g->n[2] ? maxr : g->n[2];
     for (int r = 0; r <= maxr; r++) {
@@ -873,16 +924,50 @@ static double ug_near(UGrid *g, const double *p, const PM *m) {
                     size_t cell = ((size_t)z * g->n[1] + y) * g->n[0] + x;
                     for (uint32_t q = g->start[cell]; q < g->start[cell + 1]; q++) {
                         uint32_t i = g->items[q];
-                        if (g->stamp[i] == g->mark) continue;
-                        g->stamp[i] = g->mark;
+                        if (stamp[i] == mark) continue;
+                        stamp[i] = mark;
                         double d = pt_tri(p, m->v[m->t[i][0]], m->v[m->t[i][1]], m->v[m->t[i][2]]);
                         if (d < best) best = d;
                     }
                 }
         double reach = r * g->h;
-        if (best <= reach * reach) break;
+        if (best <= reach * reach || cap2 <= reach * reach) break;
     }
     return best;
+}
+
+typedef struct { /* the largest squared distance of points to a grid's triangles, in chunks (one slot each) */
+    UGrid *g;
+    const PM *m;
+    double (*p)[4];
+    uint32_t n;
+    int capped; /* a point's 4th value caps its squared distance (a vanished part's size) */
+    double *slot;
+} QJ;
+#define QJ_CHUNK 256u
+
+static void query_job(void *ctx, size_t task, size_t worker) {
+    QJ *q = ctx;
+    double mx = 0;
+    for (uint32_t i = (uint32_t)task * QJ_CHUNK; i < q->n && i < (uint32_t)(task + 1) * QJ_CHUNK; i++) {
+        double cap2 = q->capped ? q->p[i][3] * q->p[i][3] : 1e300;
+        double d = ug_near(q->g, worker, q->p[i], q->m, cap2);
+        if (q->capped && d > q->p[i][3] * q->p[i][3]) d = q->p[i][3] * q->p[i][3]; /* a part that vanished: its omission costs its size */
+        if (d > mx) mx = d;
+    }
+    q->slot[task] = mx;
+}
+
+static int query_max(UGrid *g, const PM *m, double (*p)[4], uint32_t n, int capped, double *out) {
+    size_t nt = (n + QJ_CHUNK - 1) / QJ_CHUNK;
+    double *slot = calloc(nt + 1, sizeof *slot);
+    if (!slot) return -1;
+    QJ q = {g, m, p, n, capped, slot};
+    cc_jobs_run(nt, query_job, &q);
+    for (size_t i = 0; i < nt; i++)
+        if (slot[i] > *out) *out = slot[i];
+    free(slot);
+    return 0;
 }
 
 /* The proxy `cl` against its children's samples: max over the children's points of the distance to the proxy's
@@ -908,6 +993,7 @@ static int pm_from(const Clusters *const *cls, uint32_t ncl, PM *m) { /* cluster
 /* children: their clusters (the level below as meshes: a leaf's at its fine grid, a proxy's its proxy) */
 static double proxy_error(cc_tiles_work *w, const Clusters *cl, const Clusters *const *kids, uint32_t nk, uint32_t n, int *bad) {
     Node *x = &w->nodes[n];
+
     PM m = {0}, km = {0};
     PS ch = {0}, own = {0};
     double err = 0;
@@ -930,12 +1016,13 @@ static double proxy_error(cc_tiles_work *w, const Clusters *cl, const Clusters *
             for (int k = 0; k < 3; k++) m.t[m.nt + t][k] = m.nv + p->t[t][k];
         m.nv += (uint32_t)p->nv, m.nt += (uint32_t)p->nt;
     }
+    uint32_t all = ch.n, cstride = all / (8 * CC_TILES_SAMPLES) + 1; /* at most 8 children's worth of points */
     ch.n = 0;
     double cerr = 0;
-    for (uint32_t k = 0; k < x->nkids; k++) {
+    for (uint32_t k = 0, at = 0; k < x->nkids; k++) {
         Node *c = &w->nodes[x->kids[k]];
-        if (c->nsmp) memcpy(ch.p + ch.n, c->smp, (size_t)c->nsmp * sizeof *ch.p);
-        ch.n += c->nsmp;
+        for (uint32_t i = 0; i < c->nsmp; i++, at++)
+            if (at % cstride == 0) memcpy(ch.p[ch.n++], c->smp[i], sizeof *ch.p);
         if (!(c->flags & CC_TILE_LEAF) && c->error > cerr) cerr = c->error;
     }
     for (uint64_t i = 0, q = 0; i < total; i++) { /* the proxy's own points: vertices, then triangle centres */
@@ -952,24 +1039,11 @@ static double proxy_error(cc_tiles_work *w, const Clusters *cl, const Clusters *
     if (m.nt && ch.n) {
         UGrid g;
         if (ug_build(&g, m.nt, pm_tbox, &m)) { ug_free(&g); goto oom; }
-        for (uint32_t i = 0; i < ch.n; i++) {
-            double d = ug_near(&g, ch.p[i], &m), sz = ch.p[i][3] * ch.p[i][3];
-            if (d > sz) d = sz; /* a part that vanished: its omission costs its size */
-            if (d > d2) d2 = d;
-#ifdef TILES_DEBUG
-            if (d > 2e6) fprintf(stderr, "node %u: child point %.0f %.0f %.0f at %.0f mm of the proxy\n", n, ch.p[i][0], ch.p[i][1], ch.p[i][2], cc_sqrt(d));
-#endif
-        }
+        if (query_max(&g, &m, ch.p, ch.n, 1, &d2)) { ug_free(&g); goto oom; }
         ug_free(&g);
         if (km.nt) { /* the proxy's points to the level below's triangles */
             if (ug_build(&g, km.nt, pm_tbox, &km)) { ug_free(&g); goto oom; }
-            for (uint32_t i = 0; i < own.n; i++) {
-                double d = ug_near(&g, own.p[i], &km);
-                if (d > d2) d2 = d;
-#ifdef TILES_DEBUG
-                if (d > 2e6) fprintf(stderr, "node %u: proxy point %.0f %.0f %.0f at %.0f mm of the level below\n", n, own.p[i][0], own.p[i][1], own.p[i][2], cc_sqrt(d));
-#endif
-            }
+            if (query_max(&g, &km, own.p, own.n, 0, &d2)) { ug_free(&g); goto oom; }
             ug_free(&g);
         }
     } else if (ch.n) { /* an empty proxy: everything vanished: the farthest child point from the box's centre */
@@ -1259,6 +1333,48 @@ static int write_section(cc_tiles *t) {
     return o->oom ? -1 : 0;
 }
 
+/* leaf n read whole by worker state L: its clusters (for its parent), counts, occluders and points */
+static int leaf_run(cc_tiles_work *w, LW *L, uint32_t n) {
+    Node *x = &w->nodes[n];
+    memset(&L->g, 0, sizeof L->g);
+    L->g.e = CC_TILES_MAX_DEPTH - (x->cdepth < CC_TILES_MAX_DEPTH ? x->cdepth : CC_TILES_MAX_DEPTH);
+    L->nocc = 0, L->leaf_verts = 0, L->ntouched = 0;
+    L->nlsmp = 0, L->lcount = 0, L->lstride = 2 * x->detail / CC_TILES_SAMPLES + 1;
+    arena_reset(&L->dec);
+    int rc = 0;
+    for (uint32_t j = 0; j < x->nel && !rc; j++) rc = leaf_element(w, L, x, w->els[x->el0 + j]);
+    for (uint32_t i = 0; i < L->ntouched; i++) L->shapes[L->touched[i]].nv = UINT32_MAX;
+    L->ntouched = 0;
+    arena_reset(&L->dec);
+    if (rc) return cc_hg_grid_free(&L->g), -1;
+    Clusters cl;
+    memset(&cl, 0, sizeof cl);
+    if (cc_hg_grid_fit(&L->g, w->o.proxy_tris, 1) || cc_hg_grid_finish(&L->g, &cl)) return cc_hg_clusters_free(&cl), cc_hg_grid_free(&L->g), -1;
+    w->cl[n] = cl;
+    x->tris = (uint32_t)(x->detail > 0xFFFFFFFFull ? 0xFFFFFFFFu : x->detail);
+    x->verts = (uint32_t)(L->leaf_verts > 0xFFFFFFFFull ? 0xFFFFFFFFu : L->leaf_verts);
+    /* its occluders, sorted (occ_store, without the shared arena: a worker allocates its own) */
+    qsort(L->occ, L->nocc, sizeof *L->occ, occ_cmp);
+    x->occ = L->nocc ? malloc(L->nocc * sizeof *L->occ) : NULL;
+    if (L->nocc && !x->occ) return -1;
+    if (L->nocc) memcpy(x->occ, L->occ, L->nocc * sizeof *L->occ);
+    x->nocc = L->nocc, x->occ_heap = 1;
+    x->smp = L->lsmp, x->nsmp = L->nlsmp; /* the leaf's points move to it */
+    L->lsmp = NULL, L->nlsmp = L->clsmp = 0;
+    return 0;
+}
+
+typedef struct {
+    cc_tiles_work *w;
+    const uint32_t *nodes;
+} LJ;
+
+static void leaf_job(void *ctx, size_t task, size_t worker) {
+    LJ *j = ctx;
+    LW *L = &j->w->lw[worker];
+    if (leaf_run(j->w, L, j->nodes[task])) L->bad = 1;
+}
+
 int cc_tiles_step(cc_tiles *t, uint64_t budget, cc_error *err) {
     cc_tiles_work *w = t->work;
     if (!w) return 1;
@@ -1267,39 +1383,21 @@ int cc_tiles_step(cc_tiles *t, uint64_t budget, cc_error *err) {
     while (w->at < w->norder) {
         uint32_t n = w->order[w->at];
         Node *x = &w->nodes[n];
-        if (x->flags & CC_TILE_LEAF) {
-            if (!w->open) {
-                memset(&w->g, 0, sizeof w->g);
-                w->g.e = CC_TILES_MAX_DEPTH - (x->cdepth < CC_TILES_MAX_DEPTH ? x->cdepth : CC_TILES_MAX_DEPTH);
-                w->open = 1, w->j = 0, w->nocc = 0, w->leaf_verts = 0, w->ntouched = 0;
-                w->nlsmp = 0, w->lcount = 0, w->lstride = 2 * x->detail / CC_TILES_SAMPLES + 1;
-                arena_reset(&w->dec);
-            }
-            while (w->j < x->nel) {
-                uint32_t el = w->els[x->el0 + w->j];
-                if (leaf_element(w, x, el)) return fail(err, "a mesh does not decode, or out of memory");
-                x = &w->nodes[n];
-                w->j++;
-                used += w->tris[el], t->done += w->tris[el];
-                if (used >= budget && w->j < x->nel) return 0;
-            }
-            for (uint32_t i = 0; i < w->ntouched; i++) w->shapes[w->touched[i]].nv = UINT32_MAX;
-            w->ntouched = 0;
-            Clusters cl;
-            memset(&cl, 0, sizeof cl);
-            if (cc_hg_grid_fit(&w->g, w->o.proxy_tris, 1) || cc_hg_grid_finish(&w->g, &cl)) {
-                cc_hg_clusters_free(&cl);
-                return fail(err, "out of memory");
-            }
-            w->cl[n] = cl;
-            x->tris = (uint32_t)(x->detail > 0xFFFFFFFFull ? 0xFFFFFFFFu : x->detail);
-            x->verts = (uint32_t)(w->leaf_verts > 0xFFFFFFFFull ? 0xFFFFFFFFu : w->leaf_verts);
-            if (occ_store(w, x, w->occ, w->nocc)) return fail(err, "out of memory");
-            x->smp = w->lsmp, x->nsmp = w->nlsmp; /* the leaf's points move to it */
-            w->lsmp = NULL, w->nlsmp = w->clsmp = 0;
-            w->open = 0;
-            arena_reset(&w->dec);
-        } else if (inner(w, n)) return fail(err, "out of memory");
+        if (x->flags & CC_TILE_LEAF) { /* a run of leaves (next in post-order), read in parallel */
+            uint32_t k = w->at;
+            uint64_t tris = 0;
+            while (k < w->norder && (w->nodes[w->order[k]].flags & CC_TILE_LEAF) && k - w->at < 4 * (uint32_t)w->nlw &&
+                   (k == w->at || used + tris + w->nodes[w->order[k]].detail <= budget))
+                tris += w->nodes[w->order[k]].detail, k++;
+            LJ lj = {w, w->order + w->at};
+            for (size_t i = 0; i < w->nlw; i++) w->lw[i].bad = 0;
+            cc_jobs_run(k - w->at, leaf_job, &lj);
+            for (size_t i = 0; i < w->nlw; i++)
+                if (w->lw[i].bad) return fail(err, "a mesh does not decode, or out of memory");
+            used += tris, t->done += tris;
+            w->at = k;
+            if (used >= budget && w->at < w->norder) return 0;
+            continue;        } else if (inner(w, n)) return fail(err, "out of memory");
         w->at++;
         if (used >= budget && w->at < w->norder) return 0;
     }
