@@ -25,7 +25,13 @@ typedef struct {
     struct nv_ttest_map *map; /* per test: its set and tile, the triangles it would draw */
     uint64_t tris_pass1, tris_standin_always;
     uint32_t tiles_drawn, tiles_pass1, ntests_read;
-    int read_vis, read_vis_planned, budget_full;
+    int read_vis, read_vis_planned, budget_full, squeeze, groups, seen_planned;
+    uint32_t nmap;
+    SDL_GPUComputePipeline *seen;
+    SDL_GPUBuffer *seen_buf;
+    uint32_t seen_cap;
+    SDL_GPUTransferBuffer *seen_down;
+    double ms_prepare, ms_draw, ms_walk; /* the last frame's CPU: the walk and commands, the draws' recording */
     uint64_t gpu_bytes; /* resident tiles */
     uint32_t want_n;
     nv_tile_want want[256];
@@ -85,7 +91,9 @@ void nv_tiles_draw(struct nv_render *r, SDL_GPUCommandBuffer *cmd, SDL_GPURender
 int nv_tiles_has_pass2(const struct nv_render *r);
 void nv_tiles_occlusion(struct nv_render *r, SDL_GPUCommandBuffer *cmd);
 void nv_tiles_readback(struct nv_render *r, SDL_GPUCopyPass *cp);
+void nv_tiles_seen(struct nv_render *r, SDL_GPUCommandBuffer *cmd);
 uint64_t nv_tiles_collect(struct nv_render *r);
+uint64_t nv_tiles_pages_bytes(void);
 void nv_tiles_release(struct nv_render *r);
 /* records the tiles' passes: pass 1 inside `rp` (open), then the rest after it ends; returns the render pass for what follows */
 #endif

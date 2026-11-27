@@ -288,6 +288,50 @@ quit
   check("pointer-links: exits 0", rpl.code === 0 && !rpl.signal, `${rpl.code} ${rpl.signal ?? ""}`);
   expectations("pointer-links", rpl);
 
+  // ---- 3d. NUI2: the tile path (renderer_path=tiles) with occlusion, its truth test on (--truth: every 3D frame drawn
+  // without, then with occlusion, the id and depth buffers compared: an element whose pixel shows something farther is
+  // missing): the open model by tiles (a pick, hide), six links by tiles (a pick in a link, orbit, zoom); 0 missing ----
+  const rt = run("tiles-fixture", `
+wait complete
+frames 3
+click_world 9000 5000 5780
+frames 3
+expect_selected ${TOP}
+action hide_now
+frames 3
+expect_hidden 1
+action show_all
+drag 0.3 0.5 0.6 0.45 600
+wheel 0.5 0.5 2
+frames 3
+report report.txt
+quit
+`, fixture, ["--truth", "--set", "renderer_path=tiles"]);
+  check("tiles-fixture: exits 0, no signal", rt.code === 0 && !rt.signal, `${rt.code} ${rt.signal ?? ""} ${rt.err.trim().split("\n").slice(-2).join(" | ")}`);
+  expectations("tiles-fixture", rt);
+  const truthOf = (r) => (/\| truth test: frames, with ids missing, ids missing \| (\d+) \/ (\d+) \/ (\d+) \|/.exec(existsSync(join(r.out, "summary.md")) ? readFileSync(join(r.out, "summary.md"), "utf8") : "") ?? []).slice(1).map(Number);
+  const [tf, tmf, tmi] = truthOf(rt);
+  check(`tiles-fixture: the truth test ran on every 3D frame and found nothing missing (${tf} frames, ${tmi} missing)`, tf > 5 && tmf === 0 && tmi === 0);
+  const rtl = run("tiles-links", `
+open :new
+wait 300
+link_folder ${join(tmp, "links")}
+wait complete
+frames 3
+expect_parts 5
+drag 0.3 0.5 0.6 0.45 800
+wheel 0.5 0.5 2
+wheel 0.5 0.5 -1
+frames 3
+report report.txt
+quit
+`, null, ["--truth", "--set", "renderer_path=tiles"], { BIMBLE_LINK_CACHE_MIN: "0" });
+  check("tiles-links: exits 0, no signal", rtl.code === 0 && !rtl.signal, `${rtl.code} ${rtl.signal ?? ""} ${rtl.err.trim().split("\n").slice(-2).join(" | ")}`);
+  expectations("tiles-links", rtl);
+  const [lf, lmf, lmi] = truthOf(rtl);
+  const rep3 = existsSync(join(rtl.out, "report.txt")) ? readFileSync(join(rtl.out, "report.txt"), "utf8") : "";
+  check(`tiles-links: drawn by tiles, the truth test found nothing missing (${lf} frames, ${lmi} missing)`, /detail loaded by tiles/.test(rep3) && lf > 5 && lmf === 0 && lmi === 0);
+
   // ---- 4. malformed files: the core's error, never a crash ----
   const bad = join(tmp, "bad");
   mkdirSync(bad);

@@ -271,7 +271,7 @@ static void app_resize_step(App *a) {
 
 /* ---- NUI2's truth test: the frame's id target drawn without occlusion (0) and with it (1), read back; an element in the
  * first and not in the second is missing (occlusion dropped something visible) ---- */
-static SDL_GPUTransferBuffer *truth_tb[2];
+static SDL_GPUTransferBuffer *truth_tb[2], *truth_db[2]; /* ids, depths */
 static uint32_t truth_cap;
 static void truth_grab(App *a, SDL_GPUCommandBuffer *cmd, int which) {
     uint32_t w = a->vpw, h = a->vph, need = w * h * 4;
@@ -279,8 +279,10 @@ static void truth_grab(App *a, SDL_GPUCommandBuffer *cmd, int which) {
     if (truth_cap < need) {
         for (int k = 0; k < 2; k++) {
             if (truth_tb[k]) SDL_ReleaseGPUTransferBuffer(a->dev, truth_tb[k]);
+            if (truth_db[k]) SDL_ReleaseGPUTransferBuffer(a->dev, truth_db[k]);
             SDL_GPUTransferBufferCreateInfo tci = {.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = need};
             truth_tb[k] = SDL_CreateGPUTransferBuffer(a->dev, &tci);
+            truth_db[k] = SDL_CreateGPUTransferBuffer(a->dev, &tci);
         }
         truth_cap = need;
     }
@@ -289,32 +291,53 @@ static void truth_grab(App *a, SDL_GPUCommandBuffer *cmd, int which) {
     SDL_GPUTextureRegion src = {.texture = nv_render_ids(a->r), .w = w, .h = h, .d = 1};
     SDL_GPUTextureTransferInfo dst = {.transfer_buffer = truth_tb[which]};
     SDL_DownloadFromGPUTexture(cp, &src, &dst);
+    if (truth_db[which]) {
+        SDL_GPUTextureRegion ds = {.texture = nv_render_depth(a->r), .w = w, .h = h, .d = 1};
+        SDL_GPUTextureTransferInfo dd = {.transfer_buffer = truth_db[which]};
+        SDL_DownloadFromGPUTexture(cp, &ds, &dd);
+    }
     SDL_EndGPUCopyPass(cp);
 }
+/* An element in the reference only is MISSING when one of its pixels shows something farther with occlusion (its surface
+ * was not drawn there). Otherwise another element at the same depth won the pixel (coplanar faces: the order of the
+ * draws, pass 1 or 2, decides): a tie, counted apart (truth_ties), not a loss. */
 static int truth_compare(App *a) {
     uint32_t n = a->vpw * a->vph, ne = a->next_elem + 1;
     if (!truth_tb[0] || !truth_tb[1] || !n) return -1;
-    const uint32_t *x = SDL_MapGPUTransferBuffer(a->dev, truth_tb[0], false);
+    const uint32_t *x = SDL_MapGPUTransferBuffer(a->dev, truth_tb[0], false), *y = SDL_MapGPUTransferBuffer(a->dev, truth_tb[1], false);
+    const float *dx = truth_db[0] ? SDL_MapGPUTransferBuffer(a->dev, truth_db[0], false) : NULL, *dy = truth_db[1] ? SDL_MapGPUTransferBuffer(a->dev, truth_db[1], false) : NULL;
     uint8_t *seen = calloc(ne, 1);
-    if (!x || !seen) { if (x) SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]); free(seen); return -1; }
-    for (uint32_t i = 0; i < n; i++) if (x[i] > NV_ELEM0 && x[i] < ne) seen[x[i]] |= 1;
-    SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]);
-    const uint32_t *y = SDL_MapGPUTransferBuffer(a->dev, truth_tb[1], false);
-    if (!y) { free(seen); return -1; }
-    for (uint32_t i = 0; i < n; i++) if (y[i] > NV_ELEM0 && y[i] < ne) seen[y[i]] |= 2;
-    SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[1]);
-    int missing = 0;
-    for (uint32_t e = 0; e < ne; e++) missing += seen[e] == 1;
-    if (missing) {
-        static int said;
-        if (said++ < 10) {
-            char id[23] = "", link[256] = "";
-            for (uint32_t e = 0; e < ne; e++)
-                if (seen[e] == 1) { scene_elem(a, e - 1, id, link, sizeof link); break; }
-            fprintf(stderr, "bimble: truth: %d elements missing with occlusion at frame %llu (first: %s)\n", missing, (unsigned long long)a->frames, id);
+    int missing = -1, ties = 0;
+    if (x && y && seen) {
+        for (uint32_t i = 0; i < n; i++) if (x[i] > NV_ELEM0 && x[i] < ne) seen[x[i]] |= 1;
+        for (uint32_t i = 0; i < n; i++) if (y[i] > NV_ELEM0 && y[i] < ne) seen[y[i]] |= 2;
+        for (uint32_t i = 0; dx && dy && i < n; i++)
+            if (x[i] > NV_ELEM0 && x[i] < ne && seen[x[i]] == 1 && dy[i] < dx[i] * (1 - 1e-5f)) seen[x[i]] |= 4;
+        missing = 0;
+        for (uint32_t e = 0; e < ne; e++) {
+            if ((seen[e] & 3) != 1) continue;
+            if (seen[e] & 4 || !(dx && dy)) missing++;
+            else ties++;
+        }
+        if (missing) {
+            static int said;
+            uint32_t first = 0;
+            for (uint32_t e = 0; e < ne && !first; e++) if ((seen[e] & 7) == 5) first = e;
+            if (said++ < 10) {
+                char id[23] = "", link[256] = "";
+                if (first) scene_elem(a, first - 1, id, link, sizeof link), nv_tiles_debug_elem(a->r, first - 1);
+                fprintf(stderr, "bimble: truth: %d elements missing with occlusion at frame %llu (first: %s)\n", missing, (unsigned long long)a->frames, id);
+                for (uint32_t i = 0, c = 0; dx && dy && i < n && c < 3; i++)
+                    if (x[i] == first) fprintf(stderr, "truth px (%u, %u): reference %u depth %g, with occlusion %u depth %g\n", i % a->vpw, i / a->vpw, x[i], dx[i], y[i], dy[i]), c++;
+            }
         }
     }
+    if (x) SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]);
+    if (y) SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[1]);
+    if (dx) SDL_UnmapGPUTransferBuffer(a->dev, truth_db[0]);
+    if (dy) SDL_UnmapGPUTransferBuffer(a->dev, truth_db[1]);
     free(seen);
+    a->truth_ties = ties;
     return missing;
 }
 
@@ -531,13 +554,47 @@ static int config_dir(char *buf, size_t n, const char *given) {
     return 0;
 }
 
+/* --selftest-window (NUI2): the window path checked without showing anything: a HIDDEN window (on Wayland a hidden window
+ * has no shell surface, so nothing is mapped) claimed by the GPU device, its scale, density, sizes and present modes
+ * printed; no swapchain texture is acquired (that needs a shown window). Exit 0 when every step works. */
+static int selftest_window(void) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) { printf("selftest-window: no video: %s\n", SDL_GetError()); return 3; }
+    printf("selftest-window: video driver %s\n", SDL_GetCurrentVideoDriver());
+    SDL_GPUDevice *dev = nv_gpu_device(NULL, NULL);
+    if (!dev) { printf("selftest-window: no GPU device: %s\n", SDL_GetError()); SDL_Quit(); return 3; }
+    SDL_Window *w = SDL_CreateWindow("Bimble selftest", 640, 400, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    int ok = w != NULL;
+    printf("selftest-window: hidden window %s\n", ok ? "made" : SDL_GetError());
+    if (ok) {
+        ok = SDL_ClaimWindowForGPUDevice(dev, w);
+        printf("selftest-window: claimed by the GPU device: %s\n", ok ? "yes" : SDL_GetError());
+        int lw, lh, pw, ph;
+        SDL_GetWindowSize(w, &lw, &lh), SDL_GetWindowSizeInPixels(w, &pw, &ph);
+        printf("selftest-window: size %dx%d logical, %dx%d pixels, display scale %.2f, pixel density %.2f\n", lw, lh, pw, ph, SDL_GetWindowDisplayScale(w),
+               SDL_GetWindowPixelDensity(w));
+        if (ok) {
+            static const char *const PM[3] = {"vsync", "immediate", "mailbox"};
+            for (int m = 0; m < 3; m++) printf("selftest-window: present mode %s: %s\n", PM[m], SDL_WindowSupportsGPUPresentMode(dev, w, (SDL_GPUPresentMode)m) ? "yes" : "no");
+            printf("selftest-window: swapchain format %d\n", (int)SDL_GetGPUSwapchainTextureFormat(dev, w));
+            SDL_ReleaseWindowFromGPUDevice(dev, w);
+        }
+        SDL_DestroyWindow(w);
+    }
+    SDL_DestroyGPUDevice(dev);
+    SDL_Quit();
+    printf("selftest-window: %s\n", ok ? "ok" : "FAILED");
+    return ok ? 0 : 1;
+}
+
 static void usage(void) {
     fprintf(stderr, "usage: bimble [--en|--fr] [--dark] [file]\n"
                     "       bimble --offscreen [--size WxH] [--scale k] [--script file | --preset orbit-zoom] [--out dir]\n"
                     "              [--shot file.png] [--quit-after n] [file]\n"
                     "              [--resize-script WxH,WxH,...]\n"
                     "       options: --edges lines|screen|none, --no-hlod, --loaders n, --config-dir dir, --link-folder dir,\n"
-                    "                --set key=value (an optimisation for this run), --last-log (the newest session log's folder), --version\n");
+                    "                --set key=value (an optimisation for this run), --last-log (the newest session log's folder), --version,\n"
+                    "                --truth (each frame with and without occlusion, the id buffers compared), --compare k=v,... (repeatable),\n"
+                    "                --selftest-window (a hidden window's checks)\n");
     exit(2);
 }
 
@@ -550,6 +607,8 @@ static void no_gpu(const char *what, const char *file) {
 }
 
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) /* --selftest-window: the window path's checks on a window never shown */
+        if (!strcmp(argv[i], "--selftest-window")) return selftest_window();
     for (int i = 1; i < argc; i++) /* --compare: this binary again per settings set, the summaries side by side (compare.c) */
         if (!strcmp(argv[i], "--compare")) return compare_main(argc, argv);
     static App app;

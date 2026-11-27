@@ -222,6 +222,7 @@ static const char *const NATIVE_STRINGS[][3] = {
     {"native.openFolder", "Ouvrir le dossier", "Open folder"},
     {"native.opt.tiles", "Dessiner par tuiles (pyramide des liens)", "Draw by tiles (the links' pyramids)"},
     {"native.opt.occlusion", "Ne dessiner que ce qui peut se voir (occlusion)", "Draw only what can be seen (occlusion)"},
+    {"native.opt.groups", "… jusqu'aux éléments (par groupes de 8)", "… down to the elements (groups of 8)"},
     {"native.opt.lod", "Niveaux de détail (au loin, simplifié)", "Levels of detail (simplified far away)"},
     {"native.opt.cullBack", "Faces arrière des solides fermés non dessinées", "Back faces of closed solids not drawn"},
     {"native.opt.errorPx", "Écart des niveaux (0 : détail partout)", "Levels' error (0: detail everywhere)"},

@@ -34,6 +34,8 @@ void scene_reset(App *a) {
     memset(a->links_s, 0, sizeof a->links_s);
     a->nlinks = 0;
     if (a->model_part) nv_render_remove(a->r, a->model_part), a->model_part = NULL;
+    if (a->model_ts) nv_render_remove_tileset(a->r, a->model_ts), nv_tileset_unref(a->dev, a->model_ts), a->model_ts = NULL;
+    a->model_tiles = 0, a->model_ident = NULL;
     a->have_origin = 0, a->next_elem = NV_ELEM0, a->draw_key = -1, a->fitted = 0;
     a->selected = 0;
     a->ids_dirty = 1;
@@ -67,9 +69,21 @@ static void model_part(App *a) {
         uint32_t nE = ((const uint32_t *)p)[3];
         nv_scene_init(&sc, take_elems(a, nE), a->origin0);
         ok = nv_load_bytes(&sc, p, n, &lo, err, sizeof err) == 0 && nv_finish(&sc) == 0;
+        memcpy(a->model_off, lo.off, sizeof a->model_off);
     }
+    const void *scene_now = a->ses->open ? (const void *)cc_session_scene(a->ses) : NULL;
     nv_ses_unwr(a->loader);
     if (a->model_part) nv_render_remove(a->r, a->model_part), a->model_part = NULL;
+    if (a->model_ts) nv_render_remove_tileset(a->r, a->model_ts), nv_tileset_unref(a->dev, a->model_ts), a->model_ts = NULL;
+    a->model_tiles = 0, a->model_ident = NULL;
+    if (ok && sc.nelements && a->use_tiles && scene_now) { /* NUI2: the open model by tiles too: its pyramid built by a loader */
+        nv_job *j = calloc(1, sizeof *j);
+        if (j) {
+            j->kind = NV_JOB_MODEL_TILES, j->ses = a->ses, j->uid = 0xFFFFFFFFu, j->ident = scene_now;
+            a->model_tiles = 1, a->model_ident = scene_now;
+            nv_loader_submit(a->loader, j);
+        }
+    }
     if (ok && sc.nelements) {
         a->model_part = nv_part_upload(a->dev, &sc, err, sizeof err);
         if (a->model_part) nv_render_add(a->r, a->model_part);
@@ -245,10 +259,47 @@ void scene_tick(App *a) {
     for (nv_job *j; (j = nv_loader_take(a->loader));) {
         int i = slot_of(a, j->uid);
         SLink *L = i >= 0 ? &a->links_s[i] : NULL;
+        if (j->kind == NV_JOB_MODEL_TILES) { /* the open model's pyramid: drawn by tiles from now (its part kept for its ids) */
+            if (j->ident == a->model_ident && a->model_tiles == 1 && a->model_part && j->section && j->section_n >= 48) {
+                uint32_t toc, nocc;
+                memcpy(&toc, j->section + 24, 4), memcpy(&nocc, j->section + 20, 4);
+                char err[256] = "";
+                const nv_scene *ms = nv_part_scene(a->model_part);
+                nv_tileset *ts = toc <= j->section_n && (uint64_t)nocc * 36 <= j->section_n - toc
+                                     ? nv_tileset_new(j->section, toc, j->nelements, nocc ? (const void *)(j->section + toc) : NULL, nocc, ms->elem0, 1, 0, a->model_off, 0, err, sizeof err)
+                                     : NULL;
+                if (ts && j->nelements == ms->nelements) {
+                    nv_tileset_keep_section(ts, j->section, j->section_n), j->section = NULL;
+                    nv_render_add_tileset(a->r, ts);
+                    a->model_ts = ts, a->model_tiles = 2;
+                    nv_part_set_shown(a->model_part, 0);
+                    slog("the open model: drawn by tiles (%u tiles, built in %.0f ms)", nv_tileset_toc(ts)->ntiles, j->ms);
+                } else {
+                    if (ts) nv_tileset_unref(a->dev, ts);
+                    a->model_tiles = 3;
+                    slog("the open model: drawn as a part (its tiles: %s)", err[0] ? err : "elements differ");
+                }
+            } else if (j->ident == a->model_ident && a->model_tiles == 1) a->model_tiles = 3, slog("the open model: drawn as a part (%s)", j->err[0] ? j->err : "no tiles");
+            a->dirty = 1;
+            nv_job_free(a->dev, j);
+            continue;
+        }
+        if (j->kind == NV_JOB_TILE && j->model) {
+            a->tile_jobs--;
+            if (j->ts == a->model_ts) {
+                if (!j->gt && !strncmp(j->err, "no room", 7)) nv_tileset_queued(j->ts, j->tile, 0), nv_render_tiles_squeeze(a->r);
+                else if (j->gt || !j->cancelled) nv_tileset_attach(a->r, j->ts, j->tile, j->gt), j->gt = NULL;
+                else nv_tileset_queued(j->ts, j->tile, 0);
+                a->dirty = 1;
+            }
+            nv_job_free(a->dev, j);
+            continue;
+        }
         if (j->kind == NV_JOB_TILE) { /* a tile: into its set when the set is still drawn */
             if (L && L->ts == j->ts) {
                 L->tiles_inflight--, a->tile_jobs--;
-                if (j->gt || !j->cancelled) {
+                if (!j->gt && !strncmp(j->err, "no room", 7)) nv_tileset_queued(j->ts, j->tile, 0), nv_render_tiles_squeeze(a->r); /* asked again later */
+                else if (j->gt || !j->cancelled) {
                     if (!j->gt && j->err[0]) slog("link %s: tile %u: %s", L->name, j->tile, j->err);
                     nv_tileset_attach(a->r, j->ts, j->tile, j->gt), j->gt = NULL;
                 } else nv_tileset_queued(j->ts, j->tile, 0);
@@ -292,6 +343,16 @@ void scene_tick(App *a) {
         for (uint32_t k = 0; k < nw; k++) {
             SLink *L = NULL;
             for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].ts == w[k].ts) L = &a->links_s[i];
+            if (!L && w[k].ts == a->model_ts && a->model_ts) { /* the open model's tile */
+                nv_job *j = calloc(1, sizeof *j);
+                if (!j) break;
+                j->kind = NV_JOB_TILE, j->model = 1, j->ses = a->ses, j->uid = 0xFFFFFFFFu, j->ident = a->model_ident, j->ts = w[k].ts, j->tile = w[k].tile;
+                nv_tileset_ref(j->ts);
+                nv_tileset_queued(j->ts, j->tile, 1);
+                a->tile_jobs++;
+                nv_loader_submit(a->loader, j);
+                continue;
+            }
             if (!L) continue;
             nv_job *j = calloc(1, sizeof *j);
             if (!j) break;
@@ -361,7 +422,7 @@ void scene_tick(App *a) {
 
 /* 1 when every ready link is drawn in detail (or failed) and nothing is converting. */
 int scene_complete(App *a) {
-    if (nv_loader_busy(a->loader) || a->tile_jobs > 0) return 0;
+    if (nv_loader_busy(a->loader) || a->tile_jobs > 0 || a->model_tiles == 1) return 0;
     if (a->use_tiles && nv_render_get_stats(a->r).wanted > 0) return 0;
     for (int i = 0; i < a->nlinks; i++) {
         const SLink *L = &a->links_s[i];
@@ -477,4 +538,61 @@ int scene_elem(App *a, uint32_t elem, char id[23], char *link, size_t nlink) {
     for (int i = 0; i < a->nlinks; i++)
         if (a->links_s[i].detail == p) snprintf(link, nlink, "%s", a->links_s[i].name);
     return 1;
+}
+
+/* NUI2: the tile boxes checked against the geometry (drive.c check_tiles): every leaf's TLF1 decoded, each element's
+ * placed vertices against its leaf's box and each tile's box against its parent's (link frame, mm, with 1 mm of slack). */
+void tiles_check(App *a) {
+    long bad_el = 0, bad_tiles = 0, leaves = 0;
+    for (int i = 0; i < a->nlinks; i++) {
+        SLink *L = &a->links_s[i];
+        if (!L->ts) continue;
+        const cc_tiles_toc *toc = nv_tileset_toc(L->ts);
+        long out_el = 0, out_tiles = 0, nl = 0;
+        double worst = 0;
+        char worst_id[23] = "";
+        nv_ses_wr(a->loader);
+        cc_link *l = NULL;
+        for (size_t k = 0; k < a->ses->nlinks; k++) if (a->ses->links[k].uid == L->uid) l = &a->ses->links[k];
+        for (uint32_t t = 0; l && l->vf && t < toc->ntiles; t++) {
+            cc_tile x;
+            cc_tiles_get(toc, t, &x);
+            if (x.parent != CC_TILES_NONE && x.parent < toc->ntiles) {
+                cc_tile p;
+                cc_tiles_get(toc, x.parent, &p);
+                for (int d = 0; d < 3; d++) if (x.box[d] < p.box[d] - 1 || x.box[3 + d] > p.box[3 + d] + 1) { out_tiles++; break; }
+            }
+            if (!(x.flags & CC_TILE_LEAF)) continue;
+            nl++;
+            Buf b;
+            buf_init(&b);
+            cc_tiles_src src = {NULL, l->vf};
+            cc_error e;
+            if (cc_tiles_leaf_answer(&src, toc, t, &b, &e) == 0) {
+                Arena ar;
+                arena_init(&ar, 0);
+                cc_mesh m;
+                uint32_t *rows = NULL;
+                if (cc_tiles_leaf_mesh((const uint8_t *)b.p, b.len, &ar, &m, &rows) == 0) {
+                    uint32_t last = UINT32_MAX;
+                    for (uint32_t k = 0; k < m.ni; k++) {
+                        const float *v = m.pos[m.idx[k]];
+                        double o = 0;
+                        for (int d = 0; d < 3; d++) o = fmax(o, fmax(x.box[d] - v[d], v[d] - x.box[3 + d]));
+                        if (o > 1 && rows[k / 3] != last) {
+                            last = rows[k / 3], out_el++;
+                            if (o > worst) worst = o, cc_link_id(l, rows[k / 3], worst_id), worst_id[22] = 0;
+                        }
+                    }
+                }
+                arena_free(&ar);
+            }
+            buf_free(&b);
+        }
+        nv_ses_unwr(a->loader);
+        fprintf(stderr, "drive: check_tiles: link %d: %u tiles, %ld leaves, %ld tiles outside their parent, %ld elements outside their leaf's box (worst %.0f mm: %s)\n",
+                i + 1, toc->ntiles, nl, out_tiles, out_el, worst, worst_id[0] ? worst_id : "-");
+        bad_el += out_el, bad_tiles += out_tiles, leaves += nl;
+    }
+    fprintf(stderr, "drive: check_tiles: %ld leaves, %ld tiles outside their parent, %ld elements outside their leaf's box\n", leaves, bad_tiles, bad_el);
 }

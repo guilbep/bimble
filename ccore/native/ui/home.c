@@ -356,6 +356,7 @@ void optimisations_apply(App *a) {
     a->topts.error_px = opt_num(a, "error_px", D_ERROR_PX);
     a->topts.lod = opt_num(a, "lod", 1) != 0 && a->topts.error_px > 0;
     a->topts.cull_back = opt_num(a, "cull_back", D_CULL_BACK) != 0;
+    a->topts.groups = opt_num(a, "occlusion_groups", 1) != 0;
     a->topts.budget = a->gpu_budget;
     a->still_cut = (float)opt_num(a, "still_px", D_STILL_PX);
     if (a->still_cut < 0) a->still_cut = 0;
@@ -417,6 +418,8 @@ void optimisations_ui(App *a) {
     if (a->use_tiles) {
         bool oc = a->topts.occlusion, lod = a->topts.lod, cb = a->topts.cull_back;
         if (igCheckbox(T(a, "native.opt.occlusion"), &oc)) set_opt(a, "draw_visible", oc ? "true" : "false");
+        bool gr = a->topts.groups;
+        if (oc && igCheckbox(T(a, "native.opt.groups"), &gr)) set_opt(a, "occlusion_groups", gr ? "true" : "false");
         if (igCheckbox(T(a, "native.opt.lod"), &lod)) set_opt(a, "lod", lod ? "true" : "false");
         if (igCheckbox(T(a, "native.opt.cullBack"), &cb)) set_opt(a, "cull_back", cb ? "true" : "false");
         float e = (float)a->topts.error_px, m = a->still_cut;
@@ -439,8 +442,8 @@ static void optimisations_report(App *a, Buf *b) {
     t[strcspn(t, "\n")] = 0;
     size_t k = strlen(t);
     if (a->use_tiles)
-        snprintf(t + k, sizeof t - k, "; tiles (renderer_path) on: occlusion (draw_visible) %s, error (error_px) %.2g px, levels of detail (lod) %s, small elements (still_px) %.2g px, back faces (cull_back) %s\n",
-                 a->topts.occlusion ? "on" : "off", a->topts.error_px, a->topts.lod ? "on" : "off", a->still_cut, a->topts.cull_back ? "culled" : "drawn");
+        snprintf(t + k, sizeof t - k, "; tiles (renderer_path) on: occlusion (draw_visible) %s%s, error (error_px) %.2g px, levels of detail (lod) %s, small elements (still_px) %.2g px, back faces (cull_back) %s\n",
+                 a->topts.occlusion ? "on" : "off", a->topts.occlusion ? (a->topts.groups ? " to groups of 8 elements (occlusion_groups)" : " by tile (occlusion_groups off)") : "", a->topts.error_px, a->topts.lod ? "on" : "off", a->still_cut, a->topts.cull_back ? "culled" : "drawn");
     else snprintf(t + k, sizeof t - k, "; tiles (renderer_path) off: parts\n");
     buf_puts(b, t);
     snprintf(a->settings_line, sizeof a->settings_line, "%.*s", (int)strcspn(t + 15, "\n"), t + 15);

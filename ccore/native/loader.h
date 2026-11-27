@@ -20,7 +20,7 @@
 struct cc_session;
 typedef struct nv_loader nv_loader;
 
-enum { NV_JOB_PROXIES = 1, NV_JOB_DETAIL = 2, NV_JOB_TILE = 3 }; /* NUI2: a tile of a link's pyramid */
+enum { NV_JOB_PROXIES = 1, NV_JOB_DETAIL = 2, NV_JOB_TILE = 3, NV_JOB_MODEL_TILES = 4 }; /* NUI2: a tile of a pyramid; the open model's pyramid built */
 
 typedef struct nv_job {
     /* in */
@@ -37,6 +37,10 @@ typedef struct nv_job {
     uint32_t tile;
     nv_gtile *gt;        /* TILE out: its content on the GPU (NULL: err) */
     uint64_t bytes_in;   /* TILE: the answer's bytes */
+    int model;           /* TILE: of the open model's pyramid (ident: the session's scene) */
+    uint8_t *section;    /* MODEL_TILES out: the open model's section TILE, malloc'd (taken by the caller) */
+    size_t section_n;
+    uint32_t nelements;
     /* out */
     nv_part *part;       /* NULL: none (err, or nothing to draw: err empty) */
     char err[256];

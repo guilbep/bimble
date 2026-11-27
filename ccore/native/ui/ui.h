@@ -235,11 +235,15 @@ struct App {
     int use_tiles;
     nv_tiles_opts topts;
     int tile_jobs;
+    nv_tileset *model_ts;        /* the open model's pyramid (built by a loader job after the open) */
+    int model_tiles;             /* 0 none, 1 building, 2 drawn by tiles, 3 failed (drawn as a part) */
+    const void *model_ident;     /* the session's scene the pyramid was asked for */
+    double model_off[3];
     uint64_t tri_live;           /* the moving budget's triangles for the walker (0: none) */
     double tiles_checked;
     int truth;                   /* --truth: each 3D frame drawn with and without occlusion, the id buffers compared */
     char settings_line[600];     /* the optimisations in force (the report's line, for the summary) */
-    int truth_missing;           /* the truth test: element ids missing from this frame with occlusion (-1: not tested) */
+    int truth_missing, truth_ties;           /* the truth test: element ids missing from this frame with occlusion (-1: not tested) */
 };
 
 /* core.c */
@@ -274,6 +278,7 @@ int scene_complete(App *a);
 int scene_box(App *a, double lo[3], double hi[3]);
 void scene_ids(App *a);
 uint32_t scene_find(App *a, const char *id, size_t n);
+void tiles_check(App *a);
 int scene_elem(App *a, uint32_t elem, char id[23], char *link, size_t nlink);
 /* icons.c */
 int icons_build(App *a);

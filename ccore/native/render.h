@@ -124,6 +124,7 @@ typedef struct {
     int lod;             /* levels of detail (0: every leaf in the frustum) */
     float min_px;        /* settings still_px: an element under this many pixels is skipped (0: off) */
     int cull_back;       /* settings cull_back: back faces of closed outward elements culled */
+    int groups;          /* occlusion_groups: occlusion down to groups of 8 elements (seen last frame: pass 1; else tested); 0: by tile */
     uint64_t budget;     /* the resident tiles' GPU bytes (0: none) */
     uint64_t tri_budget; /* the walker's triangle budget (0: none; the moving budget sets it) */
     int reference;       /* the truth test's reference frame: no occlusion, no state changed */
@@ -136,6 +137,10 @@ typedef struct { nv_tileset *ts; uint32_t tile, rank; } nv_tile_want;
 nv_tileset *nv_tileset_new(const uint8_t *toc, size_t n, uint32_t nelements, const void *occ, uint32_t nocc, uint32_t elem0, double c, double s,
                            const double off[3], uint32_t colour, char *err, size_t errn);
 void nv_tileset_ref(nv_tileset *ts);   /* a loader job holds one */
+/* the whole section kept with the set (the open model's: its proxies are read from it; a link's are read from its mapped
+ * cache): taken (malloc'd, n bytes) */
+void nv_tileset_keep_section(nv_tileset *ts, uint8_t *sec, size_t n);
+void nv_tileset_section(const nv_tileset *ts, const uint8_t **sec, size_t *n);
 void nv_tileset_unref(SDL_GPUDevice *dev, nv_tileset *ts);
 const cc_tiles_toc *nv_tileset_toc(const nv_tileset *ts);
 void nv_tileset_set_shown(nv_tileset *ts, int shown);
@@ -153,12 +158,15 @@ uint64_t nv_gtile_bytes(const nv_gtile *g);
 void nv_tileset_attach(nv_render *r, nv_tileset *ts, uint32_t tile, nv_gtile *g);
 void nv_tileset_queued(nv_tileset *ts, uint32_t tile, int queued);
 void nv_render_tiles_opts(nv_render *r, const nv_tiles_opts *o);
+void nv_render_tiles_squeeze(nv_render *r); /* a tile found no room in the budget's pages: release the unused */
 nv_tiles_opts nv_render_get_tiles_opts(const nv_render *r);
 /* after nv_render_collect: the tiles to load next, nearest and coarsest first (at most cap) */
 uint32_t nv_render_tiles_want(nv_render *r, nv_tile_want *out, uint32_t cap);
 /* element colours (packed RGBA8) for elements elem0.. of a tile set (its link's) */
 int nv_render_add_colours(nv_render *r, uint32_t elem0, uint32_t n, const uint32_t *colours);
-SDL_GPUTexture *nv_render_ids(const nv_render *r); /* the id target (R32 uint, w x h) */
+SDL_GPUTexture *nv_render_ids(const nv_render *r);
+SDL_GPUTexture *nv_render_depth(const nv_render *r); /* the depth target (D32 float, reverse Z) */
+void nv_tiles_debug_elem(nv_render *r, uint32_t e); /* the id target (R32 uint, w x h) */
 
 /* The camera (glviewport.ts's rules, NAT1's code). */
 void nv_cam_fit_box(nv_camera *c, const double lo[3], const double hi[3]);

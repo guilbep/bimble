@@ -598,7 +598,9 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
         SDL_EndGPUComputePass(c2);
     }
     memcpy(r->last_vp, vp, sizeof r->last_vp);
+    double tp0 = nv_now_ms();
     int tiles = nv_tiles_prepare(r, cmd, vp, eye, pl, cam->ortho ? px_per : r->H / 2.0 / tan(NV_FOV_Y / 2), cam->ortho, r->cut_px);
+    r->tl.ms_prepare = nv_now_ms() - tp0;
     VUni vu;
     memcpy(vu.vp, vp, sizeof vp);
     vu.bias[0] = 1e-4f, vu.bias[1] = vu.bias[2] = vu.bias[3] = 0;
@@ -669,7 +671,9 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
             }
         }
     }
+    double td0 = nv_now_ms();
     if (tiles && !(r->skip & NV_SKIP_DRAW)) nv_tiles_draw(r, cmd, rp, 1);
+    r->tl.ms_draw = nv_now_ms() - td0;
     SDL_EndGPURenderPass(rp);
     if (tiles && nv_tiles_has_pass2(r)) { /* occlusion: the depth pyramid, the tests, then what they found visible */
         nv_tiles_occlusion(r, cmd);
@@ -682,8 +686,11 @@ void nv_render_record(R *r, SDL_GPUCommandBuffer *cmd, const nv_camera *cam, int
         SDL_GPURenderPass *rp2 = SDL_BeginGPURenderPass(cmd, c2, 2, &d2);
         SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof vu);
         SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof fu);
+        double td1 = nv_now_ms();
         if (!(r->skip & NV_SKIP_DRAW)) nv_tiles_draw(r, cmd, rp2, 2);
+        r->tl.ms_draw += nv_now_ms() - td1;
         SDL_EndGPURenderPass(rp2);
+        nv_tiles_seen(r, cmd);
     }
     if (r->edges == NV_EDGES_SCREEN && !(r->skip & NV_SKIP_EDGES)) {
         SDL_GPUColorTargetInfo c2 = {.texture = r->color, .load_op = SDL_GPU_LOADOP_LOAD, .store_op = SDL_GPU_STOREOP_STORE};
@@ -826,13 +833,15 @@ int nv_render_add_colours(R *r, uint32_t elem0, uint32_t n, const uint32_t *colo
     return 0;
 }
 SDL_GPUTexture *nv_render_ids(const R *r) { return r->ids; }
+SDL_GPUTexture *nv_render_depth(const R *r) { return r->depth; }
 
 SDL_GPUTexture *nv_render_color(const R *r) { return r->color; }
 nv_render_stats nv_render_get_stats(const R *r) {
     uint64_t g = r->gpu_bytes;
     for (uint32_t k = 0; k < r->nparts; k++) g += r->parts[k]->gpu_bytes;
-    g += r->tl.gpu_bytes;
-    nv_render_stats s = {r->draws, r->commands, r->proxies_drawn, r->nparts, r->tl.tiles_drawn, r->tris, 0, 0, 0, 0, r->tl.gpu_bytes, g, r->W, r->H};
+    g += nv_tiles_pages_bytes(); /* the pages reserved (the tiles' share: tile_bytes) */
+    nv_render_stats s = {.draws = r->draws, .commands = r->commands, .proxies = r->proxies_drawn, .parts = r->nparts, .tiles = r->tl.tiles_drawn, .tris = r->tris,
+                         .tile_bytes = r->tl.gpu_bytes, .gpu_bytes = g, .w = r->W, .h = r->H};
     for (uint32_t k = 0; k < r->tl.nsets; k++) s.tiles_resident += nv_tileset_resident(r->tl.sets[k]);
     s.tests = r->tl.ntests, s.pass1 = r->tl.tiles_pass1, s.wanted = r->tl.budget_full ? 0 : r->tl.want_n, s.budget_full = r->tl.budget_full;
     return s;
