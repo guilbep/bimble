@@ -14,6 +14,7 @@
 #define _GNU_SOURCE
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -156,7 +157,8 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
 typedef struct {
     App *a;
     char path[1024];
-    int done, rc;
+    atomic_int done;
+    int rc;
     char err[512];
 } Opener;
 static Opener opener;
@@ -177,7 +179,7 @@ static void *open_run(void *arg) {
     nv_ses_unwr(a->loader);
     if (o->rc != CC_OK) snprintf(o->err, sizeof o->err, "%.*s", (int)(out.len < 500 ? out.len : 500), out.p ? out.p : "");
     buf_free(&out), buf_free(&body);
-    __atomic_store_n(&o->done, 1, __ATOMIC_RELEASE);
+    atomic_store_explicit(&o->done, 1, memory_order_release);
     return NULL;
 }
 
@@ -191,7 +193,7 @@ static void opening_tick(App *a) {
         else open_run(&opener), opener_on = 1;
         return;
     }
-    if (!__atomic_load_n(&opener.done, __ATOMIC_ACQUIRE)) return;
+    if (!atomic_load_explicit(&opener.done, memory_order_acquire)) return;
     pthread_join(opener_th, NULL);
     opener_on = 0;
     if (opener.rc != CC_OK) {
@@ -312,7 +314,8 @@ static void frame(App *a) {
         uint32_t picked = 0;
         nv_render_collect(a->r, pick ? &picked : NULL);
         if (pick) a->pick_pending = 0, core_select(a, picked > NV_ELEM0 ? picked : 0);
-        if (!a->t_first_picture && nv_render_nparts(a->r) > 0) a->t_first_picture = t1;
+        /* the first picture: something drawn, or nothing left to draw (an empty model) */
+        if (!a->t_first_picture && (nv_render_nparts(a->r) > 0 || scene_complete(a))) a->t_first_picture = t1;
     }
     if (a->screen_kind == SCR_MAIN && !a->t_complete && a->t_first_picture && scene_complete(a)) a->t_complete = t1;
     if (a->input_t) app_input_done(a, t1);
@@ -512,9 +515,13 @@ int main(int argc, char **argv) {
                 a->dirty = 1;
             }
         }
-        int busy = a->dirty || a->moving || a->screen_kind == SCR_OPENING || nv_loader_busy(a->loader) || a->links_busy || a->steps;
-        if (!a->offscreen && !had && !busy && n > 2) SDL_WaitEventTimeout(NULL, 100);
-        else if (a->offscreen && !had && !busy && n > 2) SDL_Delay(2);
+        /* idle: wait for an event; loading (the open, a conversion, the loader): poll every few ms */
+        int busy = a->dirty || a->moving || a->pick_pending || a->drag || a->box_drag;
+        int loading = a->screen_kind == SCR_OPENING || nv_loader_busy(a->loader) || a->links_busy;
+        if (!had && !busy && n > 2) {
+            if (!a->offscreen) SDL_WaitEventTimeout(NULL, loading ? 8 : 100);
+            else SDL_Delay(a->steps ? 1 : 4);
+        }
         frame(a);
         n++;
         if (a->quit_after && a->t_complete) {

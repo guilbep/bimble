@@ -16,6 +16,10 @@
 //     the Roboto files of the user's Bimble folder (settings.rs's spelling) under a non-ASCII profile;
 //   - `--port N` serves on N; a web/ without index.html or over 64 MiB refuses to start;
 //   - without --no-browser, xdg-open (a stand-in first on PATH) gets the URL and no socket.
+//   - NUI1 (Linux, when the archive holds the native app `bimble`): its third parties' licences, ldd names
+//     no libstdc++ and BIND_NOW, `--version`, and `bimble --offscreen --quit-after 3 --shot` on the fixture
+//     exits 0 with a picture that is not blank (no GPU device here: exit 3 and a SKIP line, said); an
+//     archive without it (SDL3 absent where it was built) says so in a SKIP line.
 // The ports: the system's free ones (open picks one; --port gets one from node), not test/ports.mjs.
 // Prints "N passed, M failed"; exits non-zero on a failure. Needs tar and ldd.
 // macOS (ticket MAC1): bimble-ccore-<VERSION>-<arch>-macos.tar.gz (RELEASE_ARCH=x86_64: the Intel
@@ -31,6 +35,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readPng, colours } from "./lib/png.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = readFileSync(join(CCORE, "VERSION"), "utf8").trim();
@@ -134,7 +139,9 @@ try {
   // FIXDOC: every licence file THIRD-PARTY.txt names under licences/ is in the archive, and it
   // names the parts built in and the fonts of web/.
   const tp = execFileSync(TAR, WIN ? ["xOf", ARCHIVE, `${NAME}/THIRD-PARTY.txt`] : ["xzOf", ARCHIVE, `${NAME}/THIRD-PARTY.txt`], { encoding: "utf8" });
-  const named = [...tp.matchAll(/licences\/[\w.-]+/g)].map((m) => m[0]);
+  const NATIVE = !WIN && !MAC && list.includes(`${NAME}/bimble`); // NUI1
+  const NATIVE_LIC = ["licences/DearImGui-LICENSE.txt", "licences/cimgui-LICENSE.txt", "licences/nanosvg-LICENSE.txt"];
+  const named = [...tp.matchAll(/licences\/[\w.-]+/g)].map((m) => m[0]).filter((l) => NATIVE || !NATIVE_LIC.includes(l));
   const missing = named.filter((l) => !list.includes(`${NAME}/${l}`));
   check("THIRD-PARTY.txt: every licences/ file it names is in the archive", named.length >= 9 && missing.length === 0, `${named.length} named; missing ${missing.join(" ")}`);
   const parts = ["manifold", "Clipper2", "BLAKE3", "Ryu", "earcutr", "Sora", "Source Sans 3", "DM Mono"];
@@ -144,7 +151,7 @@ try {
   check("THIRD-PARTY.txt gives their SPDX identifiers", spdx.length === 0, spdx.join(", "));
   const ttf = list.filter((p) => /\.(ttf|otf)$/i.test(p) || /\/fonts\//.test(p));
   check("SIZE1: no font file in the archive", ttf.length === 0, ttf.join(" "));
-  const rest = list.filter((p) => !(WIN ? /^[^/]+\/(bimble-ccore\.exe|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/ : /^[^/]+\/(bimble-ccore|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/).test(p));
+  const rest = list.filter((p) => !(WIN ? /^[^/]+\/(bimble-ccore\.exe|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/ : /^[^/]+\/(bimble-ccore|bimble|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/).test(p));
   check("nothing else in the archive", rest.length === 0, rest.join(" "));
 
   execFileSync(TAR, [WIN ? "xf" : "xzf", ARCHIVE, "-C", tmp]);
@@ -170,6 +177,29 @@ try {
       check("readelf -l: a GNU_RELRO segment", /GNU_RELRO/.test(seg));
     }
   }
+
+  // NUI1: the native app
+  if (NATIVE) {
+    const nb = join(root, "bimble");
+    const ldd = execFileSync("ldd", [nb], { encoding: "utf8" });
+    check("bimble: ldd names no libstdc++ nor libmanifold (static)", !/libstdc\+\+|manifold/.test(ldd), ldd.replace(/\s+/g, " ").trim());
+    check("bimble: readelf -d: BIND_NOW", /\(BIND_NOW\)|Flags:.*\bNOW\b/.test(execFileSync("readelf", ["-d", nb], { encoding: "utf8" })));
+    const nv = execFileSync(nb, ["--version"], { encoding: "utf8" }).trim();
+    check("bimble --version prints ccore/VERSION", nv === `bimble ${VERSION} (native)`, nv);
+    const fixture = join(tmp, "native-frame.json"), shot = join(tmp, "native-shot.png");
+    cpSync(join(CCORE, "golden/frame.json"), fixture);
+    let rc = 0, err = "";
+    try {
+      execFileSync(nb, ["--offscreen", "--quit-after", "3", "--config-dir", join(tmp, "native-conf"), "--shot", shot, fixture], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60000 });
+    } catch (e) { rc = e.status ?? -1, err = String(e.stderr ?? e.message); }
+    if (rc === 3) console.log(`SKIP native app offscreen run: no GPU device here (${err.split("\n").filter(Boolean)[0] ?? ""})`);
+    else {
+      check("bimble --offscreen --quit-after 3 --shot exits 0", rc === 0, err.trim().split("\n").slice(-3).join(" | "));
+      let img = null;
+      try { img = readPng(shot); } catch (e) { check("bimble's shot is a PNG", false, String(e)); }
+      if (img) check("bimble's shot draws the fixture (the 3D view not blank)", colours(img, Math.floor(img.width * 0.3), Math.floor(img.height * 0.35), Math.floor(img.width * 0.9), Math.floor(img.height * 0.9)) > 20, `${img.width}x${img.height}`);
+    }
+  } else if (!WIN && !MAC) console.log("SKIP native app: the archive has no bimble (SDL3 >= 3.4, FreeType or glslc absent where it was built)");
 
   // Untrusted web/ content added after unpacking: a link out of the tree and a hidden file.
   const webFiles = files(web);

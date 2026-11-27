@@ -301,7 +301,8 @@ static int run_step(App *a, Step *s, double now) {
         sscanf(arg, "%lf %lf", &mm, &tol);
         const JrVal *it = a->measure.root ? jr_get(a->measure.root, "items") : NULL;
         double got = it && it->type == JR_ARR && it->n ? jnum(&it->items[it->n - 1], "value_mm", -1) : -1;
-        snprintf(what, sizeof what, "measure %.1f mm +- %.1f (got %.3f: %s)", mm, tol, got, it && it->n ? js(&it->items[it->n - 1], "text") : "none");
+        snprintf(what, sizeof what, "measure %.1f mm +- %.1f (got %.3f: %s; tool %s)", mm, tol, got, it && it->n ? js(&it->items[it->n - 1], "text") : "none",
+                 a->measure.root ? "answered" : a->measure.err[0] ? a->measure.err : "silent");
         expect(a, fabs(got - mm) <= tol, what);
         return 1;
     }

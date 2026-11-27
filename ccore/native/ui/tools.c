@@ -7,6 +7,7 @@
  * the renderer's in the app's scene frame (origin0): the two differ when the open model is empty. */
 #define _POSIX_C_SOURCE 200809L
 #include <math.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include "ui.h"
@@ -31,6 +32,7 @@ void tool_measure_input(App *a, float mx, float my, int click) {
     Buf out;
     buf_init(&out);
     core_call(a, "tool", click ? "measure_click" : "measure_pointer", body, &out);
+    if (getenv("BIMBLE_DEBUG_TOOLS")) fprintf(stderr, "tool %s %s -> %.*s\n", click ? "measure_click" : "measure_pointer", body, (int)(out.len < 600 ? out.len : 600), out.p ? out.p : "");
     json_parse(&a->measure, out.p ? out.p : "null", out.len ? out.len : 4);
     buf_free(&out);
 }

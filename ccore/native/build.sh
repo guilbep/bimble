@@ -79,6 +79,8 @@ APP=(native/render.c native/scene_load.c native/loader.c native/ui/app.c native/
      native/ui/icons.c "$G/embed.c")
 INC=(-I"$D"/cimgui -I"$D"/nanosvg/src -Inative -Inative/ui -I"$G/spv" $(pkg-config --cflags sdl3 freetype2))
 SDL_LIBS=$(pkg-config --libs sdl3)
+LINK_EXTRA=()
+STDCXX=(-lstdc++)
 build_app_clang() { # <out> <extra flags...>
     local out=$1
     shift
@@ -91,11 +93,16 @@ build_app_clang() { # <out> <extra flags...>
     done
     wait
     for o in "${objs[@]}"; do [[ -f $o ]] || exit 1; done
-    clang++ "${CF[@]}" -pthread "${objs[@]}" "${core_objs[@]}" out/native/libbimble_imgui.a ${KLINK_CLANG[@]+"${KLINK_CLANG[@]}"} \
-        $SDL_LIBS $(pkg-config --libs freetype2) -lm -o "$out"
+    local kl=()
+    for f in ${KLINK_CLANG[@]+"${KLINK_CLANG[@]}"}; do [[ $f == -lstdc++ ]] || kl+=("$f"); done
+    clang "${CF[@]}" -pthread "${objs[@]}" "${core_objs[@]}" out/native/libbimble_imgui.a ${kl[@]+"${kl[@]}"} "${STDCXX[@]}" \
+        $SDL_LIBS $(pkg-config --libs freetype2) -lm ${LINK_EXTRA[@]+"${LINK_EXTRA[@]}"} -o "$out"
 }
 case $MODE in
   app)
+    # libstdc++ and libgcc inside (as bimble-ccore), relocations read-only and bound at start (FIXDOC)
+    STDCXX=(-Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc)
+    LINK_EXTRA=(-Wl,-z,relro,-z,now -Wl,--gc-sections)
     # -Werror on the app's own files (nanosvg's sign-compare is silenced at its include)
     build_app_clang out/app/bimble -Werror
     strip out/app/bimble ;;
@@ -120,7 +127,7 @@ case $MODE in
     else
         shift
         cmd=("$@")
-        [[ ${#cmd[@]} -gt 0 ]] || cmd=(out/app-dev/bimble --offscreen --quit-after 2 --shot out/app-dev/shot.png golden/frame.json)
+        [[ ${#cmd[@]} -gt 0 ]] || cmd=(out/app-dev/bimble --offscreen --quit-after 2 --config-dir out/app-dev/conf --shot out/app-dev/shot.png golden/frame.json)
         command -v inotifywait > /dev/null || { echo "FAIL native/build.sh watch: inotifywait (inotify-tools) not found" >&2; exit 1; }
         dev_build && echo "watch: ready; save a file under ccore/native/ to rebuild"
         while inotifywait -qq -e close_write -e moved_to -r native --include '.*\.(c|h|json)$'; do

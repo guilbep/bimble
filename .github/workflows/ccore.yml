@@ -9,7 +9,8 @@ name: ccore
 # Since ADR 0072 main is the C core: this is main's CI. It runs on every push to main, every pull
 # request to main (no path filter: a required check must report on every pull request), the tags
 # ccore-v*, and by hand. The jobs' names are the required checks of main's branch protection:
-# ccore-linux, ccore-san, ccore-lab, ccore-macos (ccore-windows is allowed to fail).
+# ccore-linux, ccore-san, ccore-lab, ccore-macos (ccore-windows is allowed to fail; ccore-native, the native
+# app on a software Vulkan device, is not a required check yet: ticket NUI1).
 # Every job reads only; ccore-prerelease alone writes (its own permissions: contents: write).
 # Third-party actions are pinned by commit, the tag in a comment (ticket FIXDOC): to update one,
 # `git ls-remote https://github.com/<owner>/<repo> refs/tags/<tag>` and change both.
@@ -457,6 +458,61 @@ jobs:
   # CMAKE_OSX_ARCHITECTURES (manifold and the core), run under Rosetta 2 for the test; both for
   # macOS 11 and newer. Also on a push to main whose head commit message holds [ccore-release]; a
   # branch shows its archives before a tag through a manual run on it (gh workflow run ccore.yml --ref <branch>).
+  # NUI1 (ADR 0084): the native app `bimble`, built and driven offscreen (ccore/ci/run.sh native) on a
+  # software Vulkan device (Mesa's lavapipe): correct, not fast; the input -> frame rule of
+  # test/lib/input_time.mjs (the app's own time strict, the GPU's reported). NOT a required check yet
+  # (main's branch protection does not name it). macOS and Windows are not built: each needs the shaders
+  # as MSL / DXIL (SDL_shadercross from the SPIR-V) and SDL 3 there; macOS also a signed .app.
+  ccore-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
+      - run: scripts/apt-install.sh clang lld cmake glslc libfreetype-dev pkg-config libvulkan-dev mesa-vulkan-drivers
+        timeout-minutes: 12
+      - name: Versions and keys
+        id: keys
+        run: |
+          echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
+          clang --version | head -n 1
+          glslc --version | head -n 1
+          ls /usr/share/vulkan/icd.d/
+      - name: SDL 3 (cache)
+        id: sdl3
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
+        with:
+          path: ~/.local/sdl3
+          key: sdl3-ubuntu-latest-${{ runner.arch }}-${{ hashFiles('ccore/ci/sdl3.sh') }}
+      - if: steps.sdl3.outputs.cache-hit != 'true'
+        run: ccore/ci/sdl3.sh ~/.local/sdl3
+      - name: manifold (cache)
+        id: manifold
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
+        with:
+          path: ccore/out/deps/manifold
+          key: manifold-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh', 'ccore/portable.sh') }}
+      - if: steps.manifold.outputs.cache-hit != 'true'
+        run: JOBS=4 ccore/deps.sh
+      - name: ImGui, cimgui, nanosvg (cache; checked by native/deps.sh)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
+        with:
+          path: ccore/out/native/deps
+          key: native-deps-${{ hashFiles('ccore/native/deps.sh') }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: ccore/ci/run.sh native (lavapipe)
+        run: |
+          export PKG_CONFIG_PATH=$HOME/.local/sdl3/lib/pkgconfig LD_LIBRARY_PATH=$HOME/.local/sdl3/lib
+          export VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json | head -n 1)
+          ccore/ci/run.sh native
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
+        with:
+          name: ccore-native-logs
+          path: ccore/out/ci/
+          retention-days: 14
+
   ccore-release:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/ccore-v') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[ccore-release]'))
     strategy:
@@ -505,9 +561,24 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match ccore/VERSION $v: the tag must be ccore-v$v"
             exit 1
           fi
+      # NUI1: the Linux archives hold the native app (glslc, FreeType and SDL 3 from source: ci/sdl3.sh)
       - if: runner.os == 'Linux'
-        run: scripts/apt-install.sh clang cmake
+        run: scripts/apt-install.sh clang cmake glslc libfreetype-dev pkg-config libvulkan-dev
         timeout-minutes: 12
+      - name: SDL 3 (cache, Linux)
+        if: runner.os == 'Linux'
+        id: sdl3
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
+        with:
+          path: ~/.local/sdl3
+          key: sdl3-${{ matrix.name }}-${{ runner.arch }}-${{ hashFiles('ccore/ci/sdl3.sh') }}
+      - if: runner.os == 'Linux' && steps.sdl3.outputs.cache-hit != 'true'
+        run: ccore/ci/sdl3.sh ~/.local/sdl3
+      - if: runner.os == 'Linux'
+        run: |
+          echo "PKG_CONFIG_PATH=$HOME/.local/sdl3/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/.local/sdl3/lib" >> "$GITHUB_ENV"
+          echo "NATIVE_APP=1" >> "$GITHUB_ENV"
       - name: Versions and keys
         id: keys
         run: |
