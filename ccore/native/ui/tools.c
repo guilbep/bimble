@@ -196,6 +196,21 @@ int view_cube(App *a, ImDrawList *dl, float mx, float my, int click) {
             if (facing > 0.35) ImDrawList_AddText_FontPtr(dl, a->f_text, 11 * s, V2(c0.x - ts.x * 11 / 28 * s, c0.y - 6 * s), C_INK, lab, NULL, 0, NULL);
         }
     }
+    /* Home and Fit all under the cube (the lab's buttons beside its view cube) */
+    for (int b = 0; b < 2; b++) {
+        float bx = cx, by = cy + R * 1.4f + (22 + 40 * b) * s;
+        int hov = (mx - bx) * (mx - bx) + (my - by) * (my - by) < 16 * 16 * s * s;
+        if (dl) {
+            ImDrawList_AddCircleFilled(dl, V2(bx, by), 16 * s, hov ? C_SUNK : C_SHEET, 0);
+            ImDrawList_AddCircle(dl, V2(bx, by), 16 * s, C_STONE, 0, 1 * s, 0);
+            icon_draw(a, dl, icon_for(a, b ? "fit" : "top"), bx - 10 * s, by - 10 * s, 20 * s, C_INK);
+        }
+        if (click && hov) {
+            if (b) app_fit(a);
+            else view_home(a);
+            return 1;
+        }
+    }
     if (!click || hit_face < 0) return 0;
     static const double YAW[6] = {0, NV_PI, NV_PI / 2, -NV_PI / 2, 0, 0};
     if (hit_face == 4) { view_top(a); return 1; }

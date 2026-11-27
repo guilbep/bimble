@@ -14,14 +14,14 @@
 
 int text_button(App *a, const char *id, const char *label, int primary, int on) {
     ImVec2 sz = igCalcTextSize(label, NULL, false, -1);
-    float s = a->scale, h = 32 * s, w = sz.x + 32 * s;
+    float s = a->scale, h = 30 * s, w = sz.x + 24 * s;
     ImVec2 p = igGetCursorScreenPos();
     int hit = igInvisibleButton(id, V2(w, h), 0);
     int hov = igIsItemHovered(0);
     ImDrawList *dl = igGetWindowDrawList();
     ImU32 bg = primary ? C_CLAY : on ? C_INK : hov ? C_SUNK : 0;
     if (bg) ImDrawList_AddRectFilled(dl, p, V2(p.x + w, p.y + h), bg, h / 2, 0);
-    ImDrawList_AddText_FontPtr(dl, primary ? a->f_semi : a->f_text, 14 * s, V2(p.x + 16 * s, p.y + (h - sz.y) / 2),
+    ImDrawList_AddText_FontPtr(dl, primary ? a->f_semi : a->f_text, 14 * s, V2(p.x + 12 * s, p.y + (h - sz.y) / 2),
                                primary || on ? C_CREAM : C_INK, label, NULL, 0, NULL);
     return hit;
 }
@@ -242,9 +242,7 @@ void shell_top(App *a) {
     float cx = tx + ts.x + 10 * s;
     ImDrawList_AddRectFilled(dl, V2(cx, 11 * s), V2(cx + cs.x + 16 * s, 33 * s), unsaved ? C_OCHRE : C_SUNK, 11 * s, 0);
     ImDrawList_AddText_Vec2(dl, V2(cx + 8 * s, 13 * s), C_INK, chip, NULL);
-    igSetCursorScreenPos(V2(W - 190 * s, 6 * s));
-    if (text_button(a, "lang", a->lang_en ? "FR" : "EN", 0, 0)) a->lang_en = !a->lang_en, a->strings = a->lang_en ? a->strings_en : a->strings_fr;
-    igSameLine(0, 6 * s);
+    igSetCursorScreenPos(V2(W - 90 * s, 7 * s));
     if (text_button(a, "save", T(a, "quick.saveButton"), 1, 0)) tool_run_action(a, "save");
     igEnd();
 
@@ -326,7 +324,20 @@ void shell_status(App *a) {
     igPushFont(a->f_mono, 12.5f);
     ImVec2 ps = igCalcTextSize(perf, NULL, false, -1);
     igPopFont();
-    ImDrawList_AddText_FontPtr(dl, a->f_mono, 12.5f * s, V2(W - ps.x - 16 * s, y + 9 * s), C_INK, perf, NULL, 0, NULL);
+    ps.x *= s;
+    /* FR | EN (StatusBar.vue's language switch), right */
+    float lx = W - 84 * s;
+    for (int k = 0; k < 2; k++) {
+        float bx = lx + k * 38 * s;
+        igSetCursorScreenPos(V2(bx, y + 4 * s));
+        igPushID_Int(k);
+        if (igInvisibleButton("lang", V2(36 * s, 24 * s), 0)) a->lang_en = k, a->strings = a->lang_en ? a->strings_en : a->strings_fr;
+        igPopID();
+        int on = a->lang_en == k;
+        if (on) ImDrawList_AddRectFilled(dl, V2(bx, y + 4 * s), V2(bx + 36 * s, y + 28 * s), C_INK, 12 * s, 0);
+        ImDrawList_AddText_FontPtr(dl, a->f_text, 13 * s, V2(bx + 10 * s, y + 8 * s), on ? C_CREAM : C_INK, k ? "EN" : "FR", NULL, 0, NULL);
+    }
+    ImDrawList_AddText_FontPtr(dl, a->f_mono, 12.5f * s, V2(lx - ps.x - 16 * s, y + 9 * s), C_INK, perf, NULL, 0, NULL);
     igEnd();
 }
 

@@ -93,6 +93,10 @@ fail), collaboration, rebar, steel. See [ROADMAP.md](ROADMAP.md).
 - **Desktop (Linux x86_64 and aarch64, macOS arm64 and x86_64):** the archives of the latest
   `ccore-v*` [prerelease](https://github.com/guilbep/bimble/releases). Unpack, then
   `./bimble-ccore open model.ifc`: the lab opens in your browser.
+- **Native Linux app (preview, ADR 0084):** the Linux archive also holds `bimble`, the same core
+  with a native 3D view and the lab's ribbon in one window: `./bimble project.bimble` (no file: the
+  Home screen). It needs SDL 3.4 or newer and a Vulkan driver; for large linked projects. Build it
+  from source with `make native` (SDL3, FreeType and glslc installed).
 - **Homebrew:** `brew tap guilbep/bimble https://github.com/guilbep/bimble && brew install
   bimble-ccore`.
 - **For agents:** `bimble-ccore mcp model.bimble` is an MCP server over stdio (`ccore/README.md`).
@@ -109,6 +113,7 @@ ccore/deps.sh                  # once: the boolean kernel (manifold)
 make dev                       # the lab on http://localhost:5173, rebuilt on every save
 ccore/test/run.sh json         # one suite
 ccore/ci/run.sh fast           # the gate of every change (CI runs `full`)
+make native                    # the native Linux app, ccore/out/app/bimble (DEV.md section 2b)
 ```
 
 Rules for contributors and agents: [CLAUDE.md](CLAUDE.md). Decisions: [docs/adr](docs/adr). Work
