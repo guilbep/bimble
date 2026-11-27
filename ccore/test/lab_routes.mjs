@@ -247,7 +247,7 @@ async function walk(P, label, { model }) {
     set(`dialog ${id}`, s.state);
     check(`${label}: dialog ${id} shows data or NotAvailable`, s.state.startsWith("data") || s.state === "not-available", JSON.stringify(s));
     if (id === "file-menu") {
-      // Enabled entries run an enabled action (or open a dialog); "not yet" entries say so.
+      // Enabled entries run an enabled action (or open a dialog, or the performance panel: SIZE2); "not yet" entries say so.
       const fm = JSON.parse(await P.js(`const en = new Set(b.actions.value.filter((a) => a.enabled).map((a) => a.name));
         return JSON.stringify([...document.querySelectorAll('[data-bb=file-menu] button[data-bb^=file-menu-]')].map((e) => ({ id: e.dataset.bb.slice(10),
           enabled: !e.disabled, ny: e.hasAttribute('data-not-yet'), title: e.title, core: en.has(e.dataset.bb.slice(10)) })))`));
@@ -256,7 +256,7 @@ async function walk(P, label, { model }) {
       const editableNow = await P.js("return b.state.value.file !== null && b.state.value.editable !== false;");
       // close (FIXUI): hidden too (calls.c HIDDEN_ACTIONS), enabled by the core whenever a file is loaded.
       const fileNow = await P.js("return b.state.value.file !== null;");
-      const bad = fm.filter((e) => e.enabled && !e.core && !["export"].includes(e.id) && !(e.id === "save_as" && editableNow) && !(e.id === "close" && fileNow));
+      const bad = fm.filter((e) => e.enabled && !e.core && !["export", "performance" /* SIZE2: a panel of the lab, not an action */].includes(e.id) && !(e.id === "save_as" && editableNow) && !(e.id === "close" && fileNow));
       check(`${label}: File menu: every enabled entry's action is enabled in the core`, bad.length === 0, JSON.stringify(bad));
       const nyBad = fm.filter((e) => e.ny && (e.enabled || !/./.test(e.title)));
       check(`${label}: File menu: "not yet" entries are greyed with a tooltip`, nyBad.length === 0, JSON.stringify(nyBad));

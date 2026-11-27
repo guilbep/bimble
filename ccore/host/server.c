@@ -125,7 +125,10 @@ static void flush_out(Conn *c) {
         conn_close(c);
         return;
     }
-    buf_clear(&c->out);
+    /* SIZE2: a large answer sent (a link's mesh, the proxies) does not stay as this connection's capacity:
+     * a kept-alive connection held the largest answer it ever sent (820 MB with 17 links) */
+    if (c->out.cap > ((size_t)4 << 20)) buf_free(&c->out), buf_init(&c->out);
+    else buf_clear(&c->out);
     c->out_off = 0;
     if (!c->keep) {
         start_drain(c);
@@ -585,6 +588,7 @@ static void handle_one(Conn *c, int *again) {
         if (query_param(query, "link_proxies", &prx) && parse_u64(prx, &budget)) {
             int st = cc_link_proxies(cfg->session, budget, &mp, &mn);
             respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, NULL, mp, mn, keep);
+            buf_free(&cfg->session->link_prx_out), buf_init(&cfg->session->link_prx_out); /* SIZE2: none kept */
             goto mesh_done;
         }
         /* SIZE2: ?link=k, link k's mesh on its own (BMSH version 4, mesh.h cc_link_mesh), asked by a page that
@@ -592,6 +596,7 @@ static void handle_one(Conn *c, int *again) {
         if (query_param(query, "link", &prx) && parse_u64(prx, &budget)) {
             int st = cc_link_mesh(cfg->session, budget, &mp, &mn);
             respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, NULL, mp, mn, keep);
+            buf_free(&cfg->session->link_mesh_out), buf_init(&cfg->session->link_mesh_out); /* copied into the answer: none kept */
             goto mesh_done;
         }
         if (query_param(query, "proxies", &prx) && parse_u64(prx, &budget)) {
