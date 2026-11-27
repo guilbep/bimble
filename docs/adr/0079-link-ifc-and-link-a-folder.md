@@ -237,6 +237,12 @@ same delegation.
     is its links' proxies). Left: a proxy of a shared shape instanced, levels coarser than 4,096 triangles a cell, 16-bit
     positions in a cell's box (SIZE2's list).
 
+Evidence for decision 23, the local folder converted fresh, the same hour as Rust v0.19.0's read of the same 17 files
+(`examples/folder --read-only`, one process a file: 27.8 s of reading, peak 2.38 GB): the 17 links drawn (all ready)
+after 35.5 s (load 9.2; 40.9 s at load 7.3 in another run), indexed after 49.7 s (55.9 s); before, nothing was drawn
+before the end (50.5 s in the comparison of the day). The rest of the gap to Rust is the property sets' pass and the
+cache's write (C's read alone took 28.6 s in that comparison).
+
 Evidence (`link_lazy_test.mjs`, a scratch script reading `/proc/<host>/status`, `frames.mjs`'s folder mode). A local
 folder of 17 IFC files, from caches made by the same build, the SIZE2 host and this one the same hour: host at rest
 after the 17 links are ready 1,145 MB RSS, 1,141 MB anonymous → 348 MB RSS, 121 MB anonymous (the rest the caches'
@@ -244,4 +250,8 @@ file pages, which the kernel may drop); after the page's requests (the lazy mesh
 375 MB RSS (1,173 → 148 MB anonymous); in the browser run, after the open, 319 MB RSS, 92 MB anonymous. The slowest
 link's mesh served in 890 → 137 ms. A measure over every link decodes all 17 (1.1 GB, 0.86 s; anonymous 1.72 GB at its
 peak) and they are dropped down to the budget 10 s later (392 MB anonymous); a pointer whose ray meets no link's box
-decodes none (2 ms). The synthetic set (17 links, converted by the same host): 102 → 66 MB anonymous at rest.
+decodes none (2 ms). The synthetic set (17 links, converted by the same host): 102 → 66 MB anonymous at rest. A cold
+link's decode, per link of the local folder: 0.7-307 MB in 0-333 ms (the largest: 307 MB in 220 ms, 87 MB in 333 ms):
+what a measure pays when its ray meets that link's box; the element query and Box to selection decode one block.
+Found, not caused here: a plan through the 17 links (`view_svg`) took 12.6 s and 6.5 GB (8.5 GB at its peak):
+`paper_scene.c` expands every placed copy of every link (110 M triangles); a plan should cut the links' shapes once.

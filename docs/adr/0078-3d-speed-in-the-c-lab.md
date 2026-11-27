@@ -411,6 +411,10 @@ frame 104 → 113 ms (67.9 M triangles), moving 77 → 80 ms, JS heap and array 
 Their peak: 2.0 GB → 0.59, 0.93 and 1.33 GB in three runs: the open itself stays within 128 MB of decoded arrays plus
 the rows, but a wanted large link's detail is still decoded and uploaded whole (one link of 420 MB of arrays: its
 version 3 bytes, its index lists and its vertex tables at once), and the collector frees the one before late.
+With the host's rows answers (the folder converted fresh by the same build, load 9.2): first picture 0.79 s, the links
+in view detailed at 3.3 s, complete 3.8 s; still 109 ms, moving 84 ms; the links' detail took 1.68 GB at the first
+quiet frame (every link on screen is "needed" and kept past the budget: the budget releases only links off screen or
+far; a tile pyramid per link, not a whole link, is the unit that would bound it), 0.94 GB of GPU in all later.
 
 ## What is left
 
