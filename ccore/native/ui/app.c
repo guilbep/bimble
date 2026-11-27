@@ -488,6 +488,7 @@ static void frame(App *a) {
     Pend cur = {SDL_SubmitGPUCommandBufferAndAcquireFence(cmd), drew3d, pick && drew3d, a->moving, t_ui, t_recui, a->input_t, "", a->pick_add};
     if (pick && drew3d) a->pick_pending = 0, a->pick_add = 0; /* the pick is this frame's (answered when it is done) */
     snprintf(cur.input_what, sizeof cur.input_what, "%s", a->input_what);
+    cur.st[0] = a->st_logic, cur.st[1] = a->st_acquire, cur.st[2] = a->st_ui, cur.st[3] = a->st_rec3d, cur.st[4] = a->st_recui;
     a->input_t = 0;
     if (a->in_flight > 1 && !a->truth && cur.f && !a->quit) a->pend = cur;
     else {
@@ -502,6 +503,7 @@ static void frame(App *a) {
 /* A frame's fence passed: its numbers, the moving budget, its read-backs (the pick), the logs. */
 static void frame_done(App *a, Pend *p, double t1) {
     int drew3d = p->drew3d, pick = p->pick;
+    a->st_logic = p->st[0], a->st_acquire = p->st[1], a->st_ui = p->st[2], a->st_rec3d = p->st[3], a->st_recui = p->st[4]; /* that frame's stages */
     a->st_gpu = t1 - p->t_recui;
     a->gpu_ms = t1 - p->t_ui;
     a->frame_ms = drew3d ? t1 - p->t_ui : 0;

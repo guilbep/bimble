@@ -95,7 +95,7 @@ typedef struct {
 
 typedef struct { double t; double ms; char what[48]; } InputTime;
 /* NUI2: a frame submitted, finished at the next frame (frames in flight) */
-typedef struct { SDL_GPUFence *f; int drew3d, pick, moving; double t_ui, t_recui, input_t; char input_what[48]; int pick_add; } Pend;
+typedef struct { SDL_GPUFence *f; int drew3d, pick, moving; double t_ui, t_recui, input_t; char input_what[48]; int pick_add; double st[5]; } Pend; /* st: that frame's logic, acquire, UI build, 3D record, UI record */
 
 struct App {
     /* the process */

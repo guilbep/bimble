@@ -82,3 +82,31 @@ Frames in flight (`frames_in_flight`, defaults otherwise):
 | tiles drawn moving (median) | 522 | 529 | 
 | GPU peak | 114 MB | 114 MB | 
 | moving frame by stage, median ms: logic / acquire / UI build / 3D record / UI record / GPU | 0.00 / 0.00 / 0.15 / 1.35 / 0.04 / 7.01 | 0.00 / 0.00 / 0.15 / 0.00 / 0.04 / 6.62 | 
+
+## Where the triangles go (18 buildings, six views, `BIMBLE_TILES_SURPLUS=1`)
+
+Leaves' triangles drawn against those of the elements that own a pixel of the frame (the need), with the group's box
+from its elements' boxes and the leaf's elements in space order (the commit after the spheres):
+
+| view | need (elements shown) | group 1 | group 8 | group 32 |
+|---|---|---|---|---|
+| fit (outside) | 0.68 M | 1.26 M | 3.92 M | 5.15 M |
+| far | 0.15 M | 0.25 M | 1.94 M | 3.04 M |
+| close | 0.07 M | 0.08 M | 0.36 M | 0.65 M |
+| inside 1 | 0.00 M | 0.01 M | 0.01 M | 0.01 M |
+| inside 2 | 0.06 M | 0.11 M | 0.55 M | 1.03 M |
+| inside 3 | 0.02 M | 0.19 M | 0.29 M | 0.23 M |
+
+Every surplus triangle is in a pass 2 group whose box passed the depth pyramid while none of its elements shows
+(loose boxes), or in a pass 1 group seen last frame and hidden now; none is a group sharing a shown element (pass 2
+groups never hold an element seen the frame before). The groups' cost is the CPU's (a command each):
+
+| | occlusion_group=1 | occlusion_group=2 | occlusion_group=8 | occlusion_group=32 | 
+|---|---|---|---|---|
+| moving frame median / p95 | 9.0 / 20.7 ms (n 245) | 9.3 / 14.1 ms (n 294) | 8.6 / 13.1 ms (n 303) | 9.5 / 13.3 ms (n 304) | 
+| still frame median / p95 | 11.1 / 18.6 ms (n 98) | 7.8 / 14.1 ms (n 106) | 8.9 / 13.0 ms (n 110) | 8.1 / 12.4 ms (n 184) | 
+| input -> frame median / p95 / max | 9.3 / 21.4 / 31.4 ms (n 217) | 9.5 / 13.7 / 27.5 ms (n 242) | 8.9 / 13.7 / 19.8 ms (n 240) | 10.0 / 13.8 / 17.9 ms (n 239) | 
+| memory peak / now | 278 / 240 MB | 297 / 253 MB | 302 / 222 MB | 277 / 232 MB | 
+| triangles moving / still (median) | 611182 / 477288 | 1080758 / 1042344 | 2549022 / 2728044 | 3733850 / 3018936 | 
+| GPU peak | 123 MB | 118 MB | 114 MB | 114 MB | 
+| moving frame by stage, median ms: logic / acquire / UI build / 3D record / UI record / GPU | 0.00 / 0.00 / 0.13 / 0.00 / 0.03 / 5.64 | 0.00 / 0.00 / 0.14 / 0.00 / 0.04 / 5.45 | 0.01 / 0.01 / 0.32 / 0.00 / 0.06 / 5.80 | 0.01 / 0.01 / 0.47 / 0.00 / 0.08 / 6.35 | 
