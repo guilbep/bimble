@@ -112,7 +112,7 @@ const close = () => { currentDialog.value = null; };
           <select class="inp" :value="v.moving_fps" data-bb="settings-moving-fps" data-setting="moving_fps" @change="set({ moving_fps: Number(($event.target as HTMLSelectElement).value) })">
             <option v-for="f in [0, 15, 30, 60, 120, 240]" :key="f" :value="f">{{ f === 0 ? tx('settings.moving.0') : tx('settings.moving.fps', { fps: f }) }}</option>
           </select></label>
-        <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ tx('settings.movingNote') }}</p>
+        <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ v.moving_fps === 0 ? tx('settings.moving.0Note') : tx('settings.movingNote') }}</p>
         <!-- 3D2 (ADR 0078): HLOD proxies (moving_proxies, Rust's setting): far cells drawn as stand-ins -->
         <label v-if="s?.applies.moving_proxies" class="row"><span>{{ tx('settings.proxies') }}</span>
           <input type="checkbox" :checked="v.moving_proxies" data-bb="settings-moving-proxies" data-setting="moving_proxies" @change="set({ moving_proxies: ($event.target as HTMLInputElement).checked })"></label>

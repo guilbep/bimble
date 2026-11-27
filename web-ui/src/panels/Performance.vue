@@ -107,6 +107,7 @@ function record() {
       <tbody>
         <tr><td>{{ t('perf.moving') }}</td><td class="r mono" data-bb="perf-moving">{{ row(snap.moving) }}</td></tr>
         <tr><td>{{ t('perf.still') }}</td><td class="r mono" data-bb="perf-still">{{ row(snap.still) }}</td></tr>
+        <tr v-if="snap.capped.n"><td>{{ t('perf.capped') }}</td><td class="r mono" data-bb="perf-capped">{{ row(snap.capped) }}</td></tr>
       </tbody>
     </table>
     <div class="sec">{{ t('perf.lastFrame') }}</div>
@@ -127,6 +128,7 @@ function record() {
     <div class="sec">{{ t('perf.model') }}</div>
     <dl class="kv two">
       <dt>{{ t('perf.elements') }}</dt><dd class="mono">{{ num(snap.elements) }} · {{ num(snap.triangles) }} △</dd>
+      <dt>{{ t('perf.openPreview') }}</dt><dd class="mono" data-bb="perf-open-preview">{{ ms(snap.openToPreview) }}</dd>
       <dt>{{ t('perf.openFirst') }}</dt><dd class="mono">{{ ms(snap.openToFirst) }}</dd>
       <dt>{{ t('perf.openComplete') }}</dt><dd class="mono">{{ ms(snap.openToComplete) }}</dd>
     </dl>

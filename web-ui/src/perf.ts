@@ -17,7 +17,9 @@ import { setSettings, userSettings } from "./bimble";
 import { optimisationLines } from "./optimisations";
 
 /** One frame drawn: when it started (performance.now), what it took (ms), moving or still, what it drew. */
-export interface PerfFrame { at: number; ms: number; moving: boolean; tris: number; draws: number; synced: boolean }
+export interface PerfFrame { at: number; ms: number; moving: boolean; tris: number; draws: number; synced: boolean;
+  /** VIS1 (P0-a): a moving frame budgeted although the setting is "Draw everything" (a whole frame took over 100 ms). */
+  capped?: boolean }
 export interface PerfInput { what: string; ms: number; at: number; synced: boolean }
 /** The adapter as the API names it (WebGPU's GPUAdapterInfo, or WebGL2's debug renderer strings), shown as
  *  given; `software`: decided from evidence (REAL1), not from these names alone: WebGPU's isFallbackAdapter,
@@ -44,6 +46,8 @@ let pending: { what: string; at: number } | null = null;
 /** The last open (navigation start for the page's own model), its first mesh, that mesh's first frame's end and
  *  complete picture (later meshes of the same file, after an edit, do not move them). */
 let openAt = 0, openMesh: number | null = null, firstAt: number | null = null, completeAt: number | null = null, meshElements = 0, meshTris = 0;
+/** VIS1 (P0-b): the first picture of stand-ins (the links' proxies, before the mesh) after the last open. */
+let previewAt: number | null = null;
 let links: PerfLink[] = [];
 let glAdapter: PerfAdapter | null = null;
 const px = new Uint8Array(4);
@@ -134,14 +138,14 @@ export function perfWait(on: boolean): void { waiters = Math.max(0, waiters + (o
 
 /** A frame drawn by the viewport, started at `t0`. `sync`: the WebGL2 context (a 1x1 read waits for
  *  its pixels), or a promise of the GPU's end (WebGPU), or null (an overlay-only frame). */
-export function perfFrame(moving: boolean, t0: number, sync: WebGL2RenderingContext | Promise<unknown> | null): void {
+export function perfFrame(moving: boolean, t0: number, sync: WebGL2RenderingContext | Promise<unknown> | null, capped = false): void {
   const g = window.__bbGl;
   const wait = perfWaits();
   if (sync && !(sync instanceof Promise)) {
     if (!glAdapter) glAdapter = webglAdapter(sync);
     if (wait) sync.readPixels(0, 0, 1, 1, sync.RGBA, sync.UNSIGNED_BYTE, px);
   }
-  const f: PerfFrame = { at: t0, ms: 0, moving, tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, synced: wait && sync !== null };
+  const f: PerfFrame = { at: t0, ms: 0, moving, tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, synced: wait && sync !== null, capped };
   // GPU2: the first frame of the renderer a live switch asked for ends the switch's time (WebGL2: a context; WebGPU: a promise)
   const by = sync === null ? null : sync instanceof Promise ? "WebGPU" : "WebGL2";
   const sw = renderer.switchTo && renderer.switchMs === null && renderer.switchAt !== null && by === renderer.switchTo && t0 >= renderer.switchAt! ? renderer.switchAt! : null;
@@ -186,7 +190,9 @@ export function perfMesh(m: { ids: string[]; ni: Uint32Array; model?: Uint8Array
 }
 
 /** The shell started opening a file (send.ts): the next mesh's "open -> first frame" counts from here. */
-export function perfOpening(): void { openAt = performance.now(), openMesh = firstAt = completeAt = null; }
+export function perfOpening(): void { openAt = performance.now(), openMesh = firstAt = completeAt = previewAt = null; }
+/** VIS1 (P0-b): the viewport drew its first stand-ins (the links' proxies before their mesh). */
+export function perfPreview(): void { if (previewAt === null && openMesh === null) previewAt = performance.now(); }
 
 /** Watches the viewport canvas's inputs (once). */
 export function perfInputs(canvas: HTMLElement): void {
@@ -295,6 +301,8 @@ const stats = (fs: PerfFrame[]): FrameStats => {
 /** What the panel shows now. */
 export interface PerfSnapshot {
   renderer: PerfRenderer; adapter: PerfAdapter | null; moving: FrameStats; still: FrameStats; synced: boolean;
+  /** VIS1 (P0-a): the moving frames kept under 100 ms while the setting is "Draw everything". */
+  capped: FrameStats; openToPreview: number | null;
   tris: number; draws: number; batches: number; culled: number; proxiesDrawn: number; proxyTris: number; gpuBytes: number | null;
   /** GPU2: under WebGPU, the bytes each renderer holds (WebGPU's buffers, WebGL2's left) and the models taken over. */
   gpuSplit: { webgpu: number; webgl: number; taken: number; models: number } | null;
@@ -312,8 +320,11 @@ export function perfSnapshot(): PerfSnapshot {
   return {
     renderer: { ...renderer }, adapter: renderer.using === "WebGPU" ? renderer.adapter : glAdapter, // (a plain copy, not the reactive object)
     moving: stats(frames.filter((f) => f.moving)), still: stats(frames.filter((f) => !f.moving)), synced: frames.some((f) => f.synced),
+    capped: stats(frames.filter((f) => f.capped)), openToPreview: previewAt !== null ? previewAt - openAt : null,
     tris: g?.frameTris ?? 0, draws: g?.frameDraws ?? 0, batches: g?.moving?.batches ?? 0, culled: g?.moving?.culled ?? 0,
-    proxiesDrawn: g?.proxies?.drawnCells ?? 0, proxyTris: g?.proxies?.drawnTris ?? 0,
+    // VIS1 (P0-b): the links' proxies drawn too (LNK3D), not only the open model's
+    proxiesDrawn: (g?.proxies?.drawnCells ?? 0) + (g?.linkProxies ?? []).reduce((n, x) => n + x.drawnCells, 0),
+    proxyTris: (g?.proxies?.drawnTris ?? 0) + (g?.linkProxies ?? []).reduce((n, x) => n + x.drawnTris, 0),
     gpuBytes: renderer.using === "WebGPU" && g?.gpuSplit ? g.gpuSplit.webgpu + g.gpuSplit.webgl : g?.gpuBytes ?? null, // GPU2: what each renderer holds
     gpuSplit: g?.gpuSplit ?? null,
     jsHeap: mem ? mem.usedJSHeapSize : null, wasmBytes: cc?.memBytes ? cc.memBytes() : null,
@@ -351,10 +362,11 @@ export function perfReport(names: boolean, file: string | null): string {
   L.push(`frame time (draw to pixels${s.synced ? "" : ", NOT waited for: submit time only"}), last ${RING} frames:`);
   L.push(`  moving: ${fline(s.moving)}`);
   L.push(`  still:  ${fline(s.still)}`);
+  if (s.capped.n) L.push(`  of the moving, kept under 100 ms (draw everything is on): ${fline(s.capped)}`); // VIS1 (P0-a)
   L.push(`last frame: ${num(s.tris)} triangles, ${num(s.draws)} draw calls; batches ${num(s.batches)}, culled ${num(s.culled)}; proxies drawn ${num(s.proxiesDrawn)} (${num(s.proxyTris)} triangles)`);
   L.push(`memory: GPU buffers ${mb(s.gpuBytes)}${s.gpuSplit && r.using === "WebGPU" ? ` (WebGPU ${mb(s.gpuSplit.webgpu)}, WebGL2 ${mb(s.gpuSplit.webgl)}; ${s.gpuSplit.taken} of ${s.gpuSplit.models} models on WebGPU)` : ""}, JS heap ${mb(s.jsHeap)}, wasm ${mb(s.wasmBytes)}`);
   if (linkGpu.value) L.push(`linked files on the GPU: ${mb(linkGpu.value.used)} of a ${mb(linkGpu.value.budget)} budget`); // SIZE3 (C)
-  L.push(`model${names && file ? ` ${file}` : ""}: ${num(s.elements)} elements, ${num(s.triangles)} triangles; open -> first frame ${ms(s.openToFirst)}, -> complete picture ${ms(s.openToComplete)}`);
+  L.push(`model${names && file ? ` ${file}` : ""}: ${num(s.elements)} elements, ${num(s.triangles)} triangles; open -> first picture (stand-ins) ${ms(s.openToPreview)}; first detailed frame ${ms(s.openToFirst)}; complete ${ms(s.openToComplete)}`); // VIS1 (P0-b)
   if (s.links.length) {
     L.push(`links (${s.links.length}):`);
     s.links.forEach((l, k) => L.push(`  ${names ? l.name : `link ${k + 1}`}: ${num(l.elements)} elements, ${num(l.triangles)} triangles, ${l.visible ? "shown" : "hidden"}` +
