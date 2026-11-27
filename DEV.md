@@ -79,6 +79,15 @@ make native-test                  # = ccore/ci/run.sh native (the CI job ccore-n
   the app's work done, event → the GPU's fence), `memory.csv`, `summary.md` and the shots; the steps
   are listed at the top of `ccore/native/ui/drive.c`. `--shot f.png --quit-after n` for one picture.
 - Under ASan and UBSan: `ccore/native/build.sh asan` → `ccore/out/app-asan/bimble`.
+- **The session log** (NUI2, local only): each windowed session writes `session.log` (versions, GPU, the window's
+  and swapchain's sizes at each change, settings, files opened and their times, SDL errors and assertions, a crash's
+  stack addresses), `frames.csv` (a row a second), `inputs.csv` (inputs over 100 ms) and `report.txt` (every 10 s)
+  under `$XDG_STATE_HOME/bimble/sessions/<UTC time>-<pid>/` (default `~/.local/state/…`; `BIMBLE_LOG_DIR`
+  overrides, and turns it on offscreen); the last 20 kept; `bimble --last-log` prints the newest folder; off:
+  Settings › Local session log (`native.json` `session_log`). An SDL assertion is logged and the session goes on.
+- `--resize-script 1280x720,640x400,…` (offscreen): a size every 3 frames, the window first and the target a frame
+  later, as a tiling compositor on Wayland does; every size of a frame comes from the target acquired that frame.
+- `--set key=value`: one of the app's own settings (`native.json`) for this run only.
 - The shell's data (ribbon, keys, strings, themes, the machine's shape) comes from the TypeScript:
   after a change there, `node web-ui/scripts/export-shell-data.mjs` and commit
   `ccore/native/ui/data/` (`ccore/ci/run.sh unit` checks it).

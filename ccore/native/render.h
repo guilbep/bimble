@@ -49,7 +49,7 @@ typedef struct nv_render nv_render;
 typedef struct nv_part nv_part;
 
 typedef struct {
-    uint32_t draws, commands, proxies, parts;
+    uint32_t draws, commands, proxies, parts, tiles;
     uint64_t tris;      /* triangles drawn in the last frame */
     uint64_t gpu_bytes; /* buffers and targets of the renderer and its parts */
     uint32_t w, h;

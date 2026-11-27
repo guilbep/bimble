@@ -216,6 +216,14 @@ struct App {
     double next_mem;
     int quit_after;            /* --quit-after N frames once complete */
     int fails;
+    /* NUI2: the window's sizes as acquired, the session log, SDL's assertions */
+    uint32_t swap_w, swap_h;     /* the target acquired this frame (the swapchain's; offscreen: the virtual one) */
+    int session_log;             /* native.json session_log (default on in a window) */
+    unsigned sdl_asserts;
+    char *resize_script;         /* offscreen: "WxH,WxH,..." one every 3 frames, the swapchain a frame after the window */
+    int resize_i, resize_wait;
+    uint32_t resize_w, resize_h; /* the virtual swapchain's next size (applied a frame after the window's) */
+    char notice_path[1200];      /* the last report saved (Performance) */
 };
 
 /* core.c */
@@ -275,6 +283,8 @@ void home_screen(App *a);
 void dialogs(App *a);
 void fs_open(App *a, const char *dir, const char *purpose);
 void perf_report(App *a, Buf *b);
+void perf_copy(App *a);              /* Performance › Copy (also to a file) */
+void perf_save_as(App *a);           /* Performance › Save report… */
 void optimisations_apply(App *a);   /* the settings' optimisations into the renderer (at open) */
 void optimisations_ui(App *a);      /* the "Optimisations" group (Settings, Performance) */
 /* tools.c */
@@ -295,6 +305,22 @@ void drive_frame(App *a, double now, int drew3d);
 void drive_finish(App *a);
 void app_shot(App *a, const char *path);
 void app_input_done(App *a, double now);
+/* slog.c: the local session log */
+int slog_open(App *a);
+void slog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void slog_sdl_hooks(App *a);
+void slog_frame(App *a, double now, int drew3d, double frame_ms);
+void slog_input(App *a, const char *what, double app_ms, double ms);
+void slog_report(App *a, const char *name);
+void slog_close(App *a);
+const char *slog_dir(void);
+int slog_last(void);
+int slog_save_report(App *a, char *path, size_t n);
+/* nset.c: the native app's own settings (native.json) */
+void nset_load(App *a);
+const char *nset_get(const char *key);
+double nset_num(const char *key, double dflt);
+void nset_set(const char *key, const char *json, int run);
 /* app.c */
 void app_fit(App *a);
 double app_now(void);

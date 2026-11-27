@@ -841,7 +841,7 @@ SDL_GPUTexture *nv_render_color(const R *r) { return r->color; }
 nv_render_stats nv_render_get_stats(const R *r) {
     uint64_t g = r->gpu_bytes;
     for (uint32_t k = 0; k < r->nparts; k++) g += r->parts[k]->gpu_bytes;
-    nv_render_stats s = {r->draws, r->commands, r->proxies_drawn, r->nparts, r->tris, g, r->W, r->H};
+    nv_render_stats s = {r->draws, r->commands, r->proxies_drawn, r->nparts, 0, r->tris, g, r->W, r->H};
     return s;
 }
 

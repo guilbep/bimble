@@ -14,6 +14,7 @@
  *   open <path> | link_folder <path> | lang en|fr   File > Open, Link this folder, the language button
  *   eye <link name> on|off                          a link's eye
  *   shot <file.png> | report <file.txt>             the window's picture / the Performance report
+ *   copy_report                                     Performance › Copy (the clipboard, and a file: its path checked)
  *   expect_selected <GlobalId> | expect_link <name> | expect_none
  *   expect_measure <mm> <tol> | expect_hidden <n> | expect_parts <n> | expect_text <key> <text>
  *   quit
@@ -285,6 +286,13 @@ static int run_step(App *a, Step *s, double now) {
         app_shot(a, p);
         return 1;
     }
+    if (!strcmp(op, "copy_report")) { /* Performance › Copy, as the button does: the clipboard and a file; stderr says where */
+        a->notice_path[0] = 0;
+        perf_copy(a);
+        fprintf(stderr, "drive: copy_report: %s\n", a->notice);
+        expect(a, a->notice_path[0] != 0, "copy_report: the report also written to a file");
+        return 1;
+    }
     if (!strcmp(op, "report")) {
         char p[1200];
         outpath(a, p, sizeof p, arg);
@@ -394,6 +402,7 @@ void app_input_done(App *a, double now) {
     double ms = now - a->input_t, app_ms = a->t_ui_done - a->input_t;
     if (app_ms < 0) app_ms = 0;
     if (a->ilog) fprintf(a->ilog, "%.1f,%s,%.3f,%.3f\n", a->input_t - a->t_start, a->input_what, app_ms, ms);
+    slog_input(a, a->input_what, app_ms, ms);
     a->ninputs++;
     if (a->rec_until && ms > a->rec_slowest) a->rec_slowest = ms;
     int at = a->nslow;
@@ -419,6 +428,7 @@ static void pct(double *v, int n, double *med, double *p95, double *mx) {
 
 void drive_finish(App *a) {
     if (!a->flog) return;
+    if (a->sdl_asserts) expect(a, 0, "no SDL assertion during the run (see stderr)");
     fclose(a->flog), fclose(a->ilog), fclose(a->mlog);
     a->flog = a->ilog = a->mlog = NULL;
     char p[1200];
@@ -466,7 +476,7 @@ void drive_finish(App *a) {
         fprintf(f, "| input -> app work done median / p95 / max | %.1f / %.1f / %.1f ms |\n", m4, p4, x4);
         fprintf(f, "| memory peak / now | %.0f / %.0f MB |\n| GPU | %.0f MB |\n", peak / 1e6, rss / 1e6, rs.gpu_bytes / 1e6);
         fprintf(f, "| triangles / draws (last frame) | %llu / %u |\n| links drawn | %d |\n| /proc/loadavg | %s |\n", (unsigned long long)rs.tris, rs.draws, a->nlinks, load);
-        fprintf(f, "| expectations failed | %d |\n", fails);
+        fprintf(f, "| expectations failed | %d |\n| SDL assertions | %u |\n", fails, a->sdl_asserts);
         fclose(f);
     }
     fprintf(stderr, "drive: summary: first %.0f ms, complete %.0f ms, moving %.1f/%.1f ms, still %.1f/%.1f ms, input->frame %.1f/%.1f/%.1f ms, app %.1f/%.1f/%.1f ms, peak %.0f MB, %d failed\n",

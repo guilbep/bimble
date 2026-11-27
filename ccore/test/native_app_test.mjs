@@ -190,6 +190,32 @@ quit
   check("linkpick: exits 0", r3.code === 0 && !r3.signal, `${r3.code} ${r3.signal ?? ""}`);
   inputs("links6", r2, software);
 
+  // ---- 3b. NUI2: a tiling compositor's sizes (the window resized right after it maps, then smaller than the last
+  // frame, then tiny), the target a frame after the window as on Wayland: no SDL assertion (SDL's own checks: the
+  // viewport and scissor within the target), exit 0; the session log written (BIMBLE_LOG_DIR), --last-log names it;
+  // Copy writes the report to a file too ----
+  const logs = join(tmp, "sessions");
+  const r5 = run("resize", `
+wait complete
+frames 25
+shot resized.png
+copy_report
+frames 2
+quit
+`, fixture, ["--resize-script", "1280x720,1600x900,640x400,373x198,1920x1080,800x600,1280x720"], { BIMBLE_LOG_DIR: logs });
+  check("resize: exits 0, no signal", r5.code === 0 && !r5.signal, `${r5.code} ${r5.signal ?? ""} ${r5.err.trim().split("\n").slice(-2).join(" | ")}`);
+  check("resize: no SDL assertion (viewport and scissor within the target at every size)", !/SDL assertion/.test(r5.err), (r5.err.match(/SDL assertion.*/g) ?? []).slice(0, 2).join(" | "));
+  expectations("resize", r5);
+  const last = spawnSync(BIN, ["--last-log"], { env: { ...env, BIMBLE_LOG_DIR: logs }, encoding: "utf8" });
+  const sdir = (last.stdout ?? "").trim();
+  const slog = sdir && existsSync(join(sdir, "session.log")) ? readFileSync(join(sdir, "session.log"), "utf8") : "";
+  check("session log: --last-log names the folder, session.log has the GPU, the sizes and the open", last.status === 0 && /GPU /.test(slog) && /sizes: swapchain 373x198/.test(slog) && /opened .*frame\.json/.test(slog),
+    `${sdir} ${slog.split("\n").length} lines`);
+  check("session log: frames.csv, report.txt and the copied report's file", existsSync(join(sdir, "frames.csv")) && existsSync(join(sdir, "report.txt")) && /drive: copy_report: .*report-.*\.txt/.test(r5.err),
+    (r5.err.match(/drive: copy_report: .*/) ?? [""])[0].slice(0, 200));
+  const small = spawnSync(BIN, ["--offscreen", "--size", "373x198", "--quit-after", "2", "--config-dir", conf, fixture], { env, encoding: "utf8", timeout: 60000 });
+  check("--size 373x198 works (a window smaller than the panels)", small.status === 0, `${small.status} ${(small.stderr ?? "").trim().split("\n").slice(-1)}`);
+
   // ---- 4. malformed files: the core's error, never a crash ----
   const bad = join(tmp, "bad");
   mkdirSync(bad);

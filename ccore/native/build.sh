@@ -76,7 +76,7 @@ t2=$(ms)
 # 4. the app
 APP=(native/render.c native/scene_load.c native/loader.c native/ui/app.c native/ui/core.c native/ui/view3d.c native/ui/shell.c
      native/ui/panels.c native/ui/home.c native/ui/tools.c native/ui/page_quantities.c native/ui/drive.c native/ui/theme.c
-     native/ui/icons.c native/ui/machine.c "$G/embed.c")
+     native/ui/icons.c native/ui/machine.c native/ui/slog.c native/ui/nset.c "$G/embed.c")
 INC=(-I"$D"/cimgui -I"$D"/nanosvg/src -Inative -Inative/ui -I"$G/spv" $(pkg-config --cflags sdl3 freetype2))
 SDL_LIBS=$(pkg-config --libs sdl3)
 LINK_EXTRA=()

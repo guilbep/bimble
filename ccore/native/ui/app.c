@@ -186,6 +186,7 @@ static void *open_run(void *arg) {
 static void opening_tick(App *a) {
     if (!opener_on) {
         scene_reset(a);
+        slog("opening %s", a->model_path);
         memset(&opener, 0, sizeof opener);
         opener.a = a;
         snprintf(opener.path, sizeof opener.path, "%s", a->model_path);
@@ -199,6 +200,7 @@ static void opening_tick(App *a) {
     if (opener.rc != CC_OK) {
         snprintf(a->open_err, sizeof a->open_err, "%s: %s", a->model_path, opener.err);
         fprintf(stderr, "bimble: %s\n", a->open_err);
+        slog("open failed after %.0f ms: %s", app_now() - a->t_open, a->open_err);
         a->screen_kind = SCR_HOME;
         core_query(a, "recent_files", NULL, &a->recent);
         a->fails++;
@@ -207,11 +209,55 @@ static void opening_tick(App *a) {
     a->screen_kind = SCR_MAIN;
     a->show = SHOW_VIEW;
     a->core_rev++;
+    slog("opened %s in %.0f ms", a->model_path, app_now() - a->t_open);
     if (core_query(a, "settings", NULL, &a->settings) == 0) optimisations_apply(a); /* the same keys as the lab's */
+    {
+        Buf sb;
+        buf_init(&sb);
+        if (core_call(a, "query", "settings", "", &sb) == CC_OK) slog("settings in force: %.*s", (int)(sb.len < 1500 ? sb.len : 1500), sb.p ? sb.p : "");
+        buf_free(&sb);
+    }
     a->view_name[0] = 0, a->cam.ortho = 0, a->view_clip = 0;
     a->cam.yaw = -55 * NV_PI / 180, a->cam.pitch = 28 * NV_PI / 180;
     json_free(&a->measure), json_free(&a->sel_el);
     a->dirty = 1;
+}
+
+/* ---- the window's picture at the size acquired this frame (w x h pixels): the composed picture made again when it
+ * changes; the logical size the window's (offscreen: the pixels). 0 ok. ---- */
+static int app_target(App *a, uint32_t w, uint32_t h) {
+    int lw = (int)w, lh = (int)h;
+    if (!a->offscreen) {
+        SDL_GetWindowSize(a->win, &lw, &lh);
+        if (lw < 1 || lh < 1) lw = (int)w, lh = (int)h;
+    }
+    if (a->screen && w == a->pw && h == a->ph && (uint32_t)lw == a->lw && (uint32_t)lh == a->lh) return 0;
+    int pw = 0, ph = 0;
+    if (!a->offscreen) SDL_GetWindowSizeInPixels(a->win, &pw, &ph);
+    slog("sizes: swapchain %ux%u px, window %dx%d (logical), SDL's pixels %dx%d, display scale %.2f, pixel density %.2f", w, h, lw, lh, pw, ph,
+         a->offscreen ? 1.0 : (double)SDL_GetWindowDisplayScale(a->win), a->offscreen ? 1.0 : (double)SDL_GetWindowPixelDensity(a->win));
+    if (!a->screen || w != a->pw || h != a->ph) {
+        if (a->screen) SDL_WaitForGPUIdle(a->dev), SDL_ReleaseGPUTexture(a->dev, a->screen), a->screen = NULL;
+        SDL_GPUTextureCreateInfo ci = {.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                                       .usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, .width = w, .height = h,
+                                       .layer_count_or_depth = 1, .num_levels = 1};
+        a->screen = SDL_CreateGPUTexture(a->dev, &ci);
+        if (!a->screen) { fprintf(stderr, "bimble: no picture of %ux%u: %s\n", w, h, SDL_GetError()); slog("no picture of %ux%u: %s", w, h, SDL_GetError()); return -1; }
+    }
+    a->pw = w, a->ph = h, a->lw = (uint32_t)lw, a->lh = (uint32_t)lh;
+    a->dirty = 1;
+    return 0;
+}
+
+/* offscreen --resize-script: the next size, the window now and the target a frame later (a compositor's order) */
+static void app_resize_step(App *a) {
+    const char *p = a->resize_script;
+    for (int i = 0; i < a->resize_i && p; i++) p = strchr(p, ','), p = p ? p + 1 : NULL;
+    unsigned w, h;
+    if (!p || sscanf(p, "%ux%u", &w, &h) != 2 || w < 1 || h < 1 || w > 8192 || h > 8192) return;
+    a->resize_i++;
+    SDL_SetWindowSize(a->win, (int)w, (int)h);
+    a->resize_w = w, a->resize_h = h, a->resize_wait = 2;
 }
 
 /* ---- one frame: the 3D (when dirty), then the UI over the whole window, one command buffer ---- */
@@ -224,13 +270,43 @@ static void frame(App *a) {
         a->measure_on = jb(action_row(a, "measure"), "pressed");
         scene_tick(a);
     }
+    /* NUI2: the target of THIS frame first (the swapchain's texture: on Wayland with fractional scaling or a tiling
+     * compositor its size differs from SDL_GetWindowSizeInPixels and changes a frame after the resize event); every
+     * size below (the picture, ImGui's display and framebuffer scale, the 3D view's targets) comes from it */
+    SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(a->dev);
+    if (!cmd) { fprintf(stderr, "bimble: no command buffer: %s\n", SDL_GetError()); slog("no command buffer: %s", SDL_GetError()); a->quit = 1; return; }
+    SDL_GPUTexture *sw = NULL;
+    Uint32 sw_w = 0, sw_h = 0;
+    if (!a->offscreen) {
+        if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, a->win, &sw, &sw_w, &sw_h)) {
+            static int said;
+            if (said++ < 20) slog("no swapchain texture: %s", SDL_GetError());
+        }
+        if (!sw || sw_w < 1 || sw_h < 1) { /* minimised, occluded, or lost: nothing drawn this frame */
+            SDL_SubmitGPUCommandBuffer(cmd);
+            a->dirty = 1;
+            SDL_Delay(16);
+            return;
+        }
+    } else {
+        if (a->resize_wait && !--a->resize_wait) a->swap_w = a->resize_w, a->swap_h = a->resize_h; /* the window first, the target a frame later */
+        sw_w = a->swap_w ? a->swap_w : a->pw, sw_h = a->swap_h ? a->swap_h : a->ph;
+    }
+    if (app_target(a, sw_w, sw_h) != 0) { SDL_SubmitGPUCommandBuffer(cmd); a->quit = 1; return; }
     float s = a->scale, W = (float)a->lw, H = (float)a->lh;
     float top = 178 * s, bottom = 32 * s, left = 296 * s, right = 0; /* LeftPanel.vue: Properties under the navigator */
     a->vx = left, a->vy = top + 38 * s, a->vw = W - left - right, a->vh = H - top - bottom - 38 * s;
-    float px = a->offscreen ? 1.0f : SDL_GetWindowPixelDensity(a->win);
+    if (a->vw < 8) a->vw = 8; /* a window smaller than the panels: a sliver of view, never a negative size */
+    if (a->vh < 8) a->vh = 8;
+    float px = (float)a->pw / (float)a->lw;
     uint32_t vpw = (uint32_t)(a->vw * px), vph = (uint32_t)(a->vh * px);
     if (vpw != a->vpw || vph != a->vph) a->vpw = vpw, a->vph = vph, nv_render_targets(a->r, vpw, vph), a->dirty = 1;
     nui_backend_new_frame();
+    { /* ImGui's display from the same numbers (its backend reads the window, which may be a frame ahead) */
+        ImGuiIO *io = igGetIO_Nil();
+        io->DisplaySize = V2((float)a->lw, (float)a->lh);
+        io->DisplayFramebufferScale = V2((float)a->pw / (float)a->lw, (float)a->ph / (float)a->lh);
+    }
     igNewFrame();
     if (a->screen_kind != SCR_MAIN) home_screen(a);
     else {
@@ -278,8 +354,6 @@ static void frame(App *a) {
     double t_ui = app_now();
     a->ui_ms = t_ui - t0;
     a->t_ui_done = t_ui;
-    SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(a->dev);
-    if (!cmd) { fprintf(stderr, "bimble: no command buffer: %s\n", SDL_GetError()); a->quit = 1; return; }
     int drew3d = 0, pick = a->pick_pending;
     if ((a->dirty || pick) && a->show == SHOW_VIEW && a->screen_kind == SCR_MAIN && a->r) {
         nv_render_set_cut(a->r, a->moving && a->adaptive && a->moving_fps > 0 ? a->cut_live : a->still_cut);
@@ -289,9 +363,7 @@ static void frame(App *a) {
     ImVec4 bgc = col4(C_CREAM);
     float clear[4] = {bgc.x, bgc.y, bgc.z, 1};
     nui_backend_render(cmd, a->screen, 1, clear);
-    SDL_GPUTexture *sw = NULL;
-    Uint32 sw_w = 0, sw_h = 0;
-    if (a->win && !a->offscreen && SDL_WaitAndAcquireGPUSwapchainTexture(cmd, a->win, &sw, &sw_w, &sw_h) && sw) {
+    if (sw) { /* the picture and the swapchain have one size (app_target) */
         SDL_GPUBlitInfo bi = {.source = {.texture = a->screen, .w = a->pw, .h = a->ph}, .destination = {.texture = sw, .w = sw_w, .h = sw_h},
                               .load_op = SDL_GPU_LOADOP_DONT_CARE, .filter = SDL_GPU_FILTER_NEAREST};
         SDL_BlitGPUTexture(cmd, &bi);
@@ -323,6 +395,16 @@ static void frame(App *a) {
     if (a->screen_kind == SCR_MAIN && !a->t_complete && a->t_first_picture && scene_complete(a)) a->t_complete = t1;
     if (a->input_t) app_input_done(a, t1);
     drive_frame(a, t1, drew3d);
+    slog_frame(a, t1, drew3d, drew3d ? a->frame_ms : a->gpu_ms);
+    { /* the notices (warnings, errors) and the first picture and completion, in the session log */
+        static char logged[512];
+        if (a->notice[0] && strcmp(logged, a->notice)) snprintf(logged, sizeof logged, "%s", a->notice), slog("notice: %s", a->notice);
+        static double first_logged, complete_logged;
+        if (a->t_first_picture && a->t_first_picture != first_logged) first_logged = a->t_first_picture, slog("first picture %.0f ms after the open", a->t_first_picture - a->t_open);
+        if (a->t_complete && a->t_complete != complete_logged)
+            complete_logged = a->t_complete, slog("complete %.0f ms after the open: %d links, GPU %.0f MB", a->t_complete - a->t_open, a->nlinks, nv_render_get_stats(a->r).gpu_bytes / 1048576.0);
+    }
+    if (a->offscreen && a->resize_script && a->frames % 3 == 2) app_resize_step(a);
     a->frames++;
 }
 
@@ -361,7 +443,9 @@ static void usage(void) {
     fprintf(stderr, "usage: bimble [--en|--fr] [--dark] [file]\n"
                     "       bimble --offscreen [--size WxH] [--scale k] [--script file | --preset orbit-zoom] [--out dir]\n"
                     "              [--shot file.png] [--quit-after n] [file]\n"
-                    "       options: --edges lines|screen|none, --no-hlod, --loaders n, --config-dir dir, --link-folder dir, --version\n");
+                    "              [--resize-script WxH,WxH,...]\n"
+                    "       options: --edges lines|screen|none, --no-hlod, --loaders n, --config-dir dir, --link-folder dir,\n"
+                    "                --set key=value (an optimisation for this run), --last-log (the newest session log's folder), --version\n");
     exit(2);
 }
 
@@ -387,6 +471,9 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         const char *x = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(x, "--version")) { printf("bimble %s (native)\n", CC_RELEASE_VERSION); return 0; }
+        else if (!strcmp(x, "--last-log")) return slog_last();
+        else if (!strcmp(x, "--resize-script") && v) a->resize_script = (char *)v, i++;
+        else if (!strcmp(x, "--set") && v) i++; /* after the settings are read (below) */
         else if (!strcmp(x, "--size") && v) { if (sscanf(v, "%ux%u", &a->lw, &a->lh) != 2) usage(); i++; }
         else if (!strcmp(x, "--scale") && v) a->scale = (float)atof(v), i++;
         else if (!strcmp(x, "--offscreen")) a->offscreen = 1;
@@ -407,7 +494,11 @@ int main(int argc, char **argv) {
         else if (x[0] == '-') usage();
         else model = x;
     }
-    if (a->scale < 0.5f || a->scale > 4 || a->lw < 320 || a->lh < 240 || a->lw > 8192 || a->lh > 8192) usage();
+    if (a->scale < 0.5f || a->scale > 4) { fprintf(stderr, "bimble: --scale %.2f: from 0.5 to 4\n", a->scale); return 2; }
+    if (a->lw < 64 || a->lh < 64 || a->lw > 8192 || a->lh > 8192) { /* a small window still works: the view keeps a sliver */
+        fprintf(stderr, "bimble: --size %ux%u: each side from 64 to 8192 logical px\n", a->lw, a->lh);
+        return 2;
+    }
     if (a->offscreen) a->pw = (uint32_t)(a->lw * a->scale), a->ph = (uint32_t)(a->lh * a->scale), a->lw = a->pw, a->lh = a->ph;
     { /* French by default, as the lab; LANG=en_* gives English */
         const char *l = getenv("LANG");
@@ -446,13 +537,32 @@ int main(int argc, char **argv) {
         }
     }
     if (data_load(a) != 0) { fprintf(stderr, "bimble: the shell's data is not in this build\n"); return 1; }
+    nset_load(a); /* the native app's own settings (native.json), then the run's --set */
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--set") && i + 1 < argc) {
+            char k[40] = "", v[64] = "";
+            if (sscanf(argv[i + 1], "%39[^=]=%63s", k, v) == 2) {
+                char j[70];
+                int num = (v[0] >= '0' && v[0] <= '9') || v[0] == '-' || v[0] == '.' || !strcmp(v, "true") || !strcmp(v, "false");
+                snprintf(j, sizeof j, num ? "%s" : "\"%s\"", v);
+                nset_set(k, j, 1);
+            }
+        }
+    { /* the local session log: on in a window unless session_log is false; offscreen only when BIMBLE_LOG_DIR is set */
+        const char *ld = getenv("BIMBLE_LOG_DIR");
+        a->session_log = (int)nset_num("session_log", a->offscreen ? (ld && *ld) : 1);
+        slog_open(a);
+    }
+    slog_sdl_hooks(a);
+    if (model) slog("asked to open %s", model);
 
     /* the window and the GPU */
     if (a->offscreen) SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
     if (!SDL_Init(SDL_INIT_VIDEO)) { no_gpu("no video", model); return 3; }
     sdl_base = app_now() - SDL_GetTicksNS() / 1e6;
     a->dev = nv_gpu_device(&a->gpu_name, &a->gpu_driver);
-    if (!a->dev) { no_gpu("no GPU device", model); return 3; }
+    if (!a->dev) { no_gpu("no GPU device", model); slog("no GPU device: %s", SDL_GetError()); slog_close(a); return 3; }
+    slog("GPU %s, driver %s; video driver %s; %s", a->gpu_name, a->gpu_driver, SDL_GetCurrentVideoDriver(), a->offscreen ? "offscreen" : "a window");
     a->win = SDL_CreateWindow("Bimble", (int)a->lw, (int)a->lh, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!a->win || !SDL_ClaimWindowForGPUDevice(a->dev, a->win)) { no_gpu("no window", model); return 3; }
     if (!a->offscreen) {
@@ -460,16 +570,18 @@ int main(int argc, char **argv) {
         SDL_GetWindowSizeInPixels(a->win, &pw, &ph);
         SDL_GetWindowSize(a->win, &lw, &lh);
         a->pw = (uint32_t)pw, a->ph = (uint32_t)ph, a->lw = (uint32_t)lw, a->lh = (uint32_t)lh;
-        a->scale = SDL_GetWindowDisplayScale(a->win) > 0 ? 1 : 1; /* ImGui works in the window's logical px; the density scales the frame */
-        SDL_SetGPUSwapchainParameters(a->dev, a->win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC);
+        a->scale = 1; /* ImGui works in the window's logical px; the pixel density scales the frame (app_target) */
+        if (!SDL_SetGPUSwapchainParameters(a->dev, a->win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC)) { /* VSYNC is always there; else what is */
+            slog("vsync refused: %s", SDL_GetError());
+            if (!SDL_SetGPUSwapchainParameters(a->dev, a->win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_MAILBOX))
+                slog("mailbox refused too: %s (the default present mode)", SDL_GetError());
+        }
+        SDL_SetGPUAllowedFramesInFlight(a->dev, 2);
     }
-    SDL_GPUTextureCreateInfo ci = {.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-                                   .usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, .width = a->pw, .height = a->ph,
-                                   .layer_count_or_depth = 1, .num_levels = 1};
-    a->screen = SDL_CreateGPUTexture(a->dev, &ci);
+    a->screen = NULL; /* app_target makes it at the first frame's size */
     char err[256];
     a->r = nv_render_new(a->dev, &a->ro, err, sizeof err);
-    if (!a->screen || !a->r) { no_gpu(a->r ? "no picture" : err, model); return 3; }
+    if (!a->r) { no_gpu(err, model); return 3; }
     a->loader = nv_loader_new(a->dev, loaders);
     igCreateContext(NULL);
     igGetIO_Nil()->IniFilename = NULL;
@@ -506,15 +618,9 @@ int main(int argc, char **argv) {
             nui_backend_event(&ev);
             ImGuiIO *io = igGetIO_Nil();
             view_input(a, &ev, io->WantCaptureMouse && !a->drag && ev.type != SDL_EVENT_MOUSE_BUTTON_UP);
-            if (ev.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED && !a->offscreen) {
-                a->pw = (uint32_t)ev.window.data1, a->ph = (uint32_t)ev.window.data2;
-                int lw, lh;
-                SDL_GetWindowSize(a->win, &lw, &lh);
-                a->lw = (uint32_t)lw, a->lh = (uint32_t)lh;
-                SDL_WaitForGPUIdle(a->dev);
-                SDL_ReleaseGPUTexture(a->dev, a->screen);
-                ci.width = a->pw, ci.height = a->ph;
-                a->screen = SDL_CreateGPUTexture(a->dev, &ci);
+            if (ev.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || ev.type == SDL_EVENT_WINDOW_RESIZED || ev.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
+                /* the sizes come from the next swapchain texture (app_target), not from the event */
+                slog("window event %u: %d x %d", (unsigned)ev.type, (int)ev.window.data1, (int)ev.window.data2);
                 a->dirty = 1;
             }
         }
@@ -543,12 +649,13 @@ int main(int argc, char **argv) {
     fprintf(stderr, "bimble: first picture %.0f ms, complete %.0f ms, %llu frames, memory %.0f MB (peak %.0f MB)\n",
             a->t_first_picture ? a->t_first_picture - a->t_start : -1.0, a->t_complete ? a->t_complete - a->t_start : -1.0,
             (unsigned long long)n, rss / 1e6, peak / 1e6);
+    slog_close(a); /* its last report reads the renderer */
     nv_loader_free(a->loader);
     nui_backend_shutdown();
     igDestroyContext(NULL);
     nv_render_free(a->r);
     if (a->icon_tex) SDL_ReleaseGPUTexture(a->dev, a->icon_tex);
-    SDL_ReleaseGPUTexture(a->dev, a->screen);
+    if (a->screen) SDL_ReleaseGPUTexture(a->dev, a->screen);
     SDL_ReleaseWindowFromGPUDevice(a->dev, a->win);
     SDL_DestroyWindow(a->win);
     SDL_DestroyGPUDevice(a->dev);

@@ -273,6 +273,20 @@ static void settings_dialog(App *a) {
         igDummy(V2(1, 6 * s));
         optimisations_ui(a);
         igDummy(V2(1, 6 * s));
+        { /* the local session log (native.json session_log; on by default, off: nothing written) */
+            bool on = nset_num("session_log", 1) != 0;
+            if (igCheckbox(T(a, "native.sessionLog"), &on)) nset_set("session_log", on ? "true" : "false", 0);
+            igTextWrapped("%s", T(a, "native.sessionLogText"));
+            if (slog_dir()[0]) {
+                igPushFont(a->f_mono, 12), igTextWrapped("%s", slog_dir()), igPopFont();
+                if (text_button(a, "logdir", T(a, "native.openFolder"), 0, 0)) {
+                    char u[1200];
+                    snprintf(u, sizeof u, "file://%s", slog_dir());
+                    if (!SDL_OpenURL(u)) snprintf(a->notice, sizeof a->notice, "%s", SDL_GetError()), a->notice_t = app_now();
+                }
+            } else igTextColored(col4(C_STONE), "%s", T(a, "native.sessionLogOff"));
+        }
+        igDummy(V2(1, 6 * s));
         igTextColored(col4(C_STONE), "%s", T(a, "settings.you"));
         static char name[CC_SETTINGS_LINE_BYTES], email[CC_SETTINGS_LINE_BYTES];
         static int loaded;
@@ -438,26 +452,88 @@ void perf_report(App *a, Buf *b) {
     }
 }
 
+/* Copy: the report to the clipboard, checked by reading it back, and ALWAYS to a file too (the session log's folder),
+ * its path in the notice; a failure says why (SDL's error). */
+void perf_copy(App *a) {
+    Buf b;
+    buf_init(&b);
+    perf_report(a, &b);
+    int lines = 0;
+    for (size_t k = 0; k < b.len; k++) lines += b.p[k] == '\n';
+    char n[16], t[256], path[1200] = "";
+    snprintf(n, sizeof n, "%d", lines);
+    int saved = slog_save_report(a, path, sizeof path) == 0;
+    int ok = SDL_SetClipboardText(buf_cstr(&b));
+    char why[256] = "";
+    if (!ok) snprintf(why, sizeof why, "%s", SDL_GetError());
+    else {
+        char *back = SDL_GetClipboardText(); /* what the clipboard holds now (this process serves it) */
+        if (!back || strcmp(back, buf_cstr(&b))) ok = 0, snprintf(why, sizeof why, "the clipboard did not keep it (%s)", SDL_GetError());
+        SDL_free(back);
+    }
+    if (ok) snprintf(a->notice, sizeof a->notice, "%s", Tf(a, t, sizeof t, "perf.copied", "{n}", n));
+    else snprintf(a->notice, sizeof a->notice, "%s: %s", T(a, "perf.copyFailed"), why[0] ? why : "?");
+    if (saved) {
+        size_t k = strlen(a->notice);
+        snprintf(a->notice + k, sizeof a->notice - k, " %s %s", T(a, "native.savedTo"), path);
+        snprintf(a->notice_path, sizeof a->notice_path, "%s", path);
+    }
+    slog("Copy report: clipboard %s%s%s; file %s", ok ? "ok" : "failed: ", ok ? "" : why, "", saved ? path : "not written");
+    a->notice_t = app_now();
+    buf_free(&b);
+}
+
+/* Save report…: the system's save dialog (a portal on Wayland; its answer arrives on another thread) */
+static char save_text_path[1200];
+static SDL_AtomicInt save_done;
+static char *save_text;
+static void SDLCALL save_cb(void *ud, const char *const *files, int filter) {
+    (void)ud, (void)filter;
+    if (files && files[0] && save_text) {
+        FILE *f = fopen(files[0], "w");
+        int ok = f && fputs(save_text, f) >= 0;
+        if (f) ok = fclose(f) == 0 && ok;
+        snprintf(save_text_path, sizeof save_text_path, "%s%s", ok ? "" : "!", files[0]);
+    } else snprintf(save_text_path, sizeof save_text_path, "%s", files ? "" : "!");
+    SDL_SetAtomicInt(&save_done, 1);
+}
+void perf_save_as(App *a) {
+    Buf b;
+    buf_init(&b);
+    perf_report(a, &b);
+    free(save_text);
+    save_text = strdup(buf_cstr(&b));
+    buf_free(&b);
+    const char *home = getenv("HOME");
+    char def[1100];
+    snprintf(def, sizeof def, "%s/bimble-performance-report.txt", home ? home : ".");
+    static const SDL_DialogFileFilter flt[] = {{"Text", "txt"}};
+    SDL_SetAtomicInt(&save_done, 0);
+    SDL_ShowSaveFileDialog(save_cb, NULL, a->win, flt, 1, def);
+}
+static void perf_save_poll(App *a) {
+    if (!SDL_GetAtomicInt(&save_done)) return;
+    SDL_SetAtomicInt(&save_done, 0);
+    if (!save_text_path[0]) return; /* cancelled */
+    if (save_text_path[0] == '!') snprintf(a->notice, sizeof a->notice, "%s %s", T(a, "native.saveFailed"), save_text_path[1] ? save_text_path + 1 : SDL_GetError());
+    else snprintf(a->notice, sizeof a->notice, "%s %s", T(a, "native.savedTo"), save_text_path);
+    slog("Save report: %s", a->notice);
+    a->notice_t = app_now();
+}
+
 static void perf_dialog(App *a) {
+    perf_save_poll(a);
     bool open = true;
     float s = a->scale;
     modal_begin(a, T(a, "perf.title"), 620, 560, &open);
     static char shown[8192];
     if (a->rec_until && app_now() >= a->rec_until) a->rec_until = 0, a->rec_done = 1;
-    if (text_button(a, "copy", T(a, "perf.copy"), 1, 0)) {
-        Buf b;
-        buf_init(&b);
-        perf_report(a, &b);
-        int lines = 0;
-        for (size_t k = 0; k < b.len; k++) lines += b.p[k] == '\n';
-        char n[16], t[128];
-        snprintf(n, sizeof n, "%d", lines);
-        snprintf(shown, sizeof shown, "%s", buf_cstr(&b));
-        if (SDL_SetClipboardText(buf_cstr(&b))) snprintf(a->notice, sizeof a->notice, "%s", Tf(a, t, sizeof t, "perf.copied", "{n}", n));
-        else snprintf(a->notice, sizeof a->notice, "%s", T(a, "perf.copyFailed"));
-        a->notice_t = app_now();
-        buf_free(&b);
+    if (text_button(a, "copy", T(a, "perf.copy"), 1, 0)) { /* on the click itself, the main thread (Wayland wants the input's serial) */
+        perf_copy(a);
+        snprintf(shown, sizeof shown, "%s", a->notice);
     }
+    igSameLine(0, 8 * s);
+    if (text_button(a, "save", T(a, "native.saveReport"), 0, 0)) perf_save_as(a);
     igSameLine(0, 8 * s);
     if (text_button(a, "rec", a->rec_until ? T(a, "perf.recording") : T(a, "perf.record"), 0, a->rec_until != 0) && !a->rec_until) {
         a->rec_until = app_now() + 10000, a->rec_done = 0, a->rec_seconds = 10;
