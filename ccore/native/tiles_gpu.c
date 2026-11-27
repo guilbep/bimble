@@ -834,7 +834,7 @@ void nv_tiles_init(R *r) {
     for (int k = 0; k < 8; k++) if (all[k]) SDL_ReleaseGPUShader(d, all[k]);
     T->hiz0 = cpipe(r, SPV_HIZ0, sizeof SPV_HIZ0, 1, 0, 0, 1, 0, 8, 8);
     T->hizn = cpipe(r, SPV_HIZN, sizeof SPV_HIZN, 0, 0, 0, 1, 0, 8, 8);
-    T->test = cpipe(r, SPV_TTEST, sizeof SPV_TTEST, 0, 1, 1, 0, 1, 64, 1);
+    T->test = cpipe(r, SPV_TTEST, sizeof SPV_TTEST, 1, 0, 1, 0, 1, 64, 1); /* NUI3: the pyramid by a sampler */
     T->gate = cpipe(r, SPV_GATE, sizeof SPV_GATE, 0, 0, 3, 0, 1, 64, 1);
     T->seen = cpipe(r, SPV_SEEN, sizeof SPV_SEEN, 1, 0, 0, 0, 1, 8, 8);
     if (!T->face_w_back || !T->face_i_back || !T->proxy || !T->hiz0 || !T->hizn || !T->test || !T->gate)
@@ -894,7 +894,7 @@ int nv_tiles_targets(R *r, uint32_t w, uint32_t h) {
     }
     T->hiz_levels = n, T->hiz_w = ox, T->hiz_h = T->lv[0][2];
     SDL_GPUTextureCreateInfo ci = {.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_R32_FLOAT,
-                                   .usage = SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_READ | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE |
+                                   .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_READ | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE |
                                             SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_SIMULTANEOUS_READ_WRITE,
                                    .width = T->hiz_w, .height = T->hiz_h, .layer_count_or_depth = 1, .num_levels = 1};
     T->hiz = SDL_CreateGPUTexture(r->dev, &ci);
@@ -920,7 +920,7 @@ static struct {
     uint64_t *gate_tris;
     uint32_t *gate_tiles, cgates;
     uint64_t tris1;
-    uint32_t tiles1;
+    uint32_t tiles1, tiles_cold;
     int oom;
 } F;
 
@@ -1110,6 +1110,8 @@ static void elem_test(uint32_t gate, const float lo[3], const float hi[3], const
 static void grow_box(float lo[3], float hi[3], const float a[3], const float b[3]) { /* an element's box, 1 mm wider (f32 slack) */
     for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], a[d] - 1), hi[d] = fmaxf(hi[d], b[d] + 1);
 }
+static int tile_gate = 1; /* NUI3 occlusion_tiles: a loaded leaf hidden last frame tested by its box alone */
+void nv_tiles_tile_gate(int on) { tile_gate = on != 0; }
 static uint32_t CLN = 2; /* occlusion_group: elements a group (the A/B: 1, 2, 4, 8, 16, 32, 64) */
 void nv_tiles_group_size(uint32_t n) { CLN = n < 1 ? 1 : n > 256 ? 256 : n; }
 static void emit_leaf_elems(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *cut) {
@@ -1308,7 +1310,7 @@ static int buf_room(R *r, SDL_GPUBuffer **b, uint32_t *cap, uint32_t need, SDL_G
 /* Before the render pass: the walk, the commands, their upload. Returns 1 when tiles draw this frame. */
 int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const double eye[3], const float pl[5][4], double kpx, int ortho, float cut_px) {
     nv_tiles_r *T = &r->tl;
-    F.ncmd = F.ninst = F.ntest = 0, F.ngates = 0, F.tris1 = 0, F.tiles1 = 0, F.oom = 0;
+    F.ncmd = F.ninst = F.ntest = 0, F.ngates = 0, F.tris1 = 0, F.tiles1 = 0, F.tiles_cold = 0, F.oom = 0;
     for (int ps = 0; ps < 2; ps++)
         for (int q = 0; q < NPAGE; q++)
             for (int k = 0; k < NKIND; k++) bk[ps][q][k].n = 0;
@@ -1354,7 +1356,8 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
             if (!ref) ts->used[t] = fr;
             nv_gtile *g = ts->g[t];
             uint32_t own = 0;
-            if (occl && !(g && g->kind == 1 && T->groups)) {
+            int leafg = g && g->kind == 1 && T->groups; /* a loaded leaf drawn by its elements */
+            if (occl && (!leafg || tile_gate)) { /* NUI3 (occlusion_tiles): a loaded leaf's box tested too: hidden, its elements wait */
                 own = new_gate();
                 if (nmap >= T->test_cap_cpu) {
                     uint32_t nc = T->test_cap_cpu ? T->test_cap_cpu * 2 : 1024;
@@ -1369,7 +1372,18 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
                 te->g[2] = g != NULL;
                 T->map[nmap++] = (TMap){ts, t, own}, T->nmap = nmap;
             }
-            if (g && occl && g->kind == 1 && T->groups) { /* a loaded leaf: its elements' groups decide (above) */
+            if (g && occl && leafg) { /* a loaded leaf: its elements' groups decide (above) */
+                if (tile_gate && own && lastc && ts->tested[t] == lastc && ts->vis[t] != lastc) {
+                    /* NUI3: its box was hidden last frame: the whole leaf under its box's test (one gate, a few commands, no
+                     * test an element: the CPU and the tests of a frame scale with what is near the visible, not with what is
+                     * loaded); found visible, its elements decide from the next frame on. Exact: the box holds the leaf. */
+                    Cut all = cut;
+                    all.cut = cut.cut > 0 ? cut.cut : 0;
+                    uint64_t tr = emit(T, ts, g, 2, own, &all);
+                    F.gate_tris[own] += tr, F.gate_tiles[own]++;
+                    F.tiles_cold++;
+                    continue;
+                }
                 emit_leaf_groups(T, g, fr, &cut);
                 F.tiles1++;
                 continue;
@@ -1498,6 +1512,7 @@ int nv_tiles_prepare(R *r, SDL_GPUCommandBuffer *cmd, const float vp[16], const 
 }
 
 static int npg_draw(void) { return npg; }
+static int cs_skipped(int bit);
 
 /* the draws of `pass` into the open render pass (pass 1: commands A as written; pass 2: B as gated): one a bucket */
 void nv_tiles_draw(R *r, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int pass) {
@@ -1510,7 +1525,7 @@ void nv_tiles_draw(R *r, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int p
                             *P_IB = cl ? T->c_face_i_back : T->face_i_back, *P_P = cl ? T->c_proxy : T->proxy;
     for (int ps = 1; ps <= 2; ps++) {
         if (gated ? ps != pass : pass != 1) continue; /* without the test, everything in one pass */
-        SDL_GPUBuffer *cb = ps == 1 || !gated ? T->cmd_a : T->cmd_b;
+        SDL_GPUBuffer *cb = ps == 1 || !gated || cs_skipped(8) ? T->cmd_a : T->cmd_b;
         for (int q = 0; q < npg_draw(); q++)
             for (int k = 0; k < NKIND; k++) {
                 const Bucket *b = &bk[ps - 1][q][k];
@@ -1545,19 +1560,29 @@ void nv_tiles_draw(R *r, SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int p
 int nv_tiles_has_pass2(const R *r) { return r->tl.read_vis_planned && F.ntest > 0; }
 
 /* Between the passes (occlusion): the depth pyramid from pass 1's depth, the tests, the gates into B. */
+/* NUI3: BIMBLE_SKIP_CS (a bit a compute pass: 1 hiz0, 2 hizn, 4 the tests, 8 the gates, 16 seen) leaves passes out, to find
+ * which one a driver fails on (lavapipe 25.2 crashed in this path); a debugging aid, wrong pictures by design */
+static int skip_cs = -1;
+static int cs_skipped(int bit) {
+    if (skip_cs < 0) skip_cs = getenv("BIMBLE_SKIP_CS") ? atoi(getenv("BIMBLE_SKIP_CS")) : 0;
+    return (skip_cs & bit) != 0;
+}
 void nv_tiles_occlusion(R *r, SDL_GPUCommandBuffer *cmd) {
     nv_tiles_r *T = &r->tl;
     if (!T->read_vis_planned) return;
     struct { int32_t a[4], b[4]; } u0 = {{(int)r->W, (int)r->H, (int)T->lv[0][1], (int)T->lv[0][2]}, {(int)hiz_block, 0, 0, 0}};
     SDL_GPUStorageTextureReadWriteBinding tw = {.texture = T->hiz, .mip_level = 0, .layer = 0, .cycle = false};
-    SDL_GPUComputePass *p = SDL_BeginGPUComputePass(cmd, &tw, 1, NULL, 0);
-    SDL_BindGPUComputePipeline(p, T->hiz0);
-    SDL_GPUTextureSamplerBinding sb = {.texture = r->depth, .sampler = r->nearest};
-    SDL_BindGPUComputeSamplers(p, 0, &sb, 1);
-    SDL_PushGPUComputeUniformData(cmd, 0, &u0, sizeof u0);
-    SDL_DispatchGPUCompute(p, (T->lv[0][1] + 7) / 8, (T->lv[0][2] + 7) / 8, 1);
-    SDL_EndGPUComputePass(p);
-    for (uint32_t l = 1; l < T->hiz_levels; l++) {
+    SDL_GPUComputePass *p;
+    if (!cs_skipped(1)) {
+        p = SDL_BeginGPUComputePass(cmd, &tw, 1, NULL, 0);
+        SDL_BindGPUComputePipeline(p, T->hiz0);
+        SDL_GPUTextureSamplerBinding sb = {.texture = r->depth, .sampler = r->nearest};
+        SDL_BindGPUComputeSamplers(p, 0, &sb, 1);
+        SDL_PushGPUComputeUniformData(cmd, 0, &u0, sizeof u0);
+        SDL_DispatchGPUCompute(p, (T->lv[0][1] + 7) / 8, (T->lv[0][2] + 7) / 8, 1);
+        SDL_EndGPUComputePass(p);
+    }
+    for (uint32_t l = 1; l < T->hiz_levels && !cs_skipped(2); l++) {
         struct { int32_t a[4], b[4]; } u = {{(int)T->lv[l - 1][0], (int)T->lv[l - 1][1], (int)T->lv[l - 1][2], 0}, {(int)T->lv[l][0], (int)T->lv[l][1], (int)T->lv[l][2], 0}};
         p = SDL_BeginGPUComputePass(cmd, &tw, 1, NULL, 0);
         SDL_BindGPUComputePipeline(p, T->hizn);
@@ -1573,17 +1598,19 @@ void nv_tiles_occlusion(R *r, SDL_GPUCommandBuffer *cmd) {
     tu.o[0] = (int)test_split, tu.o[1] = (int)test_split_px, tu.o[2] = (int)test_span, tu.o[3] = 0;
     for (int l = 0; l < 16; l++) tu.lv[l][0] = (int)T->lv[l][0], tu.lv[l][1] = (int)T->lv[l][1], tu.lv[l][2] = (int)T->lv[l][2], tu.lv[l][3] = 0;
     SDL_GPUStorageBufferReadWriteBinding gw = {.buffer = T->gates, .cycle = false};
+    if (!cs_skipped(4)) {
     p = SDL_BeginGPUComputePass(cmd, NULL, 0, &gw, 1);
     SDL_BindGPUComputePipeline(p, T->test);
-    SDL_GPUTexture *ro[1] = {T->hiz};
-    SDL_BindGPUComputeStorageTextures(p, 0, ro, 1);
+    SDL_GPUTextureSamplerBinding hb = {.texture = T->hiz, .sampler = r->nearest};
+    SDL_BindGPUComputeSamplers(p, 0, &hb, 1);
     SDL_GPUBuffer *rb[1] = {T->tests};
     SDL_BindGPUComputeStorageBuffers(p, 0, rb, 1);
     SDL_PushGPUComputeUniformData(cmd, 0, &tu, sizeof tu);
     SDL_DispatchGPUCompute(p, (F.ntest + 63) / 64, 1, 1);
     SDL_EndGPUComputePass(p);
+    }
     /* the gates into B (every command: pass 1's are gate 0, always) */
-    if (F.ncmd) {
+    if (F.ncmd && !cs_skipped(8)) {
         uint32_t gu[4] = {0, F.ncmd, 0, 0};
         SDL_GPUStorageBufferReadWriteBinding bw = {.buffer = T->cmd_b, .cycle = false};
         p = SDL_BeginGPUComputePass(cmd, NULL, 0, &bw, 1);
@@ -1600,7 +1627,7 @@ void nv_tiles_occlusion(R *r, SDL_GPUCommandBuffer *cmd) {
 /* After pass 2: the elements the id buffer shows (seen.comp), for the next frame's split; read back with the gates */
 void nv_tiles_seen(R *r, SDL_GPUCommandBuffer *cmd) {
     nv_tiles_r *T = &r->tl;
-    if (!T->read_vis_planned || !T->groups || !T->seen || !r->ncolour) return;
+    if (!T->read_vis_planned || !T->groups || !T->seen || !r->ncolour || cs_skipped(16)) return;
     uint32_t need = r->ncolour * 4;
     if (!T->seen_buf || T->seen_cap < need) {
         if (T->seen_buf) SDL_ReleaseGPUBuffer(r->dev, T->seen_buf), r->gpu_bytes -= T->seen_cap;
@@ -1762,8 +1789,8 @@ uint64_t nv_tiles_collect(R *r, int slot) {
     if (dbg && !T->o.reference) {
         uint32_t sel = 0, res = 0;
         for (uint32_t si = 0; si < T->nsets; si++) sel += T->sets[si]->nsel, res += T->sets[si]->resident;
-        fprintf(stderr, "tiles: prepare %.2f ms (walk %.2f), draws %.2f ms; frame %llu: %u sets, %u selected, %u resident, %u tests, %u pass 1, %u drawn, %llu tris, %u gates, %u commands, want %u, read %d\n",
-                T->ms_prepare, T->ms_walk, T->ms_draw, (unsigned long long)p->frame, T->nsets, sel, res, T->ntests, p->tiles1, tiles, (unsigned long long)tris, p->ngates, F.ncmd, T->want_n, p->read_vis);
+        fprintf(stderr, "tiles: prepare %.2f ms (walk %.2f), draws %.2f ms; frame %llu: %u sets, %u selected, %u resident, %u tests, %u pass 1, %u drawn, %llu tris, %u gates, %u commands, want %u, read %d, leaves under their box %u\n",
+                T->ms_prepare, T->ms_walk, T->ms_draw, (unsigned long long)p->frame, T->nsets, sel, res, T->ntests, p->tiles1, tiles, (unsigned long long)tris, p->ngates, F.ncmd, T->want_n, p->read_vis, F.tiles_cold);
     }
     return tris;
 }
