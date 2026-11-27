@@ -870,7 +870,7 @@ static uint32_t group_test(float lo[3], float hi[3]) {
 static void grow_sphere(float lo[3], float hi[3], const float c[3], float r) {
     for (int d = 0; d < 3; d++) lo[d] = fminf(lo[d], c[d] - r - 1), hi[d] = fmaxf(hi[d], c[d] + r + 1);
 }
-static uint32_t CLN = 16; /* occlusion_group: elements a group (the A/B: 8, 16, 32) */
+static uint32_t CLN = 32; /* occlusion_group: elements a group (the A/B: 8, 16, 32, 64) */
 void nv_tiles_group_size(uint32_t n) { CLN = n < 1 ? 1 : n > 256 ? 256 : n; }
 static void emit_leaf_groups(nv_tiles_r *T, nv_gtile *g, uint64_t fr, const Cut *cut) {
     int back = T->o.cull_back && !T->o.reference, pgi = g->page;
