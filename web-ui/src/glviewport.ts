@@ -3904,7 +3904,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (!moving) fill = null, fillEdges = false; // a still frame: the whole picture
       draw();
       const t1 = performance.now();
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1);
+      if (!gpuR) gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1); // GPU2: under WebGPU the caller waits for its queue (WebGL2 drew nothing)
       const t2 = performance.now();
       (stats as unknown as { split?: number[] }).split = [t1 - t0, t2 - t1];
       return t2 - t0;
