@@ -1961,13 +1961,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         // (their rows, boxes and batches stand; their detail is asked again when a frame needs it, budgetStep)
         for (const h of heads) keys.push(h.key);
         const order = heads.map((_, k) => k).filter((k) => heads[k]!.nE).sort((a, b) => heads[a]!.nE - heads[b]!.nE || a - b);
-        let kept = 0;
+        let kept = 0, gone = false;
         stats.openPeakDecoded = 0;
         for (const k of order) {
           const h = heads[k]!;
           const keep = stats.openKeepBytes ?? OPEN_KEEP_BYTES;
           const r = await source.linkMesh(k, h.name, h.key, Math.max(0, keep - kept)); // (past what is left: its rows and boxes only, in the worker)
           served += r.served;
+          if (!r.rows && !r.bytes) { gone = true; break; } // SIZE3: the link went meanwhile: the change asks the mesh again
           let lm = r.rows ? rowsMesh(r.rows) : parseBmsh(r.bytes!, 0, true);
           if (lm.ids.length !== h.nE || lm.rev !== h.key) throw new Superseded(h.name); // (the host checks it too)
           const b = lm.pos.byteLength + lm.idx.byteLength + lm.edges.byteLength + lm.normals.byteLength;
@@ -1977,6 +1978,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
           h.m = lm;
         }
         stats.openKeptBytes = kept, stats.linksDetailedAt = null;
+        if (gone) { await new Promise((res) => setTimeout(res, 200)); wantRev = null; return; }
       }
       const m = heads.length ? mergeMesh(main, heads, served) : main;
       stats.meshBytes = served, stats.meshBytesServed = (stats.meshBytesServed ?? 0) + served;
@@ -3890,13 +3892,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const selK = sel === null ? -1 : 1 + (m.links ?? []).findIndex((l) => l.name === sel);
     if (selK > 0 && slots[selK]) slots[selK]!.needAt = now, slots[selK]!.needFrame = drawFrame;
     let changed = false;
-    const w = [...wanted].filter((k) => slots[k] && !slots[k]!.gl && m.links?.[k - 1]?.visible);
+    const w = [...wanted].filter((k) => slots[k] && !slots[k]!.gl && !slots[k]!.fetching && m.links?.[k - 1]?.visible); // (SIZE3: not one on its way)
     const score = new Map(wantScore);
     for (const x of slots) if (x.k > 0) wantedLast.set(x.k, wanted.has(x.k)); // SIZE3 (B)
     wanted.clear(), wantScore.clear();
-    // SIZE3 (B): one link's mesh asked at a time (fetch, read in a worker, upload, its arrays dropped: then the
-    // next), the largest on screen first
-    if (w.length && !slots.some((x) => x.fetching)) {
+    // SIZE3 (B): links' meshes asked in a pipeline of 2 at most (fetch, read in a worker, upload, its arrays dropped:
+    // then the next), the largest on screen first (one at a time made a link shown again wait for another's)
+    if (w.length && slots.filter((x) => x.fetching).length < 2) {
       const x = slots[w.sort((a, b) => (score.get(b) ?? 0) - (score.get(a) ?? 0) || slots[b]!.needAt - slots[a]!.needAt)[0]!]!;
       const t0 = performance.now();
       if (partOf(x.k)) loadSlot(x); // (its lists with it, when the page still has them)
