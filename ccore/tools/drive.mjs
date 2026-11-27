@@ -17,7 +17,11 @@
 //   --panel               opens the performance panel (its own GPU wait per frame is then in every frame)
 //   --strip N             a screenshot every N frames while moving and during the refill after a stop (0: none, the
 //                         default: a screenshot costs tens of ms and changes what it measures)
-//   --need-gb G           waits for G GB available before Chromium starts (default 3; a --project 7: its open peaks high)
+//   --need-gb G           waits for G GB available (outside the shared lock) before anything starts (default 3; a
+//                         --project 6: its tab, host and GPU process measured 4.5 GB, Chromium capped below)
+//   --wait-min M          gives up after M minutes without the memory or the lock (default 20): exit 3, "machine
+//                         busy: not measured" (the lock is taken with flock -n, never waited on, never held while waiting)
+//   --mem-cap 5G          Chromium in a systemd-run scope with MemoryMax (default 5G for a --project): it dies alone
 //   --no-profile          no CPU profile (the Profiler domain samples at 100 µs and costs a few % of script time)
 //   --query 'a=1&b=2'     more lab URL parameters
 //   --compare A B         prints a before/after table from two run folders (their summary.json), nothing else
@@ -47,8 +51,9 @@
 //   (each input's timestamp and the end of the frame that showed it), profile.cpuprofile and profile.txt (the top 20
 //   functions by self time), memory.tsv (every 250 ms: JS heap, GPU bytes, renderer, GPU process and host RSS),
 //   network.json (every /mesh request: bytes, ms), console.txt, PNGs, summary.md and summary.json.
-// Memory: waits for 3 GB available before Chromium starts; a watchdog kills Chromium under 2.5 GB available; one
-// Chromium; a project or links over 1 GB takes the shared lock ~/.cache/bimble-measure.lock (flock) itself. Temp
+// Memory: waits for --need-gb available, then (a project over 1 GB, or --lock) takes ~/.cache/bimble-measure.lock with
+// flock -n, its holder ending with this process; a watchdog kills Chromium under 2.5 GB available (1.5 GB when
+// capped); one Chromium. Temp
 // folders on disk under ~/.cache/bimble-drive/ (not /tmp: memory here), removed on any exit.
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -61,7 +66,7 @@ import { CHROMIUM, chromiumEnv, gpuFlags, RENDERER_EXPR } from "../test/lib/chro
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = process.env.DRIVE_UI ? resolve(process.env.DRIVE_UI) : resolve(CCORE, "../web-ui"); // DRIVE_UI: another tree's web-ui (the code before a change)
 const SCRATCH_ROOT = join(process.env.HOME, ".cache/bimble-drive");
-const LOCK = join(process.env.HOME, ".cache/bimble-measure.lock");
+const LOCK = process.env.DRIVE_LOCK ?? join(process.env.HOME, ".cache/bimble-measure.lock"); // (DRIVE_LOCK: another lock file, for its test)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const memGb = () => Number(/MemAvailable:\s+(\d+)/.exec(readFileSync("/proc/meminfo", "utf8"))[1]) / 1048576;
 const loadNow = () => readFileSync("/proc/loadavg", "utf8").trim().split(" ").slice(0, 3).join(" ");
@@ -122,6 +127,9 @@ async function cdpConnect(wsUrl) {
   return { send, on: (fn) => listeners.push(fn), close: () => ws.close() };
 }
 
+/** The machine had not the memory (or the shared lock) within the wait budget: a result, not a hang. */
+export class BusyError extends Error {}
+
 /** One driven lab: the host, Vite, one Chromium, the page; everything it starts is killed by close(). */
 export class Drive {
   constructor(o = {}) {
@@ -161,13 +169,32 @@ export class Drive {
     return { status: r.status, text: await r.text() };
   };
   async q(name, body = {}) { const r = await this.hcall("query", name, body); if (r.status !== 200) throw new Error(`${name}: ${r.text}`); return JSON.parse(r.text); }
-  /** Takes the shared measuring lock: a child holds it (flock on its descriptor) until close() kills it. */
-  async lock() {
-    if (this.lockHolder) return;
-    this.log(`taking the shared lock ${LOCK} (waits up to an hour)`);
-    this.lockHolder = this.start("lock", "bash", ["-c", `exec 9>>"${LOCK}"; flock -w 3600 9 || exit 3; echo held; exec sleep 100000`]);
-    await this.waitFor("the shared lock", 3700000, () => this.lockHolder.out.includes("held") || (this.lockHolder.exitCode !== null && Promise.reject(new Error("the shared lock was not free within an hour"))), 500);
+  /** Waits for `need` GB available OUTSIDE the lock, then (when `lock`) takes the shared measuring lock without
+   *  waiting on it (flock -n: busy, nothing is held, memory is checked again a little later), checks memory once more
+   *  inside and keeps the lock until close(). The holder is `flock -n LOCK cat` reading this process's pipe: it ends
+   *  when this process ends, however it ends (a killed or timed-out run never leaves the lock held). Never a lock held
+   *  while waiting. After `waitMin` minutes: BusyError ("machine busy: not measured"). */
+  async acquire(need, lock) {
+    const until = Date.now() + 60000 * Number(this.o.waitMin ?? 20);
+    let said = 0;
+    for (;;) {
+      if (Date.now() > until) throw new BusyError(`machine busy: not measured (${need} GB available${lock ? " and the shared lock" : ""} not had within ${this.o.waitMin ?? 20} minutes; ${memGb().toFixed(1)} GB available now)`);
+      if (memGb() < need) {
+        if (Date.now() - said > 60000) said = Date.now(), this.log(`waiting for ${need} GB available (${memGb().toFixed(1)} now), outside the lock`);
+        await sleep(5000);
+        continue;
+      }
+      if (!lock) return;
+      const h = spawn("flock", ["-n", "-E", "75", LOCK, "cat"], { stdio: ["pipe", "ignore", "ignore"] });
+      const code = await new Promise((r) => { const t = setTimeout(() => r(null), 600); h.on("exit", (c) => { clearTimeout(t); r(c); }); });
+      if (code === null) { // held
+        if (memGb() >= need) { this.lockHolder = h; this.log(`the shared lock taken (${memGb().toFixed(1)} GB available)`); return; }
+        h.stdin.end(), h.kill(); // memory went: let the lock go at once, wait again outside it
+      } else if (Date.now() - said > 60000) said = Date.now(), this.log("the shared lock is busy: not waiting on it; trying again in 5 s");
+      await sleep(5000);
+    }
   }
+  release() { if (this.lockHolder) { try { this.lockHolder.stdin.end(); this.lockHolder.kill(); } catch { /* gone */ } this.lockHolder = null; } }
 
   async open() {
     const o = this.o;
@@ -206,7 +233,11 @@ export class Drive {
       copyFileSync(resolve(o.model), what);
       bytes = statSync(what).size;
     }
-    if (bytes > 1e9 || o.lock) await this.lock(); // a project over 1 GB of files (or --lock)
+    // memory first, outside the lock; then the lock for a project over 1 GB of files (or --lock), never waited on.
+    // A project of links (before SIZE3): the tab 3.1 GB, the host 1.25 GB, the GPU process 0.14 GB at most (measured
+    // 27 Nov): 6 GB with Chromium capped at 5 GB and the watchdog at 1.5 GB; else 3 GB.
+    this.need = Number(o.needGb ?? (o.project ? 6 : 3));
+    await this.acquire(this.need, bytes > 1e9 || !!o.lock);
     const bin = process.env.HOST_BIN ?? join(CCORE, "out/native/bimble-ccore");
     if (!existsSync(bin)) throw new Error(`no ${bin}: ccore/build.sh native`);
     const hostHome = o.links ? synthDir : home;
@@ -235,11 +266,13 @@ export class Drive {
     this.nLinks = (await this.q("links_panel").catch(() => ({ models: [] }))).models.length;
     const vite = this.start("vite", "npx", ["vite", "--port", String(this.vite), "--strictPort"], { cwd: UI, env: { ...process.env, BIMBLE_VITE_FROZEN: "1" } }); // no reload by an edit during the run
     await this.waitFor(`Vite on ${this.vite}`, 60000, async () => { if (vite.exitCode !== null) throw new Error(vite.out); return (await fetch(`http://localhost:${this.vite}/`)).ok; });
-    const need = Number(o.needGb ?? (o.project ? 7 : 3)); // a project of links peaks at several GB in the tab during its open
-    await this.waitFor(`${need} GB available`, 1800000, () => memGb() >= need, 2000);
+    if (memGb() < this.need - 1.5) this.log(`only ${memGb().toFixed(1)} GB available now (the host's open took some): starting anyway, the watchdog stops it`);
     this.log(`${memGb().toFixed(1)} GB available, load ${loadNow()}; starting Chromium (LAB_GPU=${o.gpu}) at ${cw}x${ch} css px, dpr ${o.dpr}`);
     const prof = join(tmp, "chromium");
-    this.chrome = this.start("chromium", CHROMIUM, ["--headless=new", ...gpuFlags(o.gpu), "--remote-debugging-port=0", `--user-data-dir=${prof}`,
+    // a cgroup cap (--mem-cap, 5G for a project): Chromium dies alone when it is wrong, the machine does not
+    const cap = o.memCap ?? (o.project ? "5G" : null), capArgs = cap && existsSync("/usr/bin/systemd-run") ? ["/usr/bin/systemd-run", "--user", "--scope", "-q", "-p", `MemoryMax=${cap}`, "-p", "MemorySwapMax=0"] : [];
+    if (capArgs.length) this.log(`Chromium capped at ${cap} (systemd-run scope)`);
+    this.chrome = this.start("chromium", capArgs.length ? capArgs[0] : CHROMIUM, [...capArgs.slice(1), ...(capArgs.length ? [CHROMIUM] : []), "--headless=new", ...gpuFlags(o.gpu), "--remote-debugging-port=0", `--user-data-dir=${prof}`,
       "--no-first-run", "--no-default-browser-check", "--js-flags=--expose-gc", `--window-size=${cw},${ch}`, "about:blank"], { env: chromiumEnv() }); // (a short TMPDIR: the singleton socket)
     this.minMem = memGb();
     this.dog = setInterval(() => this.sample(), 250);
@@ -279,7 +312,7 @@ export class Drive {
   sample() {
     const g = memGb();
     this.minMem = Math.min(this.minMem ?? g, g);
-    if (g < 2.5 && !this.stopWhy) {
+    if (g < (this.o.memCap ?? this.o.project ? 1.5 : 2.5) && !this.stopWhy) { // (capped by a cgroup: 1.5 GB)
       this.stopWhy = `MemAvailable ${g.toFixed(2)} GB`;
       this.log(`watchdog: ${this.stopWhy}: stopping Chromium`);
       try { process.kill(-this.chrome.pid, "SIGKILL"); } catch { /* gone */ }
@@ -551,6 +584,7 @@ export class Drive {
     return s;
   }
   async close() {
+    this.release(); // the lock first: nothing else waits on our cleanup
     clearInterval(this.dog);
     try { this.cdp?.close(); } catch { /* gone */ }
     for (const sig of ["SIGTERM", "SIGKILL"]) {
@@ -668,6 +702,7 @@ async function cli(o) {
     await d.close();
     return s.stopped ? 2 : 0;
   } catch (e) {
+    if (e instanceof BusyError) { console.error(`drive: ${e.message}`); await d.close(); return 3; } // (exit 3: machine busy, not measured)
     console.error(e);
     try { await d.collect(null); } catch { /* partial */ }
     await d.close();

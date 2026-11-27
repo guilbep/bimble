@@ -21,7 +21,7 @@ import { LAB_GPU } from "./lib/chromium.mjs";
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => { if (ok) passed++; else failed++; console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`); };
 const root = mkdtempSync(join(process.env.VIS1_SCRATCH ?? tmpdir(), "ccore-lab-visible-"));
-const d = new Drive({ links: 6, storeys: 2, gpu: LAB_GPU, size: "1280x800", dpr: 1, profile: false, quiet: true, scratchRoot: root });
+const d = new Drive({ links: 6, storeys: 2, gpu: LAB_GPU, size: "1280x800", dpr: 1, profile: false, quiet: true, scratchRoot: root, lock: process.env.LAB_LOCK === "1" }); // (LAB_LOCK=1: the shared measuring lock, flock -n)
 d.dir = join(root, "out");
 const bye = async (code) => { await d.close(); rmSync(root, { recursive: true, force: true }); process.exit(code); };
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => bye(130));
