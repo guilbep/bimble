@@ -157,7 +157,7 @@ export function boxHidden(p: Pyramid, b: ArrayLike<number>, o: number): boolean 
   let bx0 = Math.floor(px0 / BLOCK), bx1 = Math.floor(px1 / BLOCK), by0 = Math.floor(py0 / BLOCK), by1 = Math.floor(py1 / BLOCK), l = 0;
   while ((bx1 - bx0 + 1) * (by1 - by0 + 1) > 16 && l < p.levels.length - 1) bx0 >>= 1, bx1 >>= 1, by0 >>= 1, by1 >>= 1, l++;
   const lv = p.levels[l]!, lw = p.lw[l]!;
-  for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) if (lv[y * lw + x]! + 2e-7 >= zn) return false;
+  for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) if (lv[y * lw + x]! + 2e-6 >= zn) return false; // (a margin of about 30 depth steps of 24 bits: a CPU rasteriser's depth and a float32 transform differ by a few)
   return true;
 }
 

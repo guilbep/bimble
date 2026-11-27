@@ -245,7 +245,7 @@ export class Drive {
     // 27 Nov): 6 GB with Chromium capped at 5 GB and the watchdog at 1.5 GB; else 3 GB.
     this.need = Number(o.needGb ?? (o.project ? 6 : 3));
     await this.acquire(this.need, bytes > 1e9 || !!o.lock);
-    const bin = process.env.HOST_BIN ?? join(CCORE, "out/native/bimble-ccore");
+    const bin = o.hostBin ?? process.env.HOST_BIN ?? join(CCORE, "out/native/bimble-ccore"); // (a lab test: the tcc build the gate makes)
     if (!existsSync(bin)) throw new Error(`no ${bin}: ccore/build.sh native`);
     const hostHome = o.links ? synthDir : home;
     this.host = this.start("host", bin, [String(this.port), ...(what ? [what] : [])], { cwd: tmp, env: { ...process.env, BIMBLE_TOKEN: this.token, HOME: hostHome, BIMBLE_CONFIG_DIR: config,
@@ -261,7 +261,7 @@ export class Drive {
         this.log(`made ${o.links} buildings: ${made.elements} elements, ${made.tris} triangles, ${Date.now() - t0} ms`);
       }
       if ((await this.hcall("action", "new")).status !== 200) throw new Error("new");
-      if ((await this.hcall("action", "link_folder", { path: dir })).status !== 200) throw new Error("link_folder");
+      { const r = await this.hcall("action", "link_folder", { path: dir }); if (r.status !== 200) throw new Error(`link_folder ${dir}: ${r.status} ${r.text.slice(0, 300)}`); }
       const { W, D } = await import("../bench/buildings_synth.mjs");
       await this.waitFor("the links converted", 3600000, async () => { const r = (await this.q("links_panel")).models; return r.length === Number(o.links) && r.every((m) => m.state === "ready"); }, 300);
       for (let k = 0; k < Number(o.links); k++) {
