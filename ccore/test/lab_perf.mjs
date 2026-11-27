@@ -6,7 +6,11 @@
 // moving frame times, triangles and draw calls are not zero and the drag is in the slowest inputs;
 // "Copy report" gives plain text with the renderer line, without the model's file name unless
 // "Include file names" is ticked; "Record 10 s" ends with a summary; the status bar's button closes
-// and opens the panel. Prints "N passed, M failed"; exits non-zero on a failure.
+// and opens the panel. SIZE2: at 1280, 1024 and 800 px wide (native mode, the status line made long with 16
+// link chips as a folder of links gives), the button is inside the viewport and is what a click at its centre
+// hits (an icon alone under 1100 px), and a real click there toggles the panel; File > Performance… and the
+// palette's "performance" open it too (before SIZE2 the chips pushed it out of the window). Prints "N passed,
+// M failed"; exits non-zero on a failure.
 import { join } from "node:path";
 import { CCORE, lab, sleep, waitFor } from "./lib/lab.mjs";
 
@@ -65,6 +69,38 @@ try {
   check("the status bar's Performance closes the panel", !(await L.evalJs("!!document.querySelector('[data-bb=perf]')")));
   await L.evalJs("document.querySelector('[data-bb=status-perf]').click()");
   check("and opens it again", !!(await waitFor("the panel again", 3000, () => L.evalJs("!!document.querySelector('[data-bb=perf]')"))));
+  // ---- SIZE2: the button always reachable ----
+  await L.evalJs(`(() => { const f = document.querySelector('[data-bb=statusbar]'), end = f.querySelector('[data-bb=status-end]') ?? f.querySelector('[data-bb=status-perf]');
+    for (let k = 0; k < 16; k++) { const c = document.createElement('span'); c.className = 'chip c-s nx'; c.dataset.bbTest = 'long'; c.textContent = 'Lié : a consultant model with a long file name ' + k; f.insertBefore(c, end); }
+    return 1; })()`);
+  for (const w of [1280, 1024, 800]) {
+    await L.S("Emulation.setDeviceMetricsOverride", { width: w, height: 800, deviceScaleFactor: 1, mobile: false });
+    await sleep(300);
+    const r = await L.evalJs(`(() => { const b = document.querySelector('[data-bb=status-perf]'), r = b.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const hit = document.elementFromPoint(x, y); return { x, y, l: r.left, r: r.right, w: r.width, vw: window.innerWidth, hit: !!hit && b.contains(hit), text: (b.querySelector(".pft")?.offsetWidth ?? 0) > 0 }; })()`);
+    const inside = r.l >= 0 && r.r <= r.vw && r.w > 8 && r.hit;
+    const open0 = await L.evalJs("!!document.querySelector('[data-bb=perf]')");
+    if (inside) {
+      await L.S("Input.dispatchMouseEvent", { type: "mousePressed", x: r.x, y: r.y, button: "left", buttons: 1, clickCount: 1 });
+      await L.S("Input.dispatchMouseEvent", { type: "mouseReleased", x: r.x, y: r.y, button: "left", buttons: 0, clickCount: 1 });
+      await sleep(300);
+    }
+    const open1 = await L.evalJs("!!document.querySelector('[data-bb=perf]')");
+    check(`${w} px wide, a long status line: the Performance button in the window and clickable (${r.text ? "with its name" : "its icon alone"})`, inside && open1 !== open0,
+      `button ${r.l.toFixed(0)}..${r.r.toFixed(0)} of ${r.vw}, hit ${r.hit}, panel ${open0} -> ${open1}`);
+  }
+  await L.evalJs("document.querySelectorAll('[data-bb-test=long]').forEach((e) => e.remove())");
+  await L.S("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  await L.evalJs("(async () => { (await import('/src/panels/index.ts')).currentPanel.value = null; (await import('/src/dialogs/index.ts')).currentDialog.value = 'file-menu'; })()");
+  const fm = await waitFor("the File menu", 3000, () => L.evalJs("!!document.querySelector('[data-bb=file-menu-performance]')")).catch(() => false);
+  if (fm) await L.evalJs("document.querySelector('[data-bb=file-menu-performance]').click()");
+  check("File > Performance… opens the panel", !!fm && !!(await waitFor("the panel from the File menu", 3000, () => L.evalJs("!!document.querySelector('[data-bb=perf]')")).catch(() => false)));
+  await L.evalJs("(async () => { (await import('/src/panels/index.ts')).currentPanel.value = null; (await import('/src/dialogs/index.ts')).currentDialog.value = 'palette'; })()");
+  const pal = await waitFor("the palette", 3000, () => L.evalJs("!!document.querySelector('[data-bb=palette-query]')")).catch(() => false);
+  const picked = pal && await L.evalJs(`(async () => { const i = document.querySelector('[data-bb=palette-query]'); i.value = 'performance'; i.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 200));
+    const row = [...document.querySelectorAll('[data-bb=palette-item]')].find((e) => /Performance/i.test(e.textContent)); if (!row) return false; row.click(); return true; })()`);
+  check("the palette's \"performance\" opens the panel", !!picked && !!(await waitFor("the panel from the palette", 3000, () => L.evalJs("!!document.querySelector('[data-bb=perf]')")).catch(() => false)));
   check("no uncaught page error", L.errors.length === 0, L.errors.join(" | "));
 } catch (e) {
   check("the run", false, e?.stack ?? String(e));

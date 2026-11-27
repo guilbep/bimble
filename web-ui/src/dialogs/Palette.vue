@@ -17,6 +17,7 @@ import { notYetAction } from "../shell/capability"; // DEAD1
 import { currentDialog } from ".";
 import { send } from "../shell/send";
 import { pickedSchedule } from "../pages/quantitiesPick";
+import { currentPanel } from "../panels"; // SIZE2: the performance panel
 
 interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null;
   /** DEAD1: a disabled row says why: "not available yet" (an action of a capability this core does not serve), or the ribbon tool's reason it is off now. */
@@ -28,6 +29,7 @@ const PLAN = '<rect x="4" y="4" width="16" height="16"/><path d="M4 12h9v8M13 4v
 const SECTION = '<path d="M3 12h18"/><path d="m7 8-4 4 4 4"/><rect x="9" y="5" width="6" height="14" stroke-dasharray="2 2"/>';
 const SHEET = '<path d="M5 3h10l4 4v14H5z"/><path d="M14 3v5h5"/><rect x="8" y="11" width="8" height="6"/>';
 const LIST = '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="5" cy="6" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="18" r="1"/>';
+const GAUGE = '<path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/>'; // SIZE2
 
 // The ribbon tool of each action: its icon. Labels: `action.<name>` (i18n/parts/actions.ts), the Rust label if a new action has none.
 const tools = new Map<string, RibbonTool>();
@@ -57,6 +59,9 @@ const items = computed<Item[]>(() => {
   for (const v of openViews.value.views) {
     list.push({ label: t("palette.goto", { name: viewName(v) }), note: t("tab.view"), kbd: "—", icon: v.type === "section" ? SECTION : v.type === "plan" ? PLAN : CUBE, enabled: true, go: () => openView(v.id) });
   }
+  // SIZE2: the performance panel (not an action: a panel of the lab, as the status bar's button), always there
+  list.push({ label: t("perf.paletteOpen"), also: "performance", note: t("perf.paletteNote"), kbd: "—", icon: GAUGE, enabled: true,
+    go: () => { currentPanel.value = "performance"; return null; } });
   // ponytail: sheets throw without a model; no model, no entries. Schedules: the effective ones (`schedule_list`), as egui.
   try {
     for (const s of sheets()) list.push({ label: t("palette.goto", { name: `${s.number} ${s.name}` }), note: t("tab.sheets"), kbd: "—", icon: SHEET, enabled: true, go: () => tabCall("open", { type: "sheet", id: s.id }) });
