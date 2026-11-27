@@ -20,12 +20,15 @@
  *   16 u32 nL element list       20 u32 nO occluder tris  24 u32 toc bytes (48 + 80 nT + 4 nL + pad4(nL)): the
  *                                                            table of contents; the occluders follow, then the blobs
  *                                                            at pad8(toc + 36 nO)
- *   28 u32 leaf target (tris)    32 u64 blob bytes        40 u32 levels (deepest level + 1)   44 u32 0
+ *   28 u32 leaf target (tris)    32 u64 blob bytes        40 u32 levels (deepest level + 1)
+ *   44 u32 bake flags: 1 the exterior shell computed (reserved, SHELL1; 0: not computed, unknown, never "empty")
  *   48 nT tiles of 80 bytes, tile 0 the root; ids breadth first (a tile's children are consecutive ids,
  *      each after its parent):
  *      0  u32 parent (0xFFFFFFFF: the root)   4 u32 first child   8 u16 children   10 u8 level (root 0)
  *      11 u8 flags: 1 LEAF (content: its elements' detail), 2 PROXY (content: a TPX1 blob), 4 OWN (a leaf of
- *         the large elements of its parent's cell), 8 has occluders
+ *         the large elements of its parent's cell), 8 has occluders, 16 has exterior elements (reserved: SHELL1)
+ *      (a proxy may later be built from a subset of its elements, e.g. the exterior shell: its element range is what it
+ *      stands for, not necessarily what it depicts)
  *      12 f32[6] box (min xyz, max xyz, link scene mm): holds its content and every descendant's box
  *      36 f32 error (mm): 0 for a leaf; the proxy's deviation; +inf for an inner tile without a proxy (descend)
  *      40 u32 el0   44 u32 nel: its subtree's elements are list[el0 .. el0 + nel) (a leaf: its own)
@@ -91,8 +94,12 @@
 #define CC_TILES_OCC_MAX 256u
 #define CC_TILES_NONE 0xFFFFFFFFu
 
-enum { CC_TILE_LEAF = 1, CC_TILE_PROXY = 2, CC_TILE_OWN = 4, CC_TILE_OCC = 8 };
-enum { CC_TILES_EL_CLOSED = 1, CC_TILES_EL_OPAQUE = 2 };
+/* 16 reserved (ticket SHELL1): the tile holds exterior elements. */
+enum { CC_TILE_LEAF = 1, CC_TILE_PROXY = 2, CC_TILE_OWN = 4, CC_TILE_OCC = 8, CC_TILE_EXTERIOR = 16 };
+/* 4 reserved (SHELL1): the element is seen from outside (0 with CC_TILES_BAKE_SHELL unset: unknown) */
+enum { CC_TILES_EL_CLOSED = 1, CC_TILES_EL_OPAQUE = 2, CC_TILES_EL_EXTERIOR = 4 };
+/* the header's bake flags (offset 44): 1 the exterior shell was computed (SHELL1; 0 today: not computed, not "none") */
+enum { CC_TILES_BAKE_SHELL = 1 };
 
 /* ---- the builder's input: a scene (the open model) or a lazy view file (a link's cache, read in place) ---- */
 typedef struct {
@@ -142,7 +149,7 @@ typedef struct {
 typedef struct {
     const uint8_t *p;   /* the section (or its table of contents alone: blobs absent) */
     size_t n;
-    uint32_t ntiles, nelements, nlist, nocc, toc, levels, leaf_target;
+    uint32_t ntiles, nelements, nlist, nocc, toc, levels, leaf_target, bake;
     uint64_t blobs;
     uint32_t blob_at;   /* the blobs' offset in the section: pad8(toc + 36 nO) */
     const uint8_t *list, *eflags, *occ; /* occ NULL when only the table of contents was given */

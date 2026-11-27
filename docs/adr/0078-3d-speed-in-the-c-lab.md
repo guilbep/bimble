@@ -527,6 +527,17 @@ frame over tiles is ticket VIS1's, a native viewer's NAT2's: both read what is b
    element boundary), is always replaced; boxes out of the frustum are dropped; the answer front to back. 1 to 30 ms for
    the synthetic sets' cameras (including a JSON answer). It ignores occlusion: VIS1's depth pyramid over the occluders.
 
+42. **Every optimisation a setting** (the owner's rule, 27 Nov): the walker's inputs are parameters, none baked in: the
+   error in pixels (default 1 still), a triangle budget (default none), levels of detail (default on; off =
+   `CC_TILES_SEL_LEAVES`, `tiles_frame&lod=0`: every leaf in the frustum, tested), occluders (default off in the reference
+   frame query, `occ=1`; the renderers choose). The bake settings (`cc_tiles_opts`: leaf target 40,000, proxy cap
+   16,384, root 512, grid 64 a side, occluders a tile 64, 0 = none) are recorded in the cache's `SRCE` ("tiles":
+   "leaf=40000 proxy=16384 root=512 res=64 occ=64"); a cache baked with other settings is indexed again from itself
+   (`link_tiles_test`). They come from `BIMBLE_TILES` today; their rows in Settings are left to the page's ticket.
+43. **Room for the exterior shell (ticket SHELL1, not built):** element flag 4 EXTERIOR, tile flag 16 "has exterior
+   elements" and the header's bake flags (offset 44, bit 1 "shell computed": a cache without it is unknown, never "found
+   empty") are reserved; readers accept them; a proxy may later depict a subset of its elements.
+
 ### The contract (VIS1, NAT2)
 
 Section `TILE` (little-endian; offsets from the section's first byte):
@@ -543,10 +554,10 @@ Section `TILE` (little-endian; offsets from the section's first byte):
 | 28 | u32 | the leaf target (triangles) |
 | 32 | u64 | blob bytes |
 | 40 | u32 | levels |
-| 44 | u32 | 0 |
+| 44 | u32 | bake flags: 1 the exterior shell computed (reserved for SHELL1; 0: not computed, the exterior unknown, never "found empty") |
 | 48 | 80 × nT | tiles, depth-first preorder (tile 0 the root; a subtree is ids [i, i + skip)) |
 | … | u32 × nL | element rows, depth first (a subtree's elements one range) |
-| … | u8 × nL, pad 4 | per list entry: 1 closed and outward, 2 opaque occluder class |
+| … | u8 × nL, pad 4 | per list entry: 1 closed and outward, 2 opaque occluder class, 4 exterior (reserved, SHELL1) |
 | toc | f32[9] × nO | occluder triangles, link scene mm (outside the table: asked apart, `tiles=occ`) |
 | pad8(toc + 36 nO) | blobs | a `TPX1` per proxy tile, in post-order (a subtree's proxies one byte range) |
 
@@ -558,7 +569,7 @@ A tile (80 bytes):
 | 4 | u32 | skip: tiles in its subtree, itself included (first child id + 1; next sibling c + skip(c)) |
 | 8 | u16 | children |
 | 10 | u8 | level (root 0) |
-| 11 | u8 | flags: 1 LEAF (content: its elements' detail, `TLF1`), 2 PROXY (content: `TPX1`), 4 OWN (a leaf of its parent's large elements), 8 has occluders |
+| 11 | u8 | flags: 1 LEAF (content: its elements' detail, `TLF1`), 2 PROXY (content: `TPX1`), 4 OWN (a leaf of its parent's large elements), 8 has occluders, 16 has exterior elements (reserved, SHELL1) |
 | 12 | f32[6] | box, min xyz, max xyz, link scene mm: holds its content and every descendant's |
 | 36 | f32 | error mm: 0 a leaf; a proxy's (decision 33); +inf an inner tile without proxy (descend) |
 | 40 | u32, u32 | el0, nel: its subtree's elements list[el0 .. el0 + nel) |
@@ -569,6 +580,9 @@ A tile (80 bytes):
 | 68 | u32, u16 | first occluder, occluders |
 | 74 | u16 | 0 |
 | 76 | u32 | detail triangles under it (saturating) |
+
+A proxy may later be built from a subset of its elements (SHELL1: the exterior shell only): its element range is what it
+stands for (what to descend into under a hidden or selected element), not necessarily what it depicts.
 
 `TPX1` (a proxy): "TPX1", u32 nv, u32 ni, u32 parts; per part {u32 category (concrete 0 … other 7), u32 flags (1 closed
 and outward: 0 today), u32 first index, u32 indices}; u16[3] × nv (p = lo + q (hi − lo) / 65535, the tile's box); pad 4;
@@ -618,6 +632,14 @@ all their detail even from the site view: their beams, walls and furniture are 0
 hidden, which is occlusion's work (VIS1's depth pyramid over decision 37's occluders), not the levels'.
 
 ## What is left
+
+From ticket TILE1 (amendment 6): the page drawing by tiles (VIS1) and a native viewer (NAT2); then `HLOD` dropped (or
+served from the pyramid's levels). The exterior shell at bake time (SHELL1). Edge collapse with locked borders for the
+coarse levels (better shape per triangle than clustering; decision 32). A vertex-cache and fetch order at bake
+(meshoptimizer's, C++: not in the core now). Leaf answers without BMG1's edges (`&edges=0`: re-encoded by the host) and
+compressed over HTTP for the web version (deflate saves 91 % of leaves' bytes on the synthetic links; decision 35).
+Out-of-core indexing for a 5 GB IFC: the indexing job reads its cache in place, but `HLOD` still decodes the whole link
+(the indexing peak; decision 39). Occluder sets measured on real models in a renderer.
 
 Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core), GPU occlusion
 (off by default). Left, with the reason:

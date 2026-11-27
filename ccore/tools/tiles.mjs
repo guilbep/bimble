@@ -277,11 +277,26 @@ async function openSet(label, model) {
 
 async function report(label, H, nlinks, open, conv, buildMs) {
   const pys = await pyramids(H, nlinks, open);
-  const bj = json((await H.get("tiles_frame=bounds")).bytes), bounds = bj.bounds;
+  const bj = json((await H.get("tiles_frame=bounds")).bytes);
+  const boxes = [];
   pys.forEach((p, i) => { // placements for the pictures (world = R p + o), in the order the frame walks them
     const d = bj.links[i];
     if (d) p.xf = (q) => [d.cos * q[0] - d.sin * q[1] + d.origin[0], d.sin * q[0] + d.cos * q[1] + d.origin[1], q[2] + d.origin[2]];
+    const xf = p.xf ?? ((q) => q), b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    for (let k = 0; k < 8; k++) {
+      const w = xf([p.toc.box[k & 1 ? 3 : 0], p.toc.box[k & 2 ? 4 : 1], p.toc.box[k & 4 ? 5 : 2]]);
+      for (let j = 0; j < 3; j++) b[j] = Math.min(b[j], w[j]), b[3 + j] = Math.max(b[3 + j], w[j]);
+    }
+    if (p.toc.ntiles) boxes.push(b);
   });
+  // the main cluster: the links whose centre lies within 4 median sizes of the median centre (a link georeferenced far
+  // away would make every camera far); those left out are counted
+  const med = (a) => { const x = [...a].sort((u, v) => u - v); return x[Math.floor(x.length / 2)]; };
+  const ctr = [0, 1, 2].map((k) => med(boxes.map((b) => (b[k] + b[3 + k]) / 2))), size = med(boxes.map((b) => Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2])));
+  const main = boxes.filter((b) => Math.hypot(...[0, 1, 2].map((k) => (b[k] + b[3 + k]) / 2 - ctr[k])) <= 4 * size);
+  const bounds = [0, 1, 2].map((k) => Math.min(...main.map((b) => b[k]))).concat([0, 1, 2].map((k) => Math.max(...main.map((b) => b[3 + k]))));
+  const outliers = boxes.length - main.length;
+  log(`${label}: cameras on ${main.length} of ${boxes.length} pyramids (${outliers} far away), box ${bounds.map((x) => Math.round(x / 1000)).join(",")} m`);
   const fr = await frames(H, bounds);
   const formats = [];
   for (const p of pys) formats.push(await leafFormats(H, p));
@@ -294,7 +309,8 @@ async function report(label, H, nlinks, open, conv, buildMs) {
     roots: pys.reduce((n, p) => n + p.toc.tris[0], 0), sectionBytes: pys.reduce((n, p) => n + p.sectionBytes, 0), tocBytes: pys.reduce((n, p) => n + p.tocBytes, 0),
     occ: pys.reduce((n, p) => n + p.occ, 0), occBytes: pys.reduce((n, p) => n + p.occBytes, 0), proxyTris: pys.reduce((n, p) => n + p.proxyTris, 0),
     leafServed: sum("served"), leafDeflated: sum("deflated"), leafRaw21: sum("raw21"), proxyBytes: sum("proxies"), proxyDeflated: sum("proxiesDeflated"),
-    decodeMs: sum("decodeMs"), copyMs: sum("copyMs"), first: firstPicture(pys), frames: fr, conv, buildMs, hostPeak: H.rss(),
+    decodeMs: sum("decodeMs"), copyMs: sum("copyMs"), first: firstPicture(pys), frames: fr, conv, buildMs, hostPeak: H.rss(), outliers,
+    box: bounds.map((x) => Math.round(x / 1000)),
   };
   if (PNG) {
     mkdirSync(PNG, { recursive: true });
@@ -321,6 +337,7 @@ function md(rs) {
     const b = r.conv ? `index ${fmt(r.conv.reduce((n, c) => n + c.indexMs, 0))} ms (tiles ${fmt(r.conv.reduce((n, c) => n + c.tilesMs, 0))} ms), peak ${MB(Math.max(...r.conv.map((c) => c.indexPeak)))}` : `${fmt(r.buildMs)} ms in the host`;
     L.push(`| ${r.label} | ${fmt(r.detail)} | ${fmt(r.tiles)} (${fmt(r.leaves)} / ${fmt(r.proxies)}) | ${r.maxLevels} | ${r.levels.map(fmt).join(" / ")} | ${r.errs.map(fmt).join(" / ")} | ${MB(r.sectionBytes)} (${MB(r.tocBytes)}) | ${fmt(r.occ)} (${MB(r.occBytes)}) | ${b} |`);
   }
+  for (const r of rs) if (r.outliers) L.push("", `${r.label}: the cameras frame ${r.box.join(", ")} m (lo xyz, hi xyz); ${r.outliers} pyramid(s) far from the others left out of that box (still walked).`);
   L.push("", "| set | view | 1 px: tiles, tris, bytes to fetch | 2 px: tiles, tris, bytes | 1 px with occlusion: tris (hidden), bytes | 2 px with occlusion | walk |", "|---|---|---|---|---|---|---|");
   for (const r of rs) for (const v of ["far", "close", "inside"]) {
     const a = r.frames[`${v}@1`], b = r.frames[`${v}@2`], ao = r.frames[`${v}@1o`], bo = r.frames[`${v}@2o`];

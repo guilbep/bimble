@@ -5,12 +5,14 @@
 // no drawing: the frame's walk and the GPU are the viewport's. Every count and offset is checked against what is
 // there; a damaged answer throws. The rules are the C reader's (cc_tiles_check): the same section passes or fails both.
 
-export const TILE_LEAF = 1, TILE_PROXY = 2, TILE_OWN = 4, TILE_OCC = 8;
-export const EL_CLOSED = 1, EL_OPAQUE = 2;
+export const TILE_LEAF = 1, TILE_PROXY = 2, TILE_OWN = 4, TILE_OCC = 8, TILE_EXTERIOR = 16; // 16 reserved (SHELL1)
+export const EL_CLOSED = 1, EL_OPAQUE = 2, EL_EXTERIOR = 4; // 4 reserved (SHELL1): seen from outside
+export const BAKE_SHELL = 1; // header bake flags: the exterior shell computed (0: unknown, never "empty")
 const HEAD = 48, REC = 80, NONE = 0xffffffff;
 
 export interface TilesToc {
   ntiles: number; nelements: number; nlist: number; nocc: number; levels: number; leafTarget: number; tocBytes: number; blobBytes: number;
+  bake: number; // BAKE_SHELL
   parent: Uint32Array; skip: Uint32Array; nchildren: Uint16Array; level: Uint8Array; flags: Uint8Array;
   box: Float32Array; // 6 per tile: min xyz, max xyz (link scene mm)
   error: Float32Array; // mm; 0 leaf; +inf: no proxy (descend)
@@ -37,6 +39,7 @@ export function parseToc(ab: ArrayBuffer | Uint8Array, nelements = -1): TilesToc
   const blobBytes = dv.getUint32(32, true) + dv.getUint32(36, true) * 2 ** 32;
   const t: TilesToc = {
     ntiles: nt, nelements: ne, nlist: nl, nocc: no, levels: dv.getUint32(40, true), leafTarget: dv.getUint32(28, true), tocBytes: tb, blobBytes,
+    bake: dv.getUint32(44, true),
     parent: new Uint32Array(nt), skip: new Uint32Array(nt), nchildren: new Uint16Array(nt), level: new Uint8Array(nt), flags: new Uint8Array(nt),
     box: new Float32Array(6 * nt), error: new Float32Array(nt), el0: new Uint32Array(nt), nel: new Uint32Array(nt), off: new Float64Array(nt),
     len: new Uint32Array(nt), tris: new Uint32Array(nt), verts: new Uint32Array(nt), occ0: new Uint32Array(nt), nocc_: new Uint16Array(nt),
@@ -56,7 +59,8 @@ export function parseToc(ab: ArrayBuffer | Uint8Array, nelements = -1): TilesToc
   const lo = HEAD + REC * nt;
   for (let i = 0; i < nl; i++) { const e = dv.getUint32(lo + 4 * i, true); if (e >= ne) fail("an element"); t.list[i] = e; }
   t.elFlags.set(u8.subarray(lo + 4 * nl, lo + 5 * nl));
-  for (let i = 0; i < nl; i++) if (t.elFlags[i]! & ~3) fail("an element's flags");
+  if (t.bake & ~BAKE_SHELL || t.levels > 40) fail("levels or bake flags");
+  for (let i = 0; i < nl; i++) if (t.elFlags[i]! & ~7) fail("an element's flags");
   const seen = new Uint8Array(ne);
   for (let i = 0; i < nl; i++) { if (seen[t.list[i]!]) fail("an element twice"); seen[t.list[i]!] = 1; }
   for (let i = 0; i < t.occ.length; i++) { const f = dv.getFloat32(tb + 4 * i, true); if (!(Math.abs(f) < 3e38)) fail("an occluder"); t.occ[i] = f; }
@@ -64,7 +68,7 @@ export function parseToc(ab: ArrayBuffer | Uint8Array, nelements = -1): TilesToc
   for (let i = 0; i < nt; i++) {
     const f = t.flags[i]!, b = 6 * i;
     if (i === 0 ? t.parent[0] !== NONE || t.level[0] !== 0 || t.skip[0] !== nt : t.parent[i]! >= i) fail("a parent");
-    if (f & ~15) fail("flags");
+    if (f & ~31) fail("flags");
     for (let k = 0; k < 6; k++) if (!(Math.abs(t.box[b + k]!) < 3e38)) fail("a box");
     if (!(t.box[b]! <= t.box[b + 3]! && t.box[b + 1]! <= t.box[b + 4]! && t.box[b + 2]! <= t.box[b + 5]!)) fail("a box");
     if (t.el0[i]! + t.nel[i]! > nl) fail("an element range");

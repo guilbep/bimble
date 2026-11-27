@@ -1570,17 +1570,17 @@ int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelement
     if (tb != CC_TILES_HEAD + (uint64_t)CC_TILES_REC * nt + 4 * nl + ((nl + 3) & ~3ull)) return fail(err, "tiles: table size");
     uint64_t tp = (tb + 36 * no + 7) & ~7ull; /* the blobs' start */
     if (with_blobs ? (tp + blobs != n) : (n < tb)) return fail(err, "tiles: section size");
-    if (rd32(p + 40) > CC_TILES_MAX_LEVELS || rd32(p + 44)) return fail(err, "tiles: levels");
+    if (rd32(p + 40) > CC_TILES_MAX_LEVELS || (rd32(p + 44) & ~(uint32_t)CC_TILES_BAKE_SHELL)) return fail(err, "tiles: levels or bake flags");
     if (!nt && (nl || no || blobs)) return fail(err, "tiles: counts");
     toc->p = p, toc->n = n, toc->ntiles = (uint32_t)nt, toc->nelements = (uint32_t)ne, toc->nlist = (uint32_t)nl;
-    toc->nocc = (uint32_t)no, toc->toc = (uint32_t)tb, toc->levels = rd32(p + 40), toc->leaf_target = rd32(p + 28);
+    toc->nocc = (uint32_t)no, toc->toc = (uint32_t)tb, toc->levels = rd32(p + 40), toc->leaf_target = rd32(p + 28), toc->bake = rd32(p + 44);
     toc->blobs = blobs;
     toc->list = p + CC_TILES_HEAD + (size_t)CC_TILES_REC * nt;
     toc->eflags = toc->list + 4 * nl;
     toc->occ = n >= tb + 36 * no ? p + tb : NULL; /* the occluders: absent from a table of contents alone */
     toc->blob_at = (uint32_t)tp;
     for (uint64_t i = 0; i < nl; i++)
-        if (toc->eflags[i] & ~3u) return fail(err, "tiles: an element's flags");
+        if (toc->eflags[i] & ~(unsigned)(CC_TILES_EL_CLOSED | CC_TILES_EL_OPAQUE | CC_TILES_EL_EXTERIOR)) return fail(err, "tiles: an element's flags");
     for (uint64_t i = 0; i < nl; i++)
         if (rd32(toc->list + 4 * i) >= ne) return fail(err, "tiles: an element");
     uint8_t *seen = calloc((size_t)(ne / 8 + 1), 1);
@@ -1600,7 +1600,7 @@ int cc_tiles_check(const uint8_t *p, size_t n, int with_blobs, uint32_t nelement
         cc_tile t;
         cc_tiles_get(toc, i, &t);
         if (i == 0 ? (t.parent != CC_TILES_NONE || t.level != 0 || t.skip != nt) : (t.parent >= i)) return fail(err, "tiles: a parent");
-        if (t.flags & ~15u) return fail(err, "tiles: flags");
+        if (t.flags & ~31u) return fail(err, "tiles: flags");
         for (int k = 0; k < 6; k++)
             if (!(t.box[k] > -3.0e38f && t.box[k] < 3.0e38f)) return fail(err, "tiles: a box");
         if (!(t.box[0] <= t.box[3] && t.box[1] <= t.box[4] && t.box[2] <= t.box[5])) return fail(err, "tiles: a box");
