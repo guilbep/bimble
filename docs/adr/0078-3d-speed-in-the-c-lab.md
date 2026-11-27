@@ -662,8 +662,8 @@ the orchestrator, each measured on the machine's GPU (Apple M1 Pro, Mesa, ANGLE 
    against that element alone (its point); the background answers at once; a proxy's pixel or another camera falls
    back to the scan. The status bar's readout while orbiting reads it too (without the scan: it took 0.7 s of a
    session). **Alternative:** the core's box tree (asynchronous; SIZE3 decodes a cold link on demand).
-47. **What the last picture hides is left out** (`gl/hiz.ts`, `gl/visible.ts`; the setting `draw_visible`, on: not one
-   of Rust's fields, written once set). After a picture is presented its depth is reduced on the GPU to the farthest
+47. **What the last picture hides is left out** (`gl/hiz.ts`, `gl/visible.ts`; the setting `draw_visible`, OFF by default:
+   see below; not one of Rust's fields, written once set). After a picture is presented its depth is reduced on the GPU to the farthest
    depth of each 4 × 4 pixels (a proxy's pixel and the background count as the farthest: a proxy is not a safe
    occluder), read back without waiting (a pixel-pack buffer and a fence), the coarser levels made on the CPU. A still
    frame or a slice of the fill at the same key (camera, size, what is shown, lists, section box, links) leaves out
@@ -677,6 +677,10 @@ the orchestrator, each measured on the machine's GPU (Apple M1 Pro, Mesa, ANGLE 
    queries per batch (decision 12: the open model only, a draw and a query per batch, a frame late); a CPU raster of
    occluders (Rust's #5: 1-3 ms a frame of CPU, 42 → 38 % drawn close up); the baked occluder triangles of TILE1
    (below: the next step).
+   **Off by default**: exact on every synthetic camera, it is not yet on a real project of 17 links (a local folder of
+   IFC files, the ground truth with proxies off: a close camera left thousands of seen elements undrawn, long members
+   missing from the picture, the same on a second pass); the cause is not found (see "What is left"). Until it is, the
+   setting is the user's choice and the panel shows what it leaves out.
 48. **A moving frame shows proxies, not boxes**: a link's batch it could not finish is drawn as the proxy of the
    deepest usable cell holding its leaf (half the budget at most); outlines stay where no cell has one. The fill after
    a stop draws offscreen: the canvas keeps the moving picture and shows the target when the fill is complete or every
@@ -684,8 +688,8 @@ the orchestrator, each measured on the machine's GPU (Apple M1 Pro, Mesa, ANGLE 
    lines. **Alternative:** reprojecting the last complete picture under the moving one (not built: a frame of the
    current budget already shows the building; measured worth less than the triangles saved).
 49. **The budget's cut for tens of thousands of batches** (`gl/cull.ts budgetCutFast`): budgetCut bisected 60 times
-   over every batch (46,800 on his project: 39 ms a frame; his fill's slices took 290 ms of script each and never
-   finished at moving_fps 30). Items are counted once per state in buckets of a sixteenth of an octave of their size,
+   over every batch (a project of 17 links has tens of thousands: 39 ms a frame for 46,800 in `cull_test`; on such a
+   project the fill's slices became script-bound and the picture was never complete at moving_fps 30). Items are counted once per state in buckets of a sixteenth of an octave of their size,
    a frame adds them shifted by each batch's distance, reads the threshold and checks it exactly (one search a batch):
    the same triangles as the bisection on the 20,026-element model, 7.8 ms against 39 ms for 46,800 batches
    (`cull_test`). The batch loop allocates nothing a batch; each model's ranges come from its own batches.
@@ -697,7 +701,8 @@ the orchestrator, each measured on the machine's GPU (Apple M1 Pro, Mesa, ANGLE 
    of latitude"): `draw_visible` (on), `edge_mode` (`screen`, the default; `lines`, exact; `none`), `cull_back` (off:
    exact only for closed solids, and the core does not say which shapes are), `still_px` (0 = off .. 8 pixels: what a
    still frame leaves out; 0 by default: the proxies at 1 px already stand for the far cells), `refill_offscreen` (on),
-   with the existing `moving_fps` (0 = draw everything, kept under 100 ms), `moving_proxies` and `link_gpu_mb`. None
+   with the existing `moving_fps` (0 = draw everything, kept under 100 ms); `draw_visible` is off by default (decision
+   47), `moving_proxies` and `link_gpu_mb`. None
    is one of Rust's fields: each is written to settings.json only once set (as `renderer`). The Settings dialog has
    their rows; the performance report and every `drive.mjs` summary name the values in force (its A/B axes).
 52. **`ccore/tools/drive.mjs`**: the lab driven by real gestures on the machine's GPU and recorded (frames, inputs,
@@ -780,6 +785,13 @@ Out-of-core indexing for a 5 GB IFC: the indexing job reads its cache in place, 
 (the indexing peak; decision 39). Occluder sets measured on real models in a renderer.
 
 From ticket VIS1 (amendment 7):
+
+- **`draw_visible` on a real project of links**: on a local folder of 17 IFC files the culled still frame left out
+  seen elements (decision 47); the synthetic sweep cannot show it. To find: the ground truth's missing elements'
+  boxes against their triangles (a box that does not hold its geometry), the links' rows read before their arrays went
+  (SIZE3's `preBox`), copies placed with a turn. `drive.mjs --project … --do 'camera close; truth …'` reproduces it.
+- **The fill counts what culling left out**: a slice's budget is spent on items the mask drops (many empty slices on a
+  large project): the budget's cut should count the kept items only.
 
 - **The page drawing by tiles (VIS1's follow-up; amendment 6's contract)**: the walk of each link's tiles by projected error
   replaces the per-batch tests (46,800 batches on Pierre's project); its occluder triangles (real surfaces, up to 64
