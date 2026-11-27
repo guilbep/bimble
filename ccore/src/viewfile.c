@@ -459,12 +459,23 @@ static int index_of(Rd *r, size_t ntable, uint64_t *i, Err *e) {
     return 0;
 }
 
-static int mesh(Rd *r, Arena *a, cc_mesh *m, Err *e) {
+/* SIZE3: a mapped read (cc_viewfile_read_mapped) decodes each mesh into a scratch arena to check it
+ * and keeps its counts and where its bytes are (`ref`), not its arrays. */
+static int mesh(Rd *r, cc_viewfile *v, cc_mesh *m, cc_viewfile_ref *ref, Err *e) {
     size_t len;
     const uint8_t *p;
     const char *why;
     if (count(r, 1, &len, e) || take(r, len, &p, e)) return -1;
-    switch (cc_meshcodec_decode(p, len, a, m, &why)) {
+    Arena *a = &v->arena;
+    if (v->lazy) {
+        if (len > UINT32_MAX) return fail(e, E_INVALID, "mesh too large");
+        arena_trim(v->lazy_scratch, (size_t)1 << 22);
+        a = v->lazy_scratch;
+        ref->at = (uint64_t)(p - v->base), ref->len = (uint32_t)len;
+    }
+    int rc = cc_meshcodec_decode(p, len, a, m, &why);
+    if (v->lazy && rc == CC_MC_OK) m->pos = NULL, m->idx = NULL, m->edges = NULL, m->normals = NULL;
+    switch (rc) {
     case CC_MC_OK: return 0;
     case CC_MC_TRUNCATED: return fail(e, E_TRUNC, NULL);
     case CC_MC_BAD_MAGIC: return fail(e, E_INVALID, "not Bimble mesh bytes");
@@ -534,9 +545,16 @@ static int read_meta(Rd *s, cc_viewfile *v, Err *e) {
 static int read_elem(Rd *s, cc_viewfile *v, size_t *shape_cap, size_t *elem_cap, Err *e) {
     size_t n;
     if (count(s, 1, &n, e)) return -1;
+    size_t cap0 = *shape_cap;
     if (grow((void **)&v->shapes, shape_cap, v->nshapes + n, sizeof *v->shapes, e)) return -1;
+    if (v->lazy && *shape_cap != cap0) { /* SIZE3: the shapes' refs beside them */
+        void *q = realloc(v->shape_refs, *shape_cap * sizeof *v->shape_refs);
+        if (!q) return fail(e, E_OOM, NULL);
+        v->shape_refs = q;
+    }
     for (size_t i = 0; i < n; i++) {
-        if (mesh(s, &v->arena, &v->shapes[v->nshapes], e)) return -1;
+        cc_viewfile_ref none;
+        if (mesh(s, v, &v->shapes[v->nshapes], v->lazy ? &v->shape_refs[v->nshapes] : &none, e)) return -1;
         v->nshapes++;
     }
     if (count(s, 7, &n, e)) return -1;
@@ -560,7 +578,7 @@ static int read_elem(Rd *s, cc_viewfile *v, size_t *shape_cap, size_t *elem_cap,
         if (take(s, 1, &kind, e)) return -1;
         if (*kind == 0) {
             x->shape = -1;
-            if (mesh(s, &v->arena, &x->mesh, e)) return -1;
+            if (mesh(s, v, &x->mesh, &x->ref, e)) return -1;
         } else if (*kind == 1) {
             uint64_t k;
             if (varint(s, &k, e)) return -1;
@@ -819,7 +837,109 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
     return rc;
 }
 
+/* ---- SIZE3: a view file read in place (viewfile.h cc_viewfile_read_mapped) ---- */
+int cc_viewfile_read_mapped(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err) {
+    if (n >= 2 && p[0] == 0x1f && p[1] == 0x8b) return cc_viewfile_read(p, n, out, err); /* gzipped: inflated, as before */
+    memset(out, 0, sizeof *out);
+    arena_init(&out->arena, 0);
+    Arena scratch;
+    arena_init(&scratch, 0);
+    out->lazy = 1, out->base = p, out->lazy_scratch = &scratch;
+    /* the sections HLOD and PROP after the others stay out of the read (cc_viewfile_read's cut) */
+    size_t cut = n, at = 12, lazy = 0, pset = 0, hlod = 0;
+    while (n >= 12 && at + 12 <= n) {
+        uint64_t len = 0;
+        for (int i = 0; i < 8; i++) len |= (uint64_t)p[at + 4 + i] << (8 * i);
+        if (len > n - at - 12) break;
+        int is_prop = !memcmp(p + at, "PROP", 4) || !memcmp(p + at, "PRPZ", 4), is_hlod = !memcmp(p + at, "HLOD", 4);
+        if (is_prop && at + 12 + len == n) pset = at;
+        if (is_hlod && !hlod) hlod = at;
+        if ((is_prop || is_hlod) && !lazy) lazy = at;
+        else if (!is_prop && !is_hlod) lazy = 0, hlod = 0;
+        at += 12 + (size_t)len;
+    }
+    if (at == n && lazy) cut = lazy;
+    else if (pset && at == n) cut = pset;
+    if (at != n || !lazy) hlod = 0, pset = at == n ? pset : 0;
+    Err e = {0, 0, NULL, NULL};
+    int rc = read_raw(p, cut, out, &e);
+    out->lazy_scratch = NULL;
+    arena_free(&scratch);
+    if (!rc && hlod) {
+        uint64_t len = 0;
+        for (int i = 0; i < 8; i++) len |= (uint64_t)p[hlod + 4 + i] << (8 * i);
+        out->has_hlod = 1, out->hlod_off = hlod + 12, out->hlod_len = len;
+    }
+    if (!rc && pset && cut < n) {
+        const uint8_t *q = p + pset + 12;
+        size_t ln = n - pset - 12;
+        if (!memcmp(p + pset, "PRPZ", 4)) {
+            if (cc_psets_packed_check(q, ln, ln, out->nelements)) rc = fail(&e, E_INVALID, "psets: entries");
+            else out->has_psets = 1, out->psets_packed = 1, out->psets_off = pset + 12, out->psets_len = ln;
+        } else {
+            uint64_t ne = ln >= 4 ? ((uint64_t)q[0] | (uint64_t)q[1] << 8 | (uint64_t)q[2] << 16 | (uint64_t)q[3] << 24) : 0;
+            int ok = ln >= 4 && ne == out->nelements && cc_psets_head(ne) <= ln;
+            uint64_t last = 0;
+            for (uint64_t i = 0; ok && i < ne; i++) {
+                const uint8_t *x = q + 4 + 4 * i;
+                uint64_t end = (uint64_t)x[0] | (uint64_t)x[1] << 8 | (uint64_t)x[2] << 16 | (uint64_t)x[3] << 24;
+                ok = end >= last && cc_psets_head(ne) + end <= ln;
+                last = end;
+            }
+            if (!ok) rc = fail(&e, E_INVALID, "psets: entries");
+            else out->has_psets = 1, out->psets_off = pset + 12, out->psets_len = ln;
+        }
+    }
+    if (rc) set_msg(err, &e);
+    return rc;
+}
+
+/* Decodes one mesh at `r` of the mapped bytes into `a`; its counts must stay those read. */
+static int decode_ref(const cc_viewfile *v, const cc_viewfile_ref *r, Arena *a, cc_mesh *m) {
+    cc_mesh d;
+    const char *why;
+    if (cc_meshcodec_decode(v->base + r->at, r->len, a, &d, &why) != CC_MC_OK) return -1;
+    if (d.nv != m->nv || d.ni != m->ni || d.ne != m->ne || d.nn != m->nn) return -1;
+    *m = d;
+    return 0;
+}
+
+int cc_viewfile_materialize(cc_viewfile *v, Arena *a, uint64_t *bytes) {
+    if (!v->lazy) return 0;
+    uint64_t b = 0;
+    for (size_t i = 0; i < v->nshapes; i++) {
+        if (decode_ref(v, &v->shape_refs[i], a, &v->shapes[i])) return cc_viewfile_dematerialize(v), -1;
+        b += 12ull * v->shapes[i].nv + 4ull * v->shapes[i].ni + 32ull * v->shapes[i].ne;
+    }
+    for (size_t i = 0; i < v->nelements; i++) {
+        cc_view_element *x = &v->elements[i];
+        if (x->shape >= 0) continue;
+        if (decode_ref(v, &x->ref, a, &x->mesh)) return cc_viewfile_dematerialize(v), -1;
+        b += 12ull * x->mesh.nv + 4ull * x->mesh.ni + 32ull * x->mesh.ne;
+    }
+    if (bytes) *bytes = b;
+    return 0;
+}
+
+void cc_viewfile_dematerialize(cc_viewfile *v) {
+    if (!v->lazy) return;
+    for (size_t i = 0; i < v->nshapes; i++) v->shapes[i].pos = NULL, v->shapes[i].idx = NULL, v->shapes[i].edges = NULL, v->shapes[i].normals = NULL;
+    for (size_t i = 0; i < v->nelements; i++) {
+        cc_mesh *m = &v->elements[i].mesh;
+        m->pos = NULL, m->idx = NULL, m->edges = NULL, m->normals = NULL;
+    }
+}
+
+int cc_viewfile_block(const cc_viewfile *v, size_t b, const uint8_t **p, size_t *n) {
+    if (!v->lazy) return -1;
+    const cc_viewfile_ref *r = b < v->nshapes ? &v->shape_refs[b] : b - v->nshapes < v->nelements ? &v->elements[b - v->nshapes].ref : NULL;
+    if (!r || (b >= v->nshapes && v->elements[b - v->nshapes].shape >= 0)) return -1;
+    *p = v->base + r->at, *n = r->len;
+    return 0;
+}
+
 void cc_viewfile_free(cc_viewfile *v) {
+    free(v->shape_refs);
     free(v->shapes);
     free(v->elements);
     arena_free(&v->arena);

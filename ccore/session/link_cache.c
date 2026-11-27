@@ -121,6 +121,7 @@ cc_link_job *cc_link_job_new(const cc_platform *pf, const char *path) {
 void cc_link_job_free(cc_link_job *j) {
     if (!j) return;
     if (j->vf) cc_viewfile_free(j->vf), free(j->vf);
+    if (j->map) j->pf->unmap_file(j->pf->ctx, j->map); /* SIZE3: after the view file over it */
     if (j->ifc) cc_ifc_scene_free(j->ifc), free(j->ifc);
     free(j->psets); /* M1LINKS */
     free(j->path);
@@ -151,6 +152,26 @@ static cc_viewfile *read_view(const cc_platform *pf, const char *path, uint64_t 
     int rc = cc_viewfile_read((const uint8_t *)p, n, vf, err);
     free(p);
     if (rc) return cc_viewfile_free(vf), free(vf), NULL;
+    return vf;
+}
+
+/* SIZE3: the cache at `path` mapped and read in place (its meshes' counts and places kept, not their
+ * arrays: viewfile.h cc_viewfile_read_mapped); `*map` its mapping. NULL with err (then the caller reads
+ * it as before) when the carrier cannot map it or it does not read. */
+static cc_viewfile *map_view(const cc_platform *pf, const char *path, void **map, cc_error *err) {
+    *map = NULL;
+    if (!pf->map_file || !pf->unmap_file) return NULL;
+    const char *p = NULL;
+    size_t n = 0;
+    void *h = NULL;
+    if (pf->map_file(pf->ctx, path, cc_session_read_limit(path, NULL), &p, &n, &h) != CC_PF_OK) return NULL;
+    cc_viewfile *vf = malloc(sizeof *vf);
+    if (!vf || cc_viewfile_read_mapped((const uint8_t *)p, n, vf, err) || !vf->lazy) {
+        if (vf) cc_viewfile_free(vf), free(vf);
+        pf->unmap_file(pf->ctx, h);
+        return NULL;
+    }
+    *map = h;
     return vf;
 }
 
@@ -365,9 +386,11 @@ static void run(cc_link_job *j) {
         cc_pf_stat cs;
         if (!cp[0] || pf->stat_path(pf->ctx, cp, 1, &cs) != CC_PF_OK || cs.kind != CC_PF_FILE) continue;
         cc_error e;
-        cc_viewfile *vf = read_view(pf, cp, cs.size, &e);
+        void *map = NULL;
+        cc_viewfile *vf = cc_session_fits(pf, cp, cs.size, &e) ? NULL : map_view(pf, cp, &map, &e); /* SIZE3: in place */
+        if (!vf) vf = read_view(pf, cp, cs.size, &e);
         if (vf && vf->has_source && cc_link_cache_matches(vf->source.p, vf->source.n, j->bytes, j->mtime_s, ends, ends_known)) {
-            j->vf = vf, j->from_cache = 1;
+            j->vf = vf, j->from_cache = 1, j->map = map;
             snprintf(j->cache, sizeof j->cache, "%s", cp);
             if (c) snprintf(j->log, sizeof j->log, "%s", alt_log);
             else snprintf(j->log, sizeof j->log, "%s.log.txt", j->path);
@@ -378,6 +401,7 @@ static void run(cc_link_job *j) {
         }
         snprintf(j->note, sizeof j->note, "%s", vf ? "the cache was of another version of the IFC: read again" : "the cache was damaged: read again");
         if (vf) cc_viewfile_free(vf), free(vf);
+        if (map) pf->unmap_file(pf->ctx, map);
     }
     /* read the IFC */
     int fits = have_stat ? cc_session_fits(pf, j->path, j->bytes, &j->err) : 0;
@@ -479,6 +503,15 @@ static void run(cc_link_job *j) {
         if (!lg.oom && pf->write_file(pf->ctx, logp, lg.p, lg.len) == 0) snprintf(j->log, sizeof j->log, "%s", logp);
     }
     buf_free(&lg); /* the session keeps the light scene only (the IFC's went above) */
+    if (j->cache[0]) { /* SIZE3: the cache just written, read in place (its meshes stay in the file) */
+        cc_error me;
+        cc_viewfile *mv = map_view(pf, j->cache, &j->map, &me);
+        if (mv) {
+            buf_free(&vb);
+            j->vf = mv;
+            return;
+        }
+    }
     cc_viewfile *vf = malloc(sizeof *vf);
     if (!vf || cc_viewfile_read((const uint8_t *)vb.p, vb.len, vf, &j->err)) {
         if (vf) cc_viewfile_free(vf), free(vf);

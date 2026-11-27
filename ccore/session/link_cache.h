@@ -68,6 +68,10 @@ typedef struct cc_link_job {
      * SRCE, HLOD, PROP, PRPZ) */
     uint64_t geom_bytes, hlod_stored, psets_raw, sections[8];
     uint32_t hlod_dropped;
+    /* SIZE3: the cache mapped (pf->map_file) and `vf` read in place over it (viewfile.h
+     * cc_viewfile_read_mapped): the link takes the mapping with the view file and unmaps it after
+     * freeing it. NULL: `vf` owns its bytes (no mapping: the wasm module, a gzipped cache, a failure). */
+    void *map;
 } cc_link_job;
 
 /* A new job for `path` (copied). NULL out of memory. */

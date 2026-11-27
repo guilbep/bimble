@@ -17,10 +17,23 @@ static const char *const FAMILY[CC_CAT_COUNT] = {"Concrete", "Steel", "Timber", 
 static void keep_settings(cc_link *k, const cc_link *old);
 static void cc_links_undo_free(cc_session *s);
 
+/* SIZE3: link k's decoded meshes dropped (a lazy link: its view file keeps their counts and places). */
+static void link_evict(cc_link *k) {
+    if (!k->resident) return;
+    if (k->placed) cc_scene_free(&k->pscene), k->placed = 0;
+    cc_viewfile_dematerialize(k->vf);
+    for (size_t i = 0; i < k->scene.nelements && i < k->vf->nelements; i++) k->scene.elements[i].mesh = k->vf->elements[i].mesh;
+    arena_free(&k->marena);
+    k->resident = 0, k->mbytes = 0;
+}
+
 /* What link k holds in memory (its scene), freed; the link itself stays. */
 static void link_drop_data(cc_link *k) {
     if (k->ifc) cc_ifc_scene_free(k->ifc), free(k->ifc), k->ifc = NULL;
+    if (k->vf) link_evict(k);
     if (k->vf) cc_scene_free(&k->scene), cc_viewfile_free(k->vf), free(k->vf), k->vf = NULL;
+    if (k->map) k->map_pf->unmap_file(k->map_pf->ctx, k->map), k->map = NULL; /* SIZE3: after the view file over it */
+    k->pwant = 0;
     if (k->model) cc_scene_free(&k->scene), cc_model_free(k->model), free(k->model), k->model = NULL;
     memset(&k->scene, 0, sizeof k->scene);
     if (k->placed) cc_scene_free(&k->pscene), k->placed = 0; /* LINKF */
@@ -35,11 +48,48 @@ void cc_link_free(cc_link *k) {
     memset(k, 0, sizeof *k);
 }
 
-const cc_scene *cc_link_raw_scene(const cc_link *k) { return k->ifc ? &k->ifc->scene : &k->scene; }
-const cc_scene *cc_link_scene(const cc_link *k) { return k->placed ? &k->pscene : cc_link_raw_scene(k); } /* LINKF */
+static int place_scene(cc_scene *out, const cc_scene *in, double c, double sn, const double t[3]);
+static uint64_t link_use_tick; /* SIZE3: the order links' meshes were last asked (least recently used first) */
+
+const cc_scene *cc_link_rows(const cc_link *k) { return k->ifc ? &k->ifc->scene : &k->scene; }
+
+int cc_link_resident(cc_link *k) {
+    if (!k->vf || !k->vf->lazy) return 0;
+    k->mused = ++link_use_tick;
+    if (!k->resident) {
+        arena_init(&k->marena, 0);
+        uint64_t b = 0;
+        const cc_platform *pf = k->map_pf;
+        double t0 = pf ? pf->now_ms(pf->ctx) : 0;
+        if (cc_viewfile_materialize(k->vf, &k->marena, &b)) { /* out of memory, or the cache changed under its mapping */
+            arena_free(&k->marena);
+            for (size_t i = 0; i < k->vf->nelements; i++) memset(&k->vf->elements[i].mesh, 0, sizeof(cc_mesh));
+            for (size_t i = 0; i < k->vf->nshapes; i++) memset(&k->vf->shapes[i], 0, sizeof(cc_mesh));
+            for (size_t i = 0; i < k->scene.nelements; i++) memset(&k->scene.elements[i].mesh, 0, sizeof(cc_mesh));
+            return -1; /* draws nothing from now on: its counts are 0 */
+        }
+        for (size_t i = 0; i < k->scene.nelements && i < k->vf->nelements; i++) k->scene.elements[i].mesh = k->vf->elements[i].mesh;
+        k->resident = 1, k->mbytes = b;
+        if (pf) cc_log(pf, "bimble-ccore: link %s: its meshes decoded (%.1f MB in %.0f ms)", k->path, (double)b / 1e6, pf->now_ms(pf->ctx) - t0);
+    }
+    if (k->pwant && !k->placed) {
+        if (place_scene(&k->pscene, &k->scene, k->pc, k->ps, k->pt)) cc_scene_free(&k->pscene);
+        else k->placed = 1;
+    }
+    return 0;
+}
+
+const cc_scene *cc_link_raw_scene(const cc_link *k) {
+    if (k->vf && k->vf->lazy) cc_link_resident((cc_link *)k); /* SIZE3: decoded on demand (the session's calls are serial) */
+    return cc_link_rows(k);
+}
+const cc_scene *cc_link_scene(const cc_link *k) {
+    const cc_scene *raw = cc_link_raw_scene(k);
+    return k->placed ? &k->pscene : raw; /* LINKF */
+}
 
 void cc_link_id(const cc_link *k, size_t i, char id[22]) {
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k); /* SIZE3: ids only (the placed scene's rows are the same) */
     if (k->kind == CC_LINK_IFC) { /* cc_ifc_scene_bmsh: the file's text, '0'-padded to 22 */
         cc_str g = k->ifc->info[sc->elements[i].model_index].global_id;
         for (size_t j = 0; j < 22; j++) id[j] = j < g.n ? g.p[j] : '0';
@@ -47,7 +97,7 @@ void cc_link_id(const cc_link *k, size_t i, char id[22]) {
 }
 
 long cc_link_find(const cc_link *k, const char *id) {
-    const cc_scene *sc = cc_link_scene(k);
+    const cc_scene *sc = cc_link_rows(k);
     char t[22];
     for (size_t i = 0; i < sc->nelements; i++) {
         cc_link_id(k, i, t);
@@ -709,7 +759,7 @@ int cc_links_locate(cc_session *s, int i, const char *path, cc_error *err) {
     cc_link_free(&s->links[i]);
     s->links[i] = k;
     s->links_gen++, s->links_mesh_gen++;
-    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, cc_link_scene(&k)->nelements);
+    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, cc_link_rows(&k)->nelements);
     return 0;
 }
 /* ---- end LNK1 ---- */
@@ -777,13 +827,14 @@ static void take(cc_session *s, cc_link *k, cc_link_job *j) {
             return;
         }
         k->vf = j->vf, j->vf = NULL, k->kind = CC_LINK_VIEW;
+        k->map = j->map, k->map_pf = j->pf, j->map = NULL; /* SIZE3: read in place over its mapped cache */
     } else k->ifc = j->ifc, j->ifc = NULL, k->kind = CC_LINK_IFC;
     k->psets = j->psets, k->npsets = j->npsets, j->psets = NULL, j->npsets = 0; /* M1LINKS: a small IFC's */
     k->state = CC_LS_READY;
     link_geo(k); /* LINKF: where the file says it is */
     k->cache = dup_z(j->cache), k->log = dup_z(j->log), k->msg = dup_z(j->note);
     k->cache_mtime_s = j->cache_mtime_s, k->from_cache = j->from_cache;
-    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements (%s, %.0f ms)", k->path, cc_link_scene(k)->nelements,
+    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements (%s, %.0f ms)", k->path, cc_link_rows(k)->nelements,
            j->from_cache ? "its cache" : j->cache[0] ? "read, cache written" : "read", j->ms);
 }
 
@@ -808,8 +859,43 @@ int cc_links_busy(const cc_session *s) {
     return 0;
 }
 
+int cc_links_wants_tick(const cc_session *s) {
+    if (cc_links_busy(s)) return 1;
+    uint64_t total = 0; /* SIZE3: decoded meshes past the budget, dropped after CC_LINK_KEEP_MS */
+    for (size_t i = 0; i < s->nlinks; i++) total += s->links[i].resident ? s->links[i].mbytes : 0;
+    return total > s->link_mesh_budget;
+}
+
+/* SIZE3: decoded link meshes past the budget dropped, the least recently used first, none used in the
+ * last CC_LINK_KEEP_MS (a measure over every link keeps them while it runs). Called at each tick. */
+static void links_trim(cc_session *s) {
+    double now = s->pf->now_ms(s->pf->ctx);
+    uint64_t total = 0;
+    int trimmed = 0;
+    for (size_t i = 0; i < s->nlinks; i++) {
+        cc_link *k = &s->links[i];
+        if (!k->resident) continue;
+        if (k->mused != (uint64_t)k->mused_ms_tick) k->mused_ms_tick = k->mused, k->mused_ms = now; /* used since the last tick */
+        total += k->mbytes;
+    }
+    while (total > s->link_mesh_budget) {
+        cc_link *old = NULL;
+        for (size_t i = 0; i < s->nlinks; i++) {
+            cc_link *k = &s->links[i];
+            if (k->resident && now - k->mused_ms >= s->link_keep_ms && (!old || k->mused < old->mused)) old = k;
+        }
+        if (!old) break;
+        total -= old->mbytes;
+        cc_log(s->pf, "bimble-ccore: link %s: its meshes dropped (%.1f MB; decoded again when needed)", old->path, (double)old->mbytes / 1e6);
+        link_evict(old);
+        trimmed = 1;
+    }
+    if (trimmed && s->pf->trim) s->pf->trim(s->pf->ctx);
+}
+
 int cc_links_tick(cc_session *s) {
     int ch = 0;
+    links_trim(s);
     cc_link_job *j = s->link_job;
     if (j) {
         int at = link_by_uid(s, s->link_job_uid);
@@ -1314,6 +1400,15 @@ int cc_links_sync_placement(cc_session *s) {
         double c, sn, t[3];
         cc_link_placement(s, k, &c, &sn, t);
         int ident = c == 1.0 && sn == 0.0 && t[0] == 0.0 && t[1] == 0.0 && t[2] == 0.0;
+        if (k->vf && k->vf->lazy) { /* SIZE3: the placed scene is made when its meshes are decoded */
+            if (ident ? !k->pwant : k->pwant && k->pc == c && k->ps == sn && !memcmp(k->pt, t, sizeof t)) continue;
+            if (k->placed) cc_scene_free(&k->pscene), k->placed = 0;
+            k->pwant = !ident, k->pc = c, k->ps = sn, memcpy(k->pt, t, sizeof t);
+            if (k->pwant && k->resident && place_scene(&k->pscene, &k->scene, c, sn, t) == 0) k->placed = 1;
+            else if (k->pwant && k->resident) cc_scene_free(&k->pscene), rc = -1;
+            ch = 1;
+            continue;
+        }
         if (ident) {
             if (k->placed) cc_scene_free(&k->pscene), k->placed = 0, ch = 1;
             continue;

@@ -105,11 +105,24 @@ static void check_bytes(const char *what, const Buf *got, const char *want, size
     check_true(label, 0);
 }
 
+/* SIZE3: the mapped reader (in place, meshes checked then forgotten) gives the same verdict, and a
+ * lazy read materialized decodes every mesh to the counts it read. */
+static int mapped_disagree;
 static int read_ok(const void *p, size_t n) {
-    cc_viewfile v;
+    cc_viewfile v, m;
     cc_error err;
     int rc = cc_viewfile_read(p, n, &v, &err);
     cc_viewfile_free(&v);
+    int rm = cc_viewfile_read_mapped(p, n, &m, &err);
+    if ((rc == 0) != (rm == 0)) mapped_disagree++;
+    if (rm == 0 && m.lazy) {
+        Arena a;
+        arena_init(&a, 0);
+        if (cc_viewfile_materialize(&m, &a, NULL)) mapped_disagree++;
+        cc_viewfile_dematerialize(&m);
+        arena_free(&a);
+    }
+    cc_viewfile_free(&m);
     return rc == 0;
 }
 
@@ -319,6 +332,7 @@ static void robustness(void) {
     }
     printf("  3000 damaged files: %d errors\n", nerr);
     check_true("3000 damaged files: no crash, most are errors", nerr > 1500);
+    check_true("SIZE3: the mapped reader agrees with the reader on every prefix and damaged file", mapped_disagree == 0);
     free(b);
 
     Buf x;

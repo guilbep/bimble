@@ -792,7 +792,7 @@ int cc_host_run(const cc_host_config *config) {
         int want_warm = cfg->warm && cc_session_model(cfg->session) && cc_session_rev(cfg->session) != warmed;
         if (want_warm) timeout = 0;
         /* LINKF: a link conversion runs on its own thread (links.h): look every 100 ms */
-        int linking = cc_links_busy(cfg->session);
+        int linking = cc_links_wants_tick(cfg->session); /* SIZE3: also a refused link to retry, meshes to drop */
         if (linking && timeout > 100) timeout = 100;
         int r = net_poll(pfd, n, timeout);
         if (linking && cc_links_tick(cfg->session)) {

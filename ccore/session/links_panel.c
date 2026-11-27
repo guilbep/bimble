@@ -28,7 +28,7 @@ int cc_links_panel_json(struct cc_session *s, Buf *out) {
         char ext[32];
         ext_of(k->name, ext);
         /* LINKF: the conversion's state and the link's numbers (links.h) */
-        const cc_scene *sc = cc_link_scene(k);
+        const cc_scene *sc = cc_link_rows(k); /* SIZE3: counts only (a link read in place is not decoded for it) */
         uint64_t tris = 0;
         for (size_t e = 0; e < sc->nelements; e++) {
             const cc_mesh *lm = cc_scene_local_mesh(sc, e);

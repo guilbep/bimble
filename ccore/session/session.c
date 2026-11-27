@@ -34,6 +34,8 @@ cc_session *cc_session_new(const cc_platform *pf) {
     cc_vis_init(&s->vis);
     s->link_sel = -1;
     s->link_cache_min = CC_LINK_CACHE_MIN; /* LINKF */
+    s->link_mesh_budget = CC_LINK_MESH_BUDGET; /* SIZE3 */
+    s->link_keep_ms = CC_LINK_KEEP_MS;
     s->edges = s->hatching = 1; /* Q2: bimble-render lib.rs:1431-1432 defaults */
     return s;
 }

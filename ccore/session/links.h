@@ -97,7 +97,21 @@ struct cc_link {
      * cache's stays in its file (vf->has_psets: read lazily) */
     char *psets;
     size_t npsets;
+    /* SIZE3 (ADR 0079 amendment): a cache read in place. `map` is the cache's mapping (pf->map_file) that
+     * `vf` reads (lazy: its meshes' counts only); the meshes are decoded on demand (cc_link_scene,
+     * cc_link_raw_scene) into `marena` (`mbytes`, resident), and dropped again by cc_links_tick past
+     * the session's budget (link_mesh_budget), least recently used first, never one used in the last
+     * CC_LINK_KEEP_MS. `pwant`: its placement is not the identity (pc, ps, pt), pscene built once
+     * resident. */
+    void *map;
+    int resident, pwant;
+    Arena marena;
+    uint64_t mbytes, mused, mused_ms_tick;
+    double mused_ms;
+    const struct cc_platform *map_pf; /* who mapped it */
 };
+#define CC_LINK_MESH_BUDGET ((uint64_t)256 << 20) /* SIZE3: decoded link meshes kept at rest, all links */
+#define CC_LINK_KEEP_MS 10000.0                    /* SIZE3: a link used this recently is kept past the budget */
 
 /* ---- LINKF (ADR 0079, DEVIATIONS 37): link a folder, conversions in turn, positioning ----
  * A link of an IFC (or a .bimbleview) at least s->link_cache_min bytes is not read in the call: it
@@ -155,8 +169,18 @@ void cc_links_undo_clear_redo(cc_session *s);
  * survey coordinates, R = map turn of the link - the host's; else none), then the manual rotation
  * about the host's world Z axis and the offset: R_m (R_r w + t_r) + move. */
 void cc_link_placement(const cc_session *s, const cc_link *k, double *c, double *sn, double t[3]);
-/* The link's scene as read (its own world), whatever its placement: the /mesh trailer's. */
+/* The link's scene as read (its own world), whatever its placement: the /mesh trailer's. SIZE3: a link
+ * read in place has its meshes decoded first (cc_link_scene too); cc_link_rows answers without: its
+ * rows, origin, shapes' and meshes' counts are right, its arrays may be NULL (what a list, a count or
+ * an id needs). */
 const cc_scene *cc_link_raw_scene(const cc_link *k);
+const cc_scene *cc_link_rows(const cc_link *k);
+/* SIZE3: link k's meshes decoded now (they stay until cc_links_tick drops them past the budget). 0 ok
+ * (or nothing to do), -1 out of memory or a cache changed on disk (the link then draws nothing). */
+int cc_link_resident(cc_link *k);
+/* SIZE3: whether the carrier should call cc_links_tick: a conversion queued or running, a refused link
+ * waiting for its automatic retry, or decoded link meshes past the budget waiting to be dropped. */
+int cc_links_wants_tick(const cc_session *s);
 /* Brings every ready link's placed scene (cc_link_scene) up to date with its placement and the
  * host's georeference (the session calls it before each call and each /mesh). 1 when one changed
  * (links_gen bumped). -1 out of memory (that link drawn unplaced). */

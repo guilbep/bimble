@@ -199,6 +199,8 @@ typedef struct cc_session {
     uint32_t link_uid_next;
     uint64_t link_cache_min;      /* CC_LINK_CACHE_MIN unless the carrier sets less (BIMBLE_LINK_CACHE_MIN) */
     int link_no_beside;           /* 1: caches only in the platform's cache folder (BIMBLE_LINK_CACHE_BESIDE=0) */
+    uint64_t link_mesh_budget;    /* SIZE3: links.h CC_LINK_MESH_BUDGET unless the carrier sets another (BIMBLE_LINK_MESH_BUDGET_MB) */
+    double link_keep_ms;          /* SIZE3: links.h CC_LINK_KEEP_MS unless the carrier sets another (BIMBLE_LINK_KEEP_MS, tests) */
     struct cc_links_undo *links_undo, *links_redo; /* link_folder's undo and redo steps (links.h) */
     size_t nlinks_undo, nlinks_redo, caplinks_undo, caplinks_redo;
     /* ---- end LNK1 ---- */

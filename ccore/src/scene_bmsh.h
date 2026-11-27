@@ -50,6 +50,12 @@ int cc_scene_bmsh3(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_
  *        version 3 writes j-th (first-use order); the normals' w come back 0 (BMG1 drops it).
  * A reader checks every count against the header and what is left, never trusts a length. */
 int cc_scene_bmsh4(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_t rev, Buf *out, cc_error *err);
+/* SIZE3: the same, each block's BMG1 bytes appended by `blk` (shape `i` when `shape`, else element i's own
+ * mesh; 0 ok, -1 not available) instead of encoded from the scene's arrays: a link read in place serves
+ * its cache's own bytes, its meshes not decoded (only their counts are read). */
+typedef int (*cc_bmsh_block_fn)(const void *ctx, int shape, size_t i, Buf *out);
+int cc_scene_bmsh4_blocks(const cc_scene *s, cc_bmsh_id_fn id, const void *ctx, uint32_t rev, cc_bmsh_block_fn blk, const void *bctx,
+                          Buf *out, cc_error *err);
 /* SIZE2: BMSH version 4 bytes (untrusted) to the version 3 bytes they stand for, appended to `out`; every
  * count bounded by the header and the input (at most `max_out` bytes written: a zip-bomb guard). 0 ok,
  * -1 with `err`. */

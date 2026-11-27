@@ -154,14 +154,14 @@ static int links_lazy(cc_session *s, Buf *out) {
         double c = 1, sn = 0, t[3] = {0, 0, 0}, o[3] = {0, 0, 0};
         if (k->kind) {
             cc_link_placement(s, k, &c, &sn, t);
-            const double *lo = cc_link_raw_scene(k)->origin;
+            const double *lo = cc_link_rows(k)->origin; /* SIZE3: no mesh decoded for the trailer */
             o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
         }
         buf_append(out, &c, 8), buf_append(out, &sn, 8);
         for (int q = 0; q < 3; q++) buf_append(out, &o[q], 8);
         int32_t col = k->colour;
         buf_append(out, &col, 4);
-        put_u32(out, k->kind ? (uint32_t)cc_link_raw_scene(k)->nelements : 0u);
+        put_u32(out, k->kind ? (uint32_t)cc_link_rows(k)->nelements : 0u);
         put_u32(out, (uint32_t)s->links_mesh_gen);
     }
     return out->oom ? -1 : 0;
@@ -206,7 +206,7 @@ static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error 
         buf_clear(&one);
         one.oom = 0;
         if (form == 3) rc = cc_scene_bmsh3(cc_link_raw_scene(k), link_bmsh_id, k, rev, &one, err);
-        else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
+        else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(cc_link_raw_scene(k), rev, &one, err); /* SIZE3: decoded first */
         if (!rc && (one.oom || one.len > UINT32_MAX)) rc = fail(err, "out of memory");
         if (!rc) put_u32(out, (uint32_t)one.len), buf_append(out, one.p, one.len);
     }
@@ -334,6 +334,16 @@ int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, u
 }
 
 /* ---- SIZE2: a link's mesh on its own, BMSH version 4 (mesh.h) ---- */
+/* SIZE3: block i's BMG1 bytes from a lazy view file (viewfile.h cc_viewfile_block). */
+static int link_block(const void *ctx, int shape, size_t i, Buf *out) {
+    const cc_viewfile *v = ctx;
+    const uint8_t *p;
+    size_t n;
+    if (cc_viewfile_block(v, shape ? i : v->nshapes + i, &p, &n)) return -1;
+    buf_append(out, p, n);
+    return out->oom ? -1 : 0;
+}
+
 int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int has_key, uint64_t key, const char **p, size_t *n) {
     Buf *out = &s->link_mesh_out;
     buf_free(out); /* the last answer's bytes go (a link's mesh is large: none is kept between calls) */
@@ -350,7 +360,10 @@ int cc_link_mesh(cc_session *s, uint64_t k, const char *name, size_t nname, int 
      * bare request (index alone) of no such link */
     if ((!l || !l->kind) && (name || has_key)) st = 204;
     else if (!l || !l->kind) st = 404, buf_puts(out, "no such link");
-    else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
+    else if (l->vf && l->vf->lazy && !l->resident) { /* SIZE3: its cache's own codec bytes, no mesh decoded */
+        if (cc_scene_bmsh4_blocks(cc_link_rows(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, link_block, l->vf, out, &err))
+            buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
+    } else if (cc_scene_bmsh4(cc_link_raw_scene(l), link_bmsh_id, l, (uint32_t)s->links_mesh_gen, out, &err))
         buf_clear(out), out->oom = 0, buf_puts(out, err.msg), st = 500;
     *p = out->p ? out->p : "", *n = out->len;
     return st;
@@ -385,7 +398,7 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
             if (cc_gunzip((const unsigned char *)out->p, out->len, cap, &raw, &why)) buf_free(&raw), buf_clear(out), buf_puts(out, "proxies: damaged"), st = 500;
             else buf_free(out), *out = raw;
         }
-        if (st == 200 && cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_raw_scene(l)->nelements, &err))
+        if (st == 200 && cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_rows(l)->nelements, &err))
             buf_clear(out), buf_puts(out, err.msg), st = 500;
     }
     *p = out->p ? out->p : "", *n = out->len;

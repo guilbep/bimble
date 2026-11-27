@@ -305,6 +305,10 @@ static int serve(unsigned port, Serve *sv) {
         if (cm && *cm) ses->link_cache_min = strtoull(cm, NULL, 10);
         const char *cb = cc_host_getenv("BIMBLE_LINK_CACHE_BESIDE"); /* "0": only the cache folder */
         ses->link_no_beside = cb && !strcmp(cb, "0");
+        const char *mb = cc_host_getenv("BIMBLE_LINK_MESH_BUDGET_MB"); /* SIZE3: decoded link meshes kept at rest */
+        if (mb && *mb) ses->link_mesh_budget = strtoull(mb, NULL, 10) << 20;
+        const char *km = cc_host_getenv("BIMBLE_LINK_KEEP_MS"); /* SIZE3: tests */
+        if (km && *km) ses->link_keep_ms = strtod(km, NULL);
     }
     const char *model = sv->model;
     if (model && *model) {

@@ -2061,7 +2061,7 @@ static int m1_all(cc_session *s, Arena *a, int what, cc_str keep, cc_strs *out) 
     for (size_t li = 0; li < s->nlinks; li++) {
         const cc_link *k = &s->links[li];
         if (!k->kind) continue;
-        const cc_scene *ls = cc_link_scene(k);
+        const cc_scene *ls = cc_link_rows(k); /* SIZE3: rows only */
         size_t ln = strlen(k->name);
         for (size_t i = 0; i < ls->nelements; i++) {
             cc_str cls, nm, st, mt;
@@ -2117,7 +2117,7 @@ static int m1_rule_ids(cc_session *s, const char *cls, const char *storey, const
     for (size_t li = 0; li < s->nlinks; li++) {
         const cc_link *k = &s->links[li];
         if (!k->kind || (link && strcmp(link, k->name))) continue;
-        const cc_scene *ls = cc_link_scene(k);
+        const cc_scene *ls = cc_link_rows(k); /* SIZE3: rows only */
         for (size_t i = 0; i < ls->nelements; i++) {
             cc_str c, nm, st, mt;
             cc_link_texts(k, i, &c, &nm, &st, &mt);
