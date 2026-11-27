@@ -1010,7 +1010,7 @@ export interface SettingsValues {
   link_max_deg?: number;
   /** GPU2: `bimble-ccore open` starts a Chromium-family browser in an app window with the WebGPU flags (native host only). */
   open_app?: boolean;
-  /** VIS1 (ADR 0078 amendment 5): "Draw only what can be seen" (not Rust's; absent from an older core: on). */
+  /** VIS1 (ADR 0078 amendment 7): "Draw only what can be seen" (not Rust's; absent from an older core: on). */
   draw_visible?: boolean;
 }
 /** `query settings`. */

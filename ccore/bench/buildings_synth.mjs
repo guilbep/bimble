@@ -1,4 +1,4 @@
-// Synthetic buildings for "draw only what can be seen" (ticket VIS1, ADR 0078 amendment 5). Synthetic only.
+// Synthetic buildings for "draw only what can be seen" (ticket VIS1, ADR 0078 amendment 7). Synthetic only.
 //   import { makeBuildingFolder, buildingModel } from "../bench/buildings_synth.mjs";
 // A building as a linked IFC file of an imported project looks: an outer shell (facade panels, a slab per
 // storey and a roof) around MANY small inner elements per storey (inner walls, pipes, ducts, sprinkler heads,

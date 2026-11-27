@@ -407,7 +407,7 @@ export function perfReport(names: boolean, file: string | null): string {
   return L.join("\n") + "\n";
 }
 
-// ---- VIS1 (ADR 0078 amendment 5): the number the owner feels, behind the panel's Record: the triangles the last frame
+// ---- VIS1 (ADR 0078 amendment 7): the number the owner feels, behind the panel's Record: the triangles the last frame
 // submitted against those of the elements with at least one pixel on screen (the viewport's id pass: every shown
 // element's faces as ids into an offscreen target, read back; one pass, at the recording's start only) ----
 export interface PerfTruth { at: number; submitted: number; seen: number; seenTris: number; pixels: number }

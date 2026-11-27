@@ -1,4 +1,4 @@
-// A depth pyramid of the last picture (ticket VIS1, ADR 0078 amendment 5): "what is behind something else is
+// A depth pyramid of the last picture (ticket VIS1, ADR 0078 amendment 7): "what is behind something else is
 // skipped". After a frame is presented, its depth (gl/target.ts: the faces drawn, pushed back by their polygon
 // offset) is reduced on the GPU to the farthest depth of each BLOCK x BLOCK pixels, where a pixel of a proxy (the
 // element attachment's 0xffffff: a proxy is not a safe occluder) or of the background counts as the farthest; that

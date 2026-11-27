@@ -1,4 +1,4 @@
-// Draw only what can be seen (ticket VIS1, ADR 0078 amendment 5): LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_visible.mjs
+// Draw only what can be seen (ticket VIS1, ADR 0078 amendment 7): LAB_GPU=vulkan CCORE_PORT_BASE=auto node ccore/test/lab_visible.mjs
 // Six synthetic buildings (bench/buildings_synth.mjs: a shell around thousands of small inner elements a storey) linked
 // into a new project on the native host, opened by tools/drive.mjs's Drive (Vite, ONE headless Chromium; LAB_GPU picks
 // SwiftShader by default, the machine's GPU with vulkan). A sweep of 60 cameras (20 far: around the site at several

@@ -1,4 +1,4 @@
-// The 3D view's offscreen target (ticket VIS1, ADR 0078 amendment 5). The frame's faces are drawn into three colour
+// The 3D view's offscreen target (ticket VIS1, ADR 0078 amendment 7). The frame's faces are drawn into three colour
 // attachments and a depth texture: the shaded colour, the element (its index + 1 in 24 bits, the model + 1 in alpha;
 // 0: background; 0xffffff: a face of no element, a proxy), the face's normal; then one full-screen pass presents the
 // colour on the canvas and draws the edges found on screen: where the element changes between neighbouring pixels

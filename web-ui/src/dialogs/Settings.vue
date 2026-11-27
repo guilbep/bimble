@@ -136,7 +136,7 @@ const close = () => { currentDialog.value = null; };
             <option v-for="mb in linkGpuChoices" :key="mb" :value="mb">{{ tx('settings.linkGpu.mb', { mb }) }}</option>
           </select></label>
         <p v-if="s?.applies.link_gpu_mb" class="note" data-bb="settings-link-gpu-note">{{ tx('settings.linkGpuNote') }}</p>
-        <!-- VIS1 (ADR 0078 amendment 5): draw only what can be seen (draw_visible, not Rust's) -->
+        <!-- VIS1 (ADR 0078 amendment 7): draw only what can be seen (draw_visible, not Rust's) -->
         <label v-if="s?.applies.draw_visible" class="row"><span>{{ tx('settings.visible') }}</span>
           <input type="checkbox" :checked="v.draw_visible !== false" data-bb="settings-draw-visible" data-setting="draw_visible" @change="set({ draw_visible: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s?.applies.draw_visible" class="note" data-bb="settings-visible-note">{{ tx('settings.visibleNote') }}</p>

@@ -210,7 +210,7 @@ export function batchShown(b: Batch, items: ArrayLike<number>, shown: Uint8Array
   b.vcum = v, b.shown = n;
 }
 
-// ---- VIS1 (ADR 0078 amendment 5, P0-c): the budget's cut for tens of thousands of batches. budgetCut bisects the
+// ---- VIS1 (ADR 0078 amendment 7, P0-c): the budget's cut for tens of thousands of batches. budgetCut bisects the
 // threshold 60 times, each time over every batch (a binary search in each): on a project of 17 links (46,800
 // batches) that is millions of searches a moving frame. Here each batch's items are counted once per state in
 // buckets of their size (a sixteenth of an octave), a frame adds the buckets shifted by the batch's distance, the

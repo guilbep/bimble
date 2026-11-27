@@ -1,4 +1,4 @@
-// "Draw only what can be seen" (ticket VIS1, ADR 0078 amendment 5): per batch, which of its items are not hidden
+// "Draw only what can be seen" (ticket VIS1, ADR 0078 amendment 7): per batch, which of its items are not hidden
 // behind the last picture's depth (gl/hiz.ts), as runs of consecutive items, so a frame submits those ranges only
 // (merged faces: one multi-draw of the ranges where WEBGL_multi_draw exists; instanced copies: a draw a run). The
 // batch's box is tested first: a batch wholly hidden costs one test. Shared with the WebGPU renderer: it needs the

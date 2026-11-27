@@ -1507,7 +1507,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const EDGE_MIN_PX = 16; // LNK3D (F): a batch's edges are drawn when its box spans at least this (device px)
   const MOVING_PROXY_PX = 3, STILL_PROXY_PX = 1, PROXY_MIN_TRIS = 250000, PROXY_STEP_TRIS = 20000, PROXY_STEP_MS = 25;
   let lastCamKey: string | null = null, stillDue = 0, lastFrameAt = 0, lastFrameTris = 0, trisPerMs = 0, lastBudgeted = false;
-  // ---- VIS1 (P0-a, ADR 0078 amendment 5): "moving" follows input, not only the camera key between two frames
+  // ---- VIS1 (P0-a, ADR 0078 amendment 7): "moving" follows input, not only the camera key between two frames
   // drawn: a frame within MOTION_MS (or twice the last frame's time) of a camera change is a moving frame, and
   // the fill waits as long after the last input (a held pointer, a wheel step, a key). ADR 0074's 200 ms is a
   // floor for every setting: with moving_fps 0 ("Draw everything") the whole picture is drawn while moving as

@@ -1,4 +1,4 @@
-// Where a frame's time goes (ticket VIS1, ADR 0078 amendment 5): a log of the frames the WebGL2 viewport drew,
+// Where a frame's time goes (ticket VIS1, ADR 0078 amendment 7): a log of the frames the WebGL2 viewport drew,
 // for ccore/tools/drive.mjs and the lab tests. Per frame: its start, kind (m moving, s a slice of the fill, w a
 // whole picture, i the ground-truth pass), the script's ms (draw start to its last call), draw calls, triangles
 // submitted, batches culled, proxies and outlines drawn, and the GPU's ms: EXT_disjoint_timer_query_webgl2 when
