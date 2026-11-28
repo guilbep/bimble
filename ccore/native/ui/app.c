@@ -869,7 +869,16 @@ int main(int argc, char **argv) {
     if (model) slog("asked to open %s", model);
 
     /* the window and the GPU */
+#ifdef __APPLE__
+    /* MACAPP: SDL's Metal backend needs a video driver with Metal views (Cocoa): SDL's offscreen driver has none ("No
+     * supported SDL_GPU backend found!", measured on GitHub's runners). Offscreen on macOS is Cocoa with a hidden window
+     * never claimed (the frames go to the app's own textures, as everywhere offscreen), no Dock icon, density 1. */
+    if (a->offscreen) SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
+    SDL_WindowFlags wflags = a->offscreen ? SDL_WINDOW_HIDDEN : SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#else
     if (a->offscreen) SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+    SDL_WindowFlags wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
     /* NUI3: the app id (Wayland's app_id, X11's class: a compositor's window rules; the .desktop file's name) */
     SDL_SetHint(SDL_HINT_APP_ID, "ch.bimble.bimble");
     SDL_SetAppMetadata("Bimble", CC_RELEASE_VERSION, "ch.bimble.bimble");
@@ -878,9 +887,9 @@ int main(int argc, char **argv) {
     a->dev = nv_gpu_device(&a->gpu_name, &a->gpu_driver);
     if (!a->dev) { no_gpu("no GPU device", model); slog("no GPU device: %s", SDL_GetError()); slog_close(a); return 3; }
     slog("GPU %s, driver %s; video driver %s; %s", a->gpu_name, a->gpu_driver, SDL_GetCurrentVideoDriver(), a->offscreen ? "offscreen" : "a window");
-    a->win = SDL_CreateWindow("Bimble", (int)a->lw, (int)a->lh, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    a->win = SDL_CreateWindow("Bimble", (int)a->lw, (int)a->lh, wflags);
 #ifdef __APPLE__
-    /* MACAPP: SDL's offscreen video driver has no Metal view to claim; offscreen draws into its own textures only */
+    /* MACAPP: offscreen's hidden window is not claimed: no swapchain, the frames go to the app's own textures */
     int claim = !a->offscreen;
 #else
     int claim = 1;

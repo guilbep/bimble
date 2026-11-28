@@ -5,8 +5,8 @@
 #                                                      .bimble .bimbleview .ifc), bimble.icns, licences, signed
 #        out/macapp/bimble-<v>-macos-<arch>.dmg        bimble.app, an Applications link, README.txt (first launch)
 #        out/macapp/bimble-<v>-macos-<arch>.dSYM.zip   the debug information (native/symbolize.sh with atos)
-#   <arch>: arm64, x86_64, or universal (a lipo'd binary). DMG_FORMAT: ULFO (default: lzfse, macOS 10.11 and newer;
-#   the sizes measured in docs/adr/0088), UDZO or ULMO.
+#   <arch>: arm64, x86_64, or universal (a lipo'd binary). DMG_FORMAT: ULMO (default: lzma, macOS 10.15 and newer;
+#   arm64: 2.40 MB, against 3.09 ULFO and 3.25 UDZO, docs/adr/0088), UDZO or ULFO.
 # Signing: ad hoc (codesign -s -) by default, which Apple Silicon needs to run anything at all. Developer ID later,
 # without rework: SIGN_IDENTITY="Developer ID Application: ..." (a keychain holding it) signs with the hardened runtime
 # (--options runtime, entitlements.plist) and a secure timestamp; then NOTARIZE=1 with NOTARY_KEY (an App Store
@@ -26,7 +26,7 @@ O=out/macapp
 APP=$O/bimble.app
 NAME=bimble-$V-macos-$arch
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
-FMT=${DMG_FORMAT:-ULFO}
+FMT=${DMG_FORMAT:-ULMO}
 rm -rf "$APP" "$O/stage" "$O/$NAME.dmg" "$O/$NAME.dSYM.zip"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/licences"
 # 1. the executable, Info.plist, the icon (from packaging/icon.png, 1024 px), the licences

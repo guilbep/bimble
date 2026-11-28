@@ -117,6 +117,38 @@ make native-test                  # = ccore/ci/run.sh native (the CI job ccore-n
 - A crash: `ccore/native/symbolize.sh [session folder]` turns the session log's raw stack into functions and
   lines with `ccore/out/app/debug/<build id>.debug` (kept by `native/build.sh app`, the last 20 builds).
 
+## 2c. The native app on macOS (`bimble.app`, ADR 0088)
+
+The same `bimble` on SDL3's Metal backend, delivered as `bimble-<version>-macos-<arm64|x86_64>.dmg` (signed ad hoc,
+not notarised). Built on a Mac only (clang, Xcode's command-line tools); the CI loop is `.github/workflows/macapp.yml`
+(arm64 on `macos-15`, x86_64 under Rosetta on the same runner, an Intel probe on `macos-15-intel`).
+
+```sh
+ccore/native/macos/deps.sh ~/.local/macdeps          # once: SDL 3, brotli, FreeType, static, pinned (~2 min)
+ccore/deps.sh                                        # once: the boolean kernel
+export PKG_CONFIG_PATH=~/.local/macdeps/lib/pkgconfig
+ccore/native/build.sh app                            # out/app/bimble (+ out/app/debug/<UUID>.dSYM), signed ad hoc
+ccore/native/macos/bundle.sh                         # out/macapp/bimble.app and bimble-<v>-macos-<arch>.dmg
+node ccore/test/macapp_test.mjs                      # the image mounted and checked
+NATIVE_APP=1 ccore/build.sh release                  # the bimble-ccore archive and the .dmg (the release job)
+```
+
+- `CMAKE_OSX_ARCHITECTURES=x86_64` builds the Intel one on an arm64 Mac (deps, kernel and app alike: one prefix per
+  architecture); `MACOSX_DEPLOYMENT_TARGET` (default 11.0) the oldest macOS. No tcc: `app` and `asan` only.
+- **Shaders**: SDL's Metal backend takes MSL. The MSL is committed beside the SPIR-V (`shaders/gen/*.msl.h`, translated
+  from that SPIR-V by SDL_shadercross). After a shader change, on Linux or a Mac: `ccore/native/macos/shadercross.sh`
+  (pinned, ~40 s, nothing installed system-wide), then `ccore/native/build.sh shaders` (SPIR-V and MSL) or
+  `shaders --msl` (the MSL only). `shaders --check` (in `ci/run.sh native`) fails on a stale `.msl.h`.
+- **Where things go**: settings `~/Library/Application Support/Bimble` (bimble-ccore's too); link caches beside the IFC
+  file as on Linux, the fallback folder (a read-only folder) `~/Library/Caches/bimble` (both products); session logs
+  `~/Library/Logs/bimble/sessions` (`bimble --last-log`).
+- **A crash**: the session log's stack (absolute addresses), the executable's base and LC_UUID; `ccore/native/symbolize.sh
+  <session folder>` runs `atos` against `out/app/debug/<UUID>.dSYM` (or `DSYM=` one unpacked from the release's
+  `.dSYM.zip`).
+- **The owner's Mac, one command** (the same `summary.md` as on Linux, for Asahi versus macOS on the same GPU):
+  `/Applications/bimble.app/Contents/MacOS/bimble --offscreen --preset orbit-zoom --out ~/bimble-run model.ifc`
+  (`--set renderer_path=tiles`, `--truth`, `--compare` as on Linux).
+
 ## 3. Tests
 
 **One suite (seconds).** The C suites are `ccore/test/<name>_test.c`; name them without `_test`:

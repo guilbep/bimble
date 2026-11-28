@@ -100,6 +100,11 @@ fail), collaboration, rebar, steel. See [ROADMAP.md](ROADMAP.md).
   with a native 3D view and the lab's ribbon in one window: `./bimble project.bimble` (no file: the
   Home screen). It needs SDL 3.4 or newer and a Vulkan driver; for large linked projects. Build it
   from source with `make native` (SDL3 and FreeType installed).
+- **Native macOS app (preview, ADR 0088):** `bimble-<version>-macos-arm64.dmg` (Apple Silicon) or
+  `-macos-x86_64.dmg` (Intel; checked on CI only) on the same prerelease; drag `bimble.app` to Applications. It is
+  signed ad hoc, not notarised: the first time, on macOS 15 and newer, open it, then System Settings → Privacy &
+  Security → **Open Anyway** ([Apple](https://support.apple.com/en-us/102445)); on macOS 11–14, right-click → Open;
+  or once in Terminal `xattr -dr com.apple.quarantine /Applications/bimble.app`. macOS 11 or newer.
 - **Homebrew:** `brew tap guilbep/bimble https://github.com/guilbep/bimble && brew install
   bimble-ccore`.
 - **For agents:** `bimble-ccore mcp model.bimble` is an MCP server over stdio (`ccore/README.md`).

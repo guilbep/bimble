@@ -125,7 +125,7 @@ jobs:
       - name: bimble.app and the disk image (the formats measured)
         working-directory: ccore
         run: |
-          for f in UDZO ULMO ULFO; do DMG_FORMAT=$f native/macos/bundle.sh | tee -a "../$OUT/bundle.log"; done
+          for f in UDZO ULFO ULMO; do DMG_FORMAT=$f native/macos/bundle.sh | tee -a "../$OUT/bundle.log"; done
           ls -l out/macapp | tee -a "../$OUT/bundle.log"
       - name: test/macapp_test.mjs (the image)
         working-directory: ccore
@@ -217,7 +217,7 @@ jobs:
           lipo -create "$a" "$x" -output "$st/bimble.app/Contents/MacOS/bimble"
           codesign --force --sign - "$st/bimble.app" && codesign --verify --strict "$st/bimble.app"
           out=$(basename "$dmg" | sed 's/-arm64\.dmg$/-universal.dmg/')
-          hdiutil create -quiet -volname "Bimble" -srcfolder "$st" -fs HFS+ -format ULFO -ov "$out"
+          hdiutil create -quiet -volname "Bimble" -srcfolder "$st" -fs HFS+ -format ULMO -ov "$out"
           {
             echo "### Two images or one"
             echo '```'
