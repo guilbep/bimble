@@ -72,6 +72,50 @@ static const uint32_t SPV_SEEN[] =
 static const uint32_t SPV_GATE[] =
 #include "gate.comp.h"
     ;
+#ifdef __APPLE__ /* MACAPP: the MSL of the same SPIR-V (render_int.h NV_SHADER) */
+static const char MSL_PROXY[] =
+#include "face_proxy.vert.msl.h"
+    ;
+static const char MSL_FACE_WORLD2[] =
+#include "face_world.vert.msl.h"
+    ;
+static const char MSL_FACE_INST2[] =
+#include "face_inst.vert.msl.h"
+    ;
+static const char MSL_FACE_ID_FRAG2[] =
+#include "face_id.frag.msl.h"
+    ;
+static const char MSL_FACE_WORLD_C[] =
+#include "face_world_clip.vert.msl.h"
+    ;
+static const char MSL_FACE_INST_C[] =
+#include "face_inst_clip.vert.msl.h"
+    ;
+static const char MSL_PROXY_C[] =
+#include "face_proxy_clip.vert.msl.h"
+    ;
+static const char MSL_FACE_ND[] =
+#include "face_id_nodiscard.frag.msl.h"
+    ;
+static const char MSL_HIZ0[] =
+#include "hiz0.comp.msl.h"
+    ;
+static const char MSL_HIZN[] =
+#include "hizn.comp.msl.h"
+    ;
+static const char MSL_HIZN2[] =
+#include "hizn2.comp.msl.h"
+    ;
+static const char MSL_TTEST[] =
+#include "ttest.comp.msl.h"
+    ;
+static const char MSL_SEEN[] =
+#include "seen.comp.msl.h"
+    ;
+static const char MSL_GATE[] =
+#include "gate.comp.msl.h"
+    ;
+#endif
 
 typedef struct nv_render R;
 static uint32_t *seen_cpu; /* per element: the last frame that showed it (seen.comp, read back) */
@@ -822,10 +866,9 @@ void nv_render_tiles_squeeze(R *r) { r->tl.squeeze = 1, r->tl.noroom_frame = r->
 nv_tiles_opts nv_render_get_tiles_opts(const R *r) { return r->tl.o; }
 
 /* ---- pipelines ---- */
-static SDL_GPUShader *shader(SDL_GPUDevice *dev, const uint32_t *code, size_t bytes, SDL_GPUShaderStage st, uint32_t samplers, uint32_t storage,
-                             uint32_t uniforms) {
-    SDL_GPUShaderCreateInfo ci = {.code_size = bytes, .code = (const Uint8 *)code, .entrypoint = "main", .format = SDL_GPU_SHADERFORMAT_SPIRV,
-                                  .stage = st, .num_samplers = samplers, .num_storage_buffers = storage, .num_uniform_buffers = uniforms};
+static SDL_GPUShader *shader(SDL_GPUDevice *dev, nv_shader_code c, SDL_GPUShaderStage st, uint32_t samplers, uint32_t storage, uint32_t uniforms) {
+    SDL_GPUShaderCreateInfo ci = {.stage = st, .num_samplers = samplers, .num_storage_buffers = storage, .num_uniform_buffers = uniforms};
+    ci.format = nv_shader_pick(dev, c, &ci.code, &ci.code_size, &ci.entrypoint);
     return SDL_CreateGPUShader(dev, &ci);
 }
 static SDL_GPUGraphicsPipeline *gpipe(R *r, SDL_GPUShader *vs, SDL_GPUShader *fs, int pitch, int nattr, SDL_GPUCullMode cull) {
@@ -848,29 +891,29 @@ static SDL_GPUGraphicsPipeline *gpipe(R *r, SDL_GPUShader *vs, SDL_GPUShader *fs
     };
     return SDL_CreateGPUGraphicsPipeline(r->dev, &ci);
 }
-static SDL_GPUComputePipeline *cpipe(R *r, const uint32_t *code, size_t bytes, int samplers, int ro_tex, int ro_buf, int rw_tex, int rw_buf, int tx, int ty) {
-    SDL_GPUComputePipelineCreateInfo ci = {.code_size = bytes, .code = (const Uint8 *)code, .entrypoint = "main", .format = SDL_GPU_SHADERFORMAT_SPIRV,
-                                           .num_samplers = (Uint32)samplers, .num_readonly_storage_textures = (Uint32)ro_tex,
+static SDL_GPUComputePipeline *cpipe(R *r, nv_shader_code c, int samplers, int ro_tex, int ro_buf, int rw_tex, int rw_buf, int tx, int ty) {
+    SDL_GPUComputePipelineCreateInfo ci = {.num_samplers = (Uint32)samplers, .num_readonly_storage_textures = (Uint32)ro_tex,
                                            .num_readonly_storage_buffers = (Uint32)ro_buf, .num_readwrite_storage_textures = (Uint32)rw_tex,
                                            .num_readwrite_storage_buffers = (Uint32)rw_buf, .num_uniform_buffers = 1,
                                            .threadcount_x = (Uint32)tx, .threadcount_y = (Uint32)ty, .threadcount_z = 1};
+    ci.format = nv_shader_pick(r->dev, c, &ci.code, &ci.code_size, &ci.entrypoint);
     return SDL_CreateGPUComputePipeline(r->dev, &ci);
 }
 
 void nv_tiles_init(R *r) {
     nv_tiles_r *T = &r->tl;
     SDL_GPUDevice *d = r->dev;
-    SDL_GPUShader *fw = shader(d, SPV_FACE_WORLD2, sizeof SPV_FACE_WORLD2, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
-    SDL_GPUShader *fi = shader(d, SPV_FACE_INST2, sizeof SPV_FACE_INST2, SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
-    SDL_GPUShader *fp = shader(d, SPV_PROXY, sizeof SPV_PROXY, SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
-    SDL_GPUShader *ff = shader(d, SPV_FACE_ID_FRAG2, sizeof SPV_FACE_ID_FRAG2, SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0, 1);
+    SDL_GPUShader *fw = shader(d, NV_SHADER(FACE_WORLD2), SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
+    SDL_GPUShader *fi = shader(d, NV_SHADER(FACE_INST2), SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
+    SDL_GPUShader *fp = shader(d, NV_SHADER(PROXY), SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
+    SDL_GPUShader *ff = shader(d, NV_SHADER(FACE_ID_FRAG2), SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0, 1);
     T->face_w_back = gpipe(r, fw, ff, 16, 2, SDL_GPU_CULLMODE_BACK);
     T->face_i_back = gpipe(r, fi, ff, 12, 1, SDL_GPU_CULLMODE_BACK);
     T->proxy = gpipe(r, fp, ff, 0, 0, SDL_GPU_CULLMODE_NONE);
-    SDL_GPUShader *cw = shader(d, SPV_FACE_WORLD_C, sizeof SPV_FACE_WORLD_C, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
-    SDL_GPUShader *ci = shader(d, SPV_FACE_INST_C, sizeof SPV_FACE_INST_C, SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
-    SDL_GPUShader *cp2 = shader(d, SPV_PROXY_C, sizeof SPV_PROXY_C, SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
-    SDL_GPUShader *fn = shader(d, SPV_FACE_ND, sizeof SPV_FACE_ND, SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0, 1);
+    SDL_GPUShader *cw = shader(d, NV_SHADER(FACE_WORLD_C), SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
+    SDL_GPUShader *ci = shader(d, NV_SHADER(FACE_INST_C), SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
+    SDL_GPUShader *cp2 = shader(d, NV_SHADER(PROXY_C), SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
+    SDL_GPUShader *fn = shader(d, NV_SHADER(FACE_ND), SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0, 1);
     T->c_face_w = gpipe(r, cw, fn, 16, 2, SDL_GPU_CULLMODE_NONE), T->c_face_w_back = gpipe(r, cw, fn, 16, 2, SDL_GPU_CULLMODE_BACK);
     T->c_face_i = gpipe(r, ci, fn, 12, 1, SDL_GPU_CULLMODE_NONE), T->c_face_i_back = gpipe(r, ci, fn, 12, 1, SDL_GPU_CULLMODE_BACK);
     T->c_proxy = gpipe(r, cp2, fn, 0, 0, SDL_GPU_CULLMODE_NONE);
@@ -878,12 +921,12 @@ void nv_tiles_init(R *r) {
         fprintf(stderr, "bimble: the clip-distance pipelines were refused (%s): the section box by discard\n", SDL_GetError());
     SDL_GPUShader *all[] = {fw, fi, fp, ff, cw, ci, cp2, fn};
     for (int k = 0; k < 8; k++) if (all[k]) SDL_ReleaseGPUShader(d, all[k]);
-    T->hiz0 = cpipe(r, SPV_HIZ0, sizeof SPV_HIZ0, 1, 0, 0, 1, 0, 8, 8);
-    T->hizn = cpipe(r, SPV_HIZN, sizeof SPV_HIZN, 0, 0, 0, 1, 0, 8, 8);
-    T->hizn2 = cpipe(r, SPV_HIZN2, sizeof SPV_HIZN2, 0, 0, 0, 1, 0, 8, 8);
-    T->test = cpipe(r, SPV_TTEST, sizeof SPV_TTEST, 1, 0, 1, 0, 2, 64, 1); /* NUI3: the pyramid by a sampler; the tests' answers */
-    T->gate = cpipe(r, SPV_GATE, sizeof SPV_GATE, 0, 0, 3, 0, 1, 64, 1);
-    T->seen = cpipe(r, SPV_SEEN, sizeof SPV_SEEN, 1, 0, 0, 0, 1, 8, 8);
+    T->hiz0 = cpipe(r, NV_SHADER(HIZ0), 1, 0, 0, 1, 0, 8, 8);
+    T->hizn = cpipe(r, NV_SHADER(HIZN), 0, 0, 0, 1, 0, 8, 8);
+    T->hizn2 = cpipe(r, NV_SHADER(HIZN2), 0, 0, 0, 1, 0, 8, 8);
+    T->test = cpipe(r, NV_SHADER(TTEST), 1, 0, 1, 0, 2, 64, 1); /* NUI3: the pyramid by a sampler; the tests' answers */
+    T->gate = cpipe(r, NV_SHADER(GATE), 0, 0, 3, 0, 1, 64, 1);
+    T->seen = cpipe(r, NV_SHADER(SEEN), 1, 0, 0, 0, 1, 8, 8);
     if (!T->face_w_back || !T->face_i_back || !T->proxy || !T->hiz0 || !T->hizn || !T->test || !T->gate)
         fprintf(stderr, "bimble: a tile pipeline was refused (%s): tiles draw without it\n", SDL_GetError());
     T->o = (nv_tiles_opts){.occlusion = 1, .error_px = 1, .lod = 1};

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- MACAPP (ADR 0088): the hardened runtime's exceptions for a Developer ID signature (native/macos/bundle.sh with
+     SIGN_IDENTITY; not used by the ad hoc signature). None needed: one static executable (no dylib to load, so no
+     disable-library-validation), no JIT (Metal compiles the MSL in its own service), no camera, microphone or network
+     server. Kept empty so the first signed build starts strict; an exception is added here with its reason. -->
+<plist version="1.0">
+<dict/>
+</plist>

@@ -6,7 +6,8 @@
 #                                      LD_LIBRARY_PATH=<prefix>/lib)
 #   ccore/ci/sdl3.sh --commit          prints the pin
 # The video drivers built: offscreen, X11 and Wayland when their headers are there; the GPU API's Vulkan
-# backend (SDL loads libvulkan at run time). zlib licence (LICENSE.txt in the sources).
+# backend (SDL loads libvulkan at run time). macOS: Cocoa and offscreen, the Metal backend, static. zlib licence
+# (LICENSE.txt in the sources).
 set -euo pipefail
 TAG=release-3.4.18
 COMMIT=829a65d769d935c4852f8159e964312c0957260a
@@ -19,10 +20,14 @@ git -C "$work/src" remote add origin https://github.com/libsdl-org/SDL.git
 git -C "$work/src" fetch -q --depth 1 origin "$COMMIT"
 git -C "$work/src" checkout -q FETCH_HEAD
 [[ $(git -C "$work/src" rev-parse HEAD) == "$COMMIT" ]] || { echo "FAIL ci/sdl3.sh: not $COMMIT" >&2; exit 1; }
+# MACAPP (ADR 0088): on macOS a static library (bimble.app carries no dylib), for CMAKE_OSX_ARCHITECTURES and
+# MACOSX_DEPLOYMENT_TARGET (CMake reads both from the environment; native/macos/deps.sh sets them)
+kind=(-DSDL_SHARED=ON -DSDL_STATIC=OFF)
+[[ $(uname -s) == Darwin ]] && kind=(-DSDL_SHARED=OFF -DSDL_STATIC=ON)
 cmake -S "$work/src" -B "$work/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
-    -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL_TESTS=OFF \
+    "${kind[@]}" -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL_TESTS=OFF \
     -DSDL_X11_XTEST=OFF -DSDL_AUDIO=OFF -DSDL_CAMERA=OFF -DSDL_JOYSTICK=OFF -DSDL_HAPTIC=OFF -DSDL_SENSOR=OFF > "$work/cmake.log" 2>&1 ||
     { tail -60 "$work/cmake.log" >&2; exit 1; }
-cmake --build "$work/build" -j "$(nproc)" > "$work/build.log" 2>&1 || { tail -80 "$work/build.log" >&2; exit 1; }
+cmake --build "$work/build" -j "$(nproc 2> /dev/null || sysctl -n hw.ncpu)" > "$work/build.log" 2>&1 || { tail -80 "$work/build.log" >&2; exit 1; }
 cmake --install "$work/build" > /dev/null
 echo "sdl3: $TAG ($COMMIT) in $prefix"

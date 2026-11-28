@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- bimble.app's Info.plist (ticket MACAPP, ADR 0088), filled by native/macos/bundle.sh: @VERSION@ (ccore/VERSION),
+     @SHORT@ (its numbers: CFBundleShortVersionString takes three integers), @MINOS@ (MACOSX_DEPLOYMENT_TARGET).
+     The file types: .bimble and .bimbleview are Bimble's (exported), .ifc is buildingSMART's (imported). -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleDisplayName</key><string>Bimble</string>
+  <key>CFBundleName</key><string>Bimble</string>
+  <key>CFBundleExecutable</key><string>bimble</string>
+  <key>CFBundleIdentifier</key><string>ch.bimble.bimble</string>
+  <key>CFBundleIconFile</key><string>bimble</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@SHORT@</string>
+  <key>CFBundleVersion</key><string>@SHORT@</string>
+  <key>BimbleVersion</key><string>@VERSION@</string>
+  <key>CFBundleGetInfoString</key><string>Bimble @VERSION@, open-source structural BIM (MIT)</string>
+  <key>NSHumanReadableCopyright</key><string>MIT licence, https://github.com/guilbep/bimble</string>
+  <key>LSMinimumSystemVersion</key><string>@MINOS@</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Bimble project</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>ch.bimble.bimble</string></array>
+      <key>CFBundleTypeIconFile</key><string>bimble</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Bimble view</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>ch.bimble.bimbleview</string></array>
+      <key>CFBundleTypeIconFile</key><string>bimble</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>IFC model</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>org.buildingsmart.ifc</string></array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>ch.bimble.bimble</string>
+      <key>UTTypeDescription</key><string>Bimble project</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.content</string></array>
+      <key>UTTypeIconFile</key><string>bimble</string>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>bimble</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>ch.bimble.bimbleview</string>
+      <key>UTTypeDescription</key><string>Bimble view</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.content</string></array>
+      <key>UTTypeIconFile</key><string>bimble</string>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>bimbleview</string></array></dict>
+    </dict>
+  </array>
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>org.buildingsmart.ifc</string>
+      <key>UTTypeDescription</key><string>IFC model (Industry Foundation Classes)</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>ifc</string></array></dict>
+    </dict>
+  </array>
+</dict>
+</plist>

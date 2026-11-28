@@ -49,6 +49,7 @@ e34fd5d084be106cea972d19ce5d27fd96d17ba89f8d06bdceee058420c8b2b0 nanosvg/src/nan
 79a9c5f4db19debf9f3a648a1589e96d92854f245a5cb4f3d823f263785234d8 nanosvg/src/nanosvgrast.h
 e82bc3dd03400aecabe12201219ba14750dbc4b36faab58663a7a6068548d372 nanosvg/LICENSE.txt
 '
+sha256_of() { if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi; } # MACAPP: macOS has shasum
 fetch() { # name url commit
     local dir="$D/$1"
     if [[ -d "$dir/.git" ]] && [[ $(git -C "$dir" rev-parse HEAD) == "$3" ]]; then return; fi
@@ -66,7 +67,7 @@ fetch nanosvg https://github.com/memononen/nanosvg.git 239e102ec2c691f2902e20ace
 bad=0
 while read -r sum f; do
     [[ -n $sum ]] || continue
-    got=$(sha256sum "$D/$f" 2> /dev/null | cut -c1-64 || true)
+    got=$(sha256_of "$D/$f" 2> /dev/null | cut -c1-64 || true)
     if [[ $got != "$sum" ]]; then echo "FAIL native deps: $f: sha256 ${got:-missing}, expected $sum" >&2; bad=1; fi
 done <<< "$SUMS"
 ((bad == 0)) || exit 1
@@ -82,11 +83,20 @@ LIB=out/native/libbimble_imgui
 SRC=("$D"/imgui/imgui.cpp "$D"/imgui/imgui_demo.cpp "$D"/imgui/imgui_draw.cpp "$D"/imgui/imgui_tables.cpp "$D"/imgui/imgui_widgets.cpp
      "$D"/imgui/backends/imgui_impl_sdl3.cpp "$D"/imgui/backends/imgui_impl_sdlgpu3.cpp
      "$D"/imgui/misc/freetype/imgui_freetype.cpp "$D"/cimgui/cimgui.cpp native/ui/backend.cpp native/ui/backend.h)
-newest=$(ls -t "${SRC[@]}" native/deps.sh | head -1)
-if [[ -f $LIB.a && -f $LIB.so && $LIB.a -nt $newest && $LIB.so -nt $newest ]]; then exit 0; fi
+# MACAPP (ADR 0088): on macOS the archive only (no tcc there, so no shared library), for the architecture asked
+# (CMAKE_OSX_ARCHITECTURES, as ccore/build.sh release), and ImGui's SDL_GPU backend on its MSL path (macos/imgui_msl.h)
+OSX=()
+SO=1
+[[ $(uname -s) == Darwin ]] && SO=0 OSX=(-arch "${CMAKE_OSX_ARCHITECTURES:-$(uname -m)}" -mmacosx-version-min="${MACOSX_DEPLOYMENT_TARGET:-11.0}")
+newest=$(ls -t "${SRC[@]}" native/deps.sh native/macos/imgui_msl.h | head -1)
+# the archive's own architecture and target: built again when they change (a stamp beside it)
+stamp="${OSX[*]+${OSX[*]}}"
+if [[ -f $LIB.a && $LIB.a -nt $newest && "$(cat "$LIB.stamp" 2> /dev/null)" == "$stamp" ]] && { ((SO == 0)) || [[ -f $LIB.so && $LIB.so -nt $newest ]]; }; then exit 0; fi
+[[ "$(cat "$LIB.stamp" 2> /dev/null)" == "$stamp" ]] || rm -rf out/native/imgui-obj # another architecture: every object again
 mkdir -p out/native/imgui-obj
 CXXF=(-std=c++17 -O2 -fPIC -g0 -DIMGUI_ENABLE_FREETYPE -DIMGUI_ENABLE_STB_TRUETYPE -DIMGUI_DISABLE_DEMO_WINDOWS
-      -I"$D"/imgui -I"$D"/imgui/backends -I"$D"/cimgui -Inative/ui $(pkg-config --cflags sdl3 freetype2))
+      -I"$D"/imgui -I"$D"/imgui/backends -I"$D"/cimgui -Inative/ui $(pkg-config --cflags sdl3 freetype2) ${OSX[@]+"${OSX[@]}"})
+[[ $(uname -s) == Darwin ]] && CXXF+=(-include native/macos/imgui_msl.h)
 objs=()
 pids=()
 for f in "${SRC[@]}"; do
@@ -99,5 +109,8 @@ done
 for p in ${pids[@]+"${pids[@]}"}; do wait "$p"; done
 rm -f "$LIB.a"
 ${AR:-$(command -v llvm-ar || echo ar)} rcs "$LIB.a" "${objs[@]}"
-clang++ -shared -o "$LIB.so" "${objs[@]}" $(pkg-config --libs sdl3 freetype2)
-echo "native deps: $LIB.a $(stat -c %s "$LIB.a") bytes, $LIB.so $(stat -c %s "$LIB.so") bytes"
+echo "$stamp" > "$LIB.stamp"
+if ((SO)); then
+    clang++ -shared -o "$LIB.so" "${objs[@]}" $(pkg-config --libs sdl3 freetype2)
+    echo "native deps: $LIB.a $(wc -c < "$LIB.a" | tr -d ' ') bytes, $LIB.so $(wc -c < "$LIB.so" | tr -d ' ') bytes"
+else echo "native deps: $LIB.a $(wc -c < "$LIB.a" | tr -d ' ') bytes (${OSX[*]})"; fi

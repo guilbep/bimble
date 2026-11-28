@@ -667,8 +667,15 @@ void drive_finish(App *a) {
     uint64_t peak = 0, rss = app_rss(&peak);
     nv_render_stats rs = nv_render_get_stats(a->r);
     char load[128] = "?";
+#ifdef __APPLE__
+    { /* MACAPP: no /proc: the same three averages */
+        double la[3];
+        if (getloadavg(la, 3) == 3) snprintf(load, sizeof load, "%.2f %.2f %.2f", la[0], la[1], la[2]);
+    }
+#else
     f = fopen("/proc/loadavg", "r");
     if (f) { if (fgets(load, sizeof load, f)) load[strcspn(load, "\n")] = 0; fclose(f); }
+#endif
     outpath(a, p, sizeof p, "summary.md");
     f = fopen(p, "w");
     if (f) {

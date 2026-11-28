@@ -12,7 +12,7 @@
 #include "render.h"
 #include "render_int.h"
 
-/* SPIR-V, compiled by glslc at build time (native/build.sh), embedded. */
+/* SPIR-V, compiled by glslc (native/build.sh shaders, committed), embedded; on macOS also its MSL (MACAPP: SDL_shadercross). */
 static const uint32_t SPV_FACE_WORLD[] =
 #include "face_world.vert.h"
     ;
@@ -40,6 +40,35 @@ static const uint32_t SPV_SCREEN[] =
 static const uint32_t SPV_SCREEN_EDGES[] =
 #include "screen_edges.frag.h"
     ;
+#ifdef __APPLE__
+static const char MSL_FACE_WORLD[] =
+#include "face_world.vert.msl.h"
+    ;
+static const char MSL_FACE_INST[] =
+#include "face_inst.vert.msl.h"
+    ;
+static const char MSL_EDGE_WORLD[] =
+#include "edge_world.vert.msl.h"
+    ;
+static const char MSL_EDGE_INST[] =
+#include "edge_inst.vert.msl.h"
+    ;
+static const char MSL_FACE_ID_FRAG[] =
+#include "face_id.frag.msl.h"
+    ;
+static const char MSL_CULL[] =
+#include "cull.comp.msl.h"
+    ;
+static const char MSL_RESET[] =
+#include "reset.comp.msl.h"
+    ;
+static const char MSL_SCREEN[] =
+#include "screen.vert.msl.h"
+    ;
+static const char MSL_SCREEN_EDGES[] =
+#include "screen_edges.frag.msl.h"
+    ;
+#endif
 
 const char *const NV_EDGES_NAME[3] = {"none", "lines", "screen"};
 static const float EDGE_SRGB[3] = {26 / 255.f, 26 / 255.f, 28 / 255.f};
@@ -149,11 +178,9 @@ void nv_cam_fit_box(nv_camera *c, const double lo[3], const double hi[3]) {
 }
 
 /* ---- GPU objects ---- */
-static SDL_GPUShader *shader(SDL_GPUDevice *dev, const uint32_t *code, size_t bytes, SDL_GPUShaderStage st, uint32_t samplers,
-                             uint32_t storage, uint32_t uniforms) {
-    SDL_GPUShaderCreateInfo ci = {.code_size = bytes, .code = (const Uint8 *)code, .entrypoint = "main",
-                                  .format = SDL_GPU_SHADERFORMAT_SPIRV, .stage = st, .num_samplers = samplers,
-                                  .num_storage_buffers = storage, .num_uniform_buffers = uniforms};
+static SDL_GPUShader *shader(SDL_GPUDevice *dev, nv_shader_code c, SDL_GPUShaderStage st, uint32_t samplers, uint32_t storage, uint32_t uniforms) {
+    SDL_GPUShaderCreateInfo ci = {.stage = st, .num_samplers = samplers, .num_storage_buffers = storage, .num_uniform_buffers = uniforms};
+    ci.format = nv_shader_pick(dev, c, &ci.code, &ci.code_size, &ci.entrypoint);
     return SDL_CreateGPUShader(dev, &ci);
 }
 
@@ -246,13 +273,13 @@ static int targets(R *r, uint32_t w, uint32_t h) {
 
 static int make_pipelines(R *r) {
     SDL_GPUDevice *d = r->dev;
-    SDL_GPUShader *fw = shader(d, SPV_FACE_WORLD, sizeof SPV_FACE_WORLD, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
-    SDL_GPUShader *fi = shader(d, SPV_FACE_INST, sizeof SPV_FACE_INST, SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
-    SDL_GPUShader *ew = shader(d, SPV_EDGE_WORLD, sizeof SPV_EDGE_WORLD, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
-    SDL_GPUShader *ei = shader(d, SPV_EDGE_INST, sizeof SPV_EDGE_INST, SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
-    SDL_GPUShader *ff = shader(d, SPV_FACE_ID_FRAG, sizeof SPV_FACE_ID_FRAG, SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0, 1);
-    SDL_GPUShader *sv = shader(d, SPV_SCREEN, sizeof SPV_SCREEN, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 0);
-    SDL_GPUShader *sf = shader(d, SPV_SCREEN_EDGES, sizeof SPV_SCREEN_EDGES, SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 0, 1);
+    SDL_GPUShader *fw = shader(d, NV_SHADER(FACE_WORLD), SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
+    SDL_GPUShader *fi = shader(d, NV_SHADER(FACE_INST), SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
+    SDL_GPUShader *ew = shader(d, NV_SHADER(EDGE_WORLD), SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 1);
+    SDL_GPUShader *ei = shader(d, NV_SHADER(EDGE_INST), SDL_GPU_SHADERSTAGE_VERTEX, 0, 3, 1);
+    SDL_GPUShader *ff = shader(d, NV_SHADER(FACE_ID_FRAG), SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0, 1);
+    SDL_GPUShader *sv = shader(d, NV_SHADER(SCREEN), SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 0);
+    SDL_GPUShader *sf = shader(d, NV_SHADER(SCREEN_EDGES), SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 0, 1);
     r->face_w = pipeline(r, fw, ff, 1, 0, 1, 1);
     r->face_i = pipeline(r, fi, ff, 0, 0, 1, 1);
     r->edge_w = pipeline(r, ew, ff, 1, 1, 1, 1);
@@ -260,14 +287,13 @@ static int make_pipelines(R *r) {
     r->screen = pipeline(r, sv, sf, 0, 0, 0, 0);
     SDL_GPUShader *all[] = {fw, fi, ew, ei, ff, sv, sf};
     for (size_t k = 0; k < 7; k++) if (all[k]) SDL_ReleaseGPUShader(d, all[k]);
-    SDL_GPUComputePipelineCreateInfo cc = {.code_size = sizeof SPV_CULL, .code = (const Uint8 *)SPV_CULL, .entrypoint = "main",
-                                           .format = SDL_GPU_SHADERFORMAT_SPIRV, .num_readonly_storage_buffers = 2,
-                                           .num_readwrite_storage_buffers = 4, .num_uniform_buffers = 1,
+    SDL_GPUComputePipelineCreateInfo cc = {.num_readonly_storage_buffers = 2, .num_readwrite_storage_buffers = 4, .num_uniform_buffers = 1,
                                            .threadcount_x = 64, .threadcount_y = 1, .threadcount_z = 1};
+    cc.format = nv_shader_pick(d, NV_SHADER(CULL), &cc.code, &cc.code_size, &cc.entrypoint);
     r->cull = SDL_CreateGPUComputePipeline(d, &cc);
-    SDL_GPUComputePipelineCreateInfo rc = {.code_size = sizeof SPV_RESET, .code = (const Uint8 *)SPV_RESET, .entrypoint = "main",
-                                           .format = SDL_GPU_SHADERFORMAT_SPIRV, .num_readwrite_storage_buffers = 3,
-                                           .num_uniform_buffers = 1, .threadcount_x = 64, .threadcount_y = 1, .threadcount_z = 1};
+    SDL_GPUComputePipelineCreateInfo rc = {.num_readwrite_storage_buffers = 3, .num_uniform_buffers = 1, .threadcount_x = 64,
+                                           .threadcount_y = 1, .threadcount_z = 1};
+    rc.format = nv_shader_pick(d, NV_SHADER(RESET), &rc.code, &rc.code_size, &rc.entrypoint);
     r->reset = SDL_CreateGPUComputePipeline(d, &rc);
     SDL_GPUSamplerCreateInfo si = {.min_filter = SDL_GPU_FILTER_NEAREST, .mag_filter = SDL_GPU_FILTER_NEAREST,
                                    .mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
@@ -768,6 +794,9 @@ void nv_render_collect(R *r, uint32_t *picked) {
 SDL_GPUDevice *nv_gpu_device(const char **name, const char **driver) {
     SDL_PropertiesID p = SDL_CreateProperties();
     SDL_SetBooleanProperty(p, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN, true);
+#ifdef __APPLE__
+    SDL_SetBooleanProperty(p, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_MSL_BOOLEAN, true); /* MACAPP: Metal takes the committed MSL */
+#endif
     SDL_SetBooleanProperty(p, SDL_PROP_GPU_DEVICE_CREATE_FEATURE_INDIRECT_DRAW_FIRST_INSTANCE_BOOLEAN, true);
     SDL_GPUDevice *dev = SDL_CreateGPUDeviceWithProperties(p);
     SDL_DestroyProperties(p);
