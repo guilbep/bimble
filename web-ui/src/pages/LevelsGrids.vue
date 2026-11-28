@@ -6,6 +6,7 @@ export const capability = "levels"; // FAKE1 capability; no `editable`: G2 lists
 </script>
 
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // A7 Levels and grids (wireframes v01 LevelsGrids.html; ADR 0056). Ticket G2: the rows are the real
 // storeys (`storeys` query, elevation then id as the C core and Rust sort them; drawn highest first
 // as the reference) and every edit is a verb (level_add, level_set, level_remove, grid_add,
@@ -25,8 +26,8 @@ const tab = ref<"levels" | "grids">("levels");
 const error = ref<string | null>(null);
 /** Bumped after each edit: the inputs are drawn again from the model (a refused value goes back). */
 const ver = ref(0);
-const editable = computed(() => { void state.value.rev; void state.value.file; return editableNow(); });
-const scene = computed(() => { void state.value.rev; void state.value.file; return gridAxes(); });
+const editable = computed(() => { void stateRev.value; void state.value.file; return editableNow(); });
+const scene = computed(() => { void stateRev.value; void state.value.file; return gridAxes(); });
 
 interface Row { id: string; name: string; elevation: number; count: number | null; height: number | null; isStorey: boolean }
 // The query's order (elevation, then id), highest first.
@@ -41,7 +42,7 @@ const rows = computed<Row[]>(() => {
 /** DEAD1: the core's refusal, told before the click (query level_refusals): Remove of a level that
  *  holds elements, and Building storey unticked on one. The control is disabled with the core's text. */
 const why = computed(() => {
-  void state.value.rev; void state.value.file;
+  void stateRev.value; void state.value.file;
   return new Map(Object.entries(editable.value ? levelRefusals() : {}));
 });
 const fmt = (mm: number) => (mm === 0 ? "±0.00" : (mm > 0 ? "+" : "−") + (Math.abs(mm) / 1000).toFixed(2));
@@ -77,7 +78,7 @@ const add = () => {
 };
 
 // ---- grids ----
-const gridList = computed(() => { void state.value.rev; return editable.value ? grids() : []; });
+const gridList = computed(() => { void stateRev.value; return editable.value ? grids() : []; });
 type Ends = { start_mm: number[]; end_mm: number[] };
 /** An axis at a constant x (it runs along y), at a constant y, or oblique (null). */
 const along = (a: Ends): "x" | "y" | null => (a.start_mm[0] === a.end_mm[0] ? "x" : a.start_mm[1] === a.end_mm[1] ? "y" : null);

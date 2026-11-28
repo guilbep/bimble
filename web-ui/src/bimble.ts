@@ -1,5 +1,5 @@
 // The one typed client of the wasm viewer (ADR 0048). Components never touch the wasm directly.
-import { shallowRef } from "vue";
+import { computed, shallowRef } from "vue";
 import { applyLook } from "./shell/theme"; // SET1
 import { warm2d } from "./warm"; // FIRST1
 import { QueryCache, cachedClient } from "./querycache"; // SMALL1
@@ -248,6 +248,10 @@ interface Wasm {
 }
 
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
+/** VIS2: the model's rev alone, as a computed: a component that reads `state.value.rev` re-runs on every state change (a
+ *  click's selection included, which does not move rev) and asked the host again, synchronously, each time; this one
+ *  changes only with rev. */
+export const stateRev = computed(() => state.value.rev);
 /** Set when the viewer could not start. */
 export const startError = shallowRef<string | null>(null);
 // ---- PERF2: the start's open, step by step (ccore.ts OpenSteps), shown over the viewport until its first frame ----

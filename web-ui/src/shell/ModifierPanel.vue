@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 import { computed, ref, watch } from "vue";
 import { state, element, actions, runAction, runVerb, rotate, mirror } from "../bimble";
 import { currentPage } from "../pages";
@@ -37,7 +38,7 @@ const error = ref<string | null>(null);
 // is, or a linked model's element, shows them disabled with why. An error belongs to the selection
 // and the model it came from: a new selection, model or rev clears it.
 const readOnly = computed(() => {
-  void state.value.rev;
+  void stateRev.value;
   if (!editableModel()) return t("props.fileReadOnly");
   const lk = state.value.linked;
   return lk && ids.value.includes(lk.id) ? t("props.linkedReadOnly", { name: lk.link.replace(/\.[^.]+$/, "") }) : null;

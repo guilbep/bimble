@@ -17,9 +17,12 @@ const trees = ref(new Map<string, LinkTree>());
 const elems = ref(new Map<string, { id: string; name: string; class: string }[]>());
 const err = ref<string | null>(null);
 const rev = computed(() => state.value.rev);
-const links = computed(() => { void rev.value; void state.value.links; return linksTree(); });
+// (VIS2: through a computed key: reading state.value.links here made every state change, a click's selection, ask the host
+// for the links' tree again, synchronously: 90 ms of each press on a project of 17 links)
+const linksKey = computed(() => `${state.value.rev}|${state.value.links ?? 0}`);
+const links = computed(() => { void linksKey.value; return linksTree(); });
 const vis = computed<Vis>(() => { void rev.value; try { return query<Vis>("view_visibility"); } catch { return null; } });
-const notes = computed(() => { void rev.value; void state.value.links; return linkNotes(); });
+const notes = computed(() => { void linksKey.value; return linkNotes(); });
 watch([rev, () => state.value.links], () => { trees.value = new Map(); elems.value = new Map(); });
 
 const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");

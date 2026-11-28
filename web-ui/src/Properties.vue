@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { stateRev } from "./bimble"; // VIS2
 import { computed, ref, watch } from "vue";
 import { groupDigits } from "./format"; // QTY1
 import { t } from "./i18n";
@@ -54,7 +55,7 @@ watch(
 );
 
 // ---- WAVE1B (B2): openings of the selected host; the selected one's fields ----
-const openings = computed<OpeningInfo[]>(() => { void state.value.rev; const d = detail.value; return d && d.openings > 0 ? openingsOf(d.id) : []; });
+const openings = computed<OpeningInfo[]>(() => { void stateRev.value; const d = detail.value; return d && d.openings > 0 ? openingsOf(d.id) : []; });
 const selOpening = computed(() => {
   const so = selectedOpening.value, d = detail.value;
   return so && d && so.host === d.id ? openings.value.find((o) => o.id === so.id) ?? null : null;
@@ -193,8 +194,8 @@ function commitOffset(k: (typeof PLANES)[number], old: number, e: Event): void {
 // ---- SEC1 ---- the view's own fields (viewing.rs:976-1440): name, a section's cut, the crop by
 // numbers, a plan's range levels, what the view hides by family and IFC class. Each change is one
 // verb (view_edit or set_view), one undo step; the viewport and the paper drawings follow.
-const canEdit = computed(() => { void state.value.rev; return has("views") && editableModel(); });
-const vvis = computed<ViewVisibility | null>(() => { void state.value.rev; void openViews.value; return viewVisibility(); });
+const canEdit = computed(() => { void stateRev.value; return has("views") && editableModel(); });
+const vvis = computed<ViewVisibility | null>(() => { void stateRev.value; void openViews.value; return viewVisibility(); });
 const secError = ref<string | null>(null);
 function edit(patch: Parameters<typeof viewEdit>[1]): void {
   secError.value = view.value ? viewEdit(view.value.id, patch) : null;
@@ -257,7 +258,7 @@ function toggleFamily(key: string, on: boolean): void {
 }
 // The model's IFC classes and their counts (query elements, as the navigator's object tree).
 const classes = computed(() => {
-  void state.value.rev;
+  void stateRev.value;
   if (!canEdit.value) return [] as [string, number][];
   const n = new Map<string, number>();
   try { for (const e of query<{ class: string }[]>("elements", { limit: 100000 })) n.set(e.class, (n.get(e.class) ?? 0) + 1); } catch { /* none */ }

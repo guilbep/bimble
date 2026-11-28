@@ -4,6 +4,7 @@ export const capability = "materials"; // FAKE1: query materials_page, verbs mat
 </script>
 
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // MAT1: the material browser (crates/bimble-viewer/src/materials_page.rs, ADR 0031). Left: the model's
 // materials with how many elements are made of each, then the library. Right: the selected one's
 // identity, properties and graphics. In an editable model every change is one verb (material_add,
@@ -28,7 +29,7 @@ const catLabel = (c: string) => t(`materials.cat.${c}` as "materials.cat.concret
 
 // Re-asked after every change of the model (rev), undo and redo included.
 const data = computed<Page>(() => {
-  void state.value.rev;
+  void stateRev.value;
   void state.value.file;
   try { return query<Page>("materials_page"); } catch { return { editable: false, rows: [], library: [] }; }
 });

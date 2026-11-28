@@ -6,6 +6,7 @@ export const capability = "project_info", editable = true; // FAKE1: query proje
 </script>
 
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // A3 Project information (wireframes v01 ProjectInfo.html; ADR 0030, 0052). Leaving a field or Enter
 // (the native `change` event) sends one SetProject with the whole map; undo restores it.
 import { computed, nextTick, ref } from "vue";
@@ -25,7 +26,7 @@ const label = (k: string) => (k === "end_date" || (BASIC as readonly string[]).i
 const error = ref<string | null>(null);
 // ---- G2: the georeference's system and base point (query north, coordinates of the world origin) ----
 const georefText = computed(() => {
-  void state.value.rev;
+  void stateRev.value;
   const n = northInfo.value, c = n ? coordinates([0, 0, 0]) : null;
   return n && c ? `${n.crs ?? "—"} · ${c.text} · ${n.rotation_deg}°` : "—";
 });
@@ -36,7 +37,7 @@ type GNum = "east_m" | "north_m" | "height_m" | "rotation_deg" | "map_rotation_d
 const geoVer = ref(0);
 const geoError = ref<string | null>(null);
 const geoFields = computed((): { k: GNum; unit: string; v: number | null }[] => {
-  void state.value.rev; void geoVer.value;
+  void stateRev.value; void geoVer.value;
   const n = northInfo.value, b = n ? coordinates([0, 0, 0])?.survey ?? null : null;
   return [
     { k: "east_m", unit: "m", v: b ? b[0] : null }, { k: "north_m", unit: "m", v: b ? b[1] : null }, { k: "height_m", unit: "m", v: b ? b[2] : null },

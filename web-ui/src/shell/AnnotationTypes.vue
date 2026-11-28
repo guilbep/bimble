@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // The Annotate tab's Text type and Dimension type boxes (ticket VIEWSHEET, ADR 0076; Rust ribbon.rs:1285
 // annotation_types): the graphic standards' types (`query annotation_types`, the default standards: the C core
 // keeps no other), "Default" first. The one chosen is session state (action annotation_type) and goes to the next
@@ -10,7 +11,7 @@ import { HIDE_NOT_AVAILABLE } from "./capability";
 
 const props = defineProps<{ bb: string }>();
 const tick = ref(0);
-const types = computed(() => { void state.value.rev; void tick.value; return annotationTypes(); });
+const types = computed(() => { void stateRev.value; void tick.value; return annotationTypes(); });
 const error = ref<string | null>(null);
 function pick(which: "text" | "dimension", e: Event): void {
   const v = (e.target as HTMLSelectElement).value;
