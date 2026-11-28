@@ -731,6 +731,8 @@ interface GlStats {
   /** 3D1: the moving budget of the last frame (px at the target, the size left out under in mm), the
    *  batches and how many drew nothing; a test hook to turn frustum culling off (the same picture). */
   moving?: { moving: boolean; slice: boolean; budget: number; t: number; batches: number; culled: number; outlines: number; tris: number; proxied?: number;
+    /** VIS2: the triangles the cut chose (what may be drawn of them) and what remains after it. */
+    cutKept?: number; cutRem?: number;
     /** VIS1 (P0-a): in motion (the camera changed within the motion window); capped: moving_fps 0 kept under 100 ms. */
     motion?: boolean; capped?: boolean };
   /** VIS1 (P0-a): the last frame's time, draw start to the GPU's end (a fence polled each loop). */
@@ -776,6 +778,8 @@ interface GlStats {
   proxies?: { cells: number; withProxy: number; tris: number; bytes: number; steps: number; maxStepMs: number; loadMs: number;
     drawnCells: number; drawnTris: number; standIns: number; on: boolean };
   noProxies?: boolean;
+  /** VIS2 (a test hook): true releases a link's detail when its proxies come late (SIZE3's way), not kept until the budget does. */
+  lateProxyRelease?: boolean;
   /** 3D2 (step 3): occlusion queries on (a test hook, off by default) and the last frame's queries asked
    *  and batches left out as hidden. */
   occlusion?: boolean;
@@ -1309,6 +1313,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const linkPrx = new Map<string, LinkPrx>();
   /** Per model of the mesh (k + 1: link k), its proxies (null: none). */
   let modelPrx: (LinkPrx | null)[] = [];
+  /** VIS2: per model, link proxies that came late while its detail was on the GPU (swapped in at its release). */
+  const pendingPrx = new Map<number, { x: LinkPrx; name: string }>();
   // A link's proxies take its colour (the reference colour or its override), as its elements: no colour per vertex.
   const makeLinkPrx = (name: string, p: Proxies): LinkPrx => {
     const vao = gl.createVertexArray(), pb = gl.createBuffer(), ib = gl.createBuffer();
@@ -1420,6 +1426,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   interface DrawBatch { b: Batch; f0: number; e0: number; link: boolean; g: InstGroup | null; k0: number; k1: number; o?: OccState;
     /** VIS1 (gl/visible.ts): its items that may be seen (made per pyramid) and this frame's runs of them (null: all of [k0, k1)). */
     vmask?: Uint8Array | null; vkey?: string; runs?: number[] | null; dist?: number; runsMemo?: number[]; runsSerial?: number; runsK0?: number; runsK1?: number; hid?: number; hidTris?: number;
+    /** VIS2: the triangles of its first i items not left out by the mask (the budget's cut counts these), and their key. */
+    kcum?: Uint32Array; kcumKey?: string;
+    /** VIS2: the fill (its number) a stalled slice finished this batch in. */
+    fillDone?: number;
     /** LNK3D: its model (0 the open one, k + 1 link k) and its elements in batch order (their state: batchShown). */
     model: number; items: Uint32Array;
     /** LNK3D (F): no edges this frame (its box spans under EDGE_MIN_PX on screen, or a moving frame left part of it out). */
@@ -1606,7 +1616,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   // ---- end VIS1 (P0-a) ----
   /** The progressive fill after a stop: the screen threshold drawn down to (null: none running). */
-  let fill: { t: number } | null = null, fillEdges = false;
+  let fill: { t: number; id?: number } | null = null, fillEdges = false;
+  /** VIS2: each fill's number: a batch finished whole by a stalled slice (DrawBatch.fillDone) is skipped by the rest of it. */
+  let fillSerial = 0;
   /** 3D2 (step 5): the first frame of a new mesh is drawn within the moving budget, the rest in slices at
    *  once after it (something on screen within a frame of the data, the picture then refines). */
   let firstOfMesh = false;
@@ -2059,6 +2071,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** Frees slot x's GPU buffers (its proxies, when it has some, stand for it). */
   const releaseSlot = (x: Slot) => {
     detailGen++; // VIS1
+    const pend = pendingPrx.get(x.k); // VIS2: proxies that came while its detail was on the GPU: swapped in now
+    if (pend) {
+      pendingPrx.delete(x.k);
+      const old = linkPrx.get(pend.name);
+      if (old) dropLinkPrx(old);
+      linkPrx.set(pend.name, pend.x);
+      modelPrx[x.k] = pend.x, ownOrd[x.k] = undefined;
+      visKey = "\u0000", dirty = true;
+    }
     if (!x.gl) return;
     freeModelGl(x.gl);
     x.gl = null, x.bytes = 0, x.listsOnGpu = false;
@@ -2100,6 +2121,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     slots = (m.ranges ?? [{ e0: 0, e1: m.ids.length, v0: 0, v1: m.pos.length / 3, i0: 0, i1: m.idx.length, s0: 0, s1: m.edges.length / 6 }])
       .map((r, k) => ({ k, ...r, gl: null, lists: null, bytes: 0, needAt: performance.now(), loads: 0 }));
     ownOrd = [], instOfNow = [], pickCache.clear(), pickCacheBytes = 0; // SIZE2
+    for (const p of pendingPrx.values()) dropLinkPrx(p.x); // VIS2
+    pendingPrx.clear();
     wantedLast.clear(); // SIZE3 (B)
     for (const x of slots) loadSlot(x);
     useModel(slots[0]?.gl ?? g0); // (the buffers of the mesh before are gone)
@@ -2319,15 +2342,32 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const p = parseBprx(a.bytes);
       const l = m.links?.[k];
       if (!p.cells.length || !l || p.nElements !== l.elements) return;
+      const x = makeLinkPrx(r.name, p);
+      stats.linkProxiesLate = (stats.linkProxiesLate ?? 0) + 1;
+      const sl = slots[k + 1];
+      // VIS2: a link whose detail is on the GPU keeps it: its proxies wait (pendingPrx) and are swapped in, its batches
+      // made again by their leaves, when the budget next releases it. Releasing it at once (SIZE3) made every link of a
+      // project whose proxies come after the open (SHELL1's bake) ask its whole mesh again, then load it again
+      // (kept only when the proxies would not stand for all of it from this camera: a far link drawn by its proxies
+      // gives its detail back at once, as before)
+      const standsAll = (() => {
+        if (!sl?.gl || plan) return true;
+        const { e, mvp } = matrices(), usable = usableCells(x.p, (el) => shown[l.e0 + el] === 1);
+        const { replaced } = cutLinkPrx(x, l.xf, usable, frustumPlanes(mvp), e, STILL_PROXY_PX);
+        return !!replaced && replaced.length > 0 && replaced.every((v) => v === 1);
+      })();
+      if (sl?.gl && !standsAll && stats.lateProxyRelease !== true) {
+        const prev = pendingPrx.get(k + 1);
+        if (prev) dropLinkPrx(prev.x);
+        pendingPrx.set(k + 1, { x, name: r.name });
+        return;
+      }
       const old = linkPrx.get(r.name);
       if (old) dropLinkPrx(old);
-      const x = makeLinkPrx(r.name, p);
       linkPrx.set(r.name, x);
       modelPrx[k + 1] = x;
-      const sl = slots[k + 1];
       if (sl) releaseSlot(sl);
       ownOrd[k + 1] = undefined;
-      stats.linkProxiesLate = (stats.linkProxiesLate ?? 0) + 1;
       visKey = "\u0000", dirty = true;
     } catch (err) { console.warn("gl viewport: link proxies:", err); }
   };
@@ -2835,38 +2875,81 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const sx = bx[3]! - bx[0]!, sy = bx[4]! - bx[1]!, sz = bx[5]! - bx[2]!;
       d.noEdge = Math.sqrt(sx * sx + sy * sy + sz * sz) / (orthoEye ? orthoMmPx : dist * pxK) < EDGE_MIN_PX;
       d.dist = dist; // (VIS1: front to back)
-      seen.push({ d, c: { b: d.b, dist, k0: slice && fill ? cutEnd({ b: d.b, dist, k0: 0 }, fill.t) : 0 } });
+      seen.push({ d, c: { b: d.b, dist, k0: slice && fill ? (fill.id && d.fillDone === fill.id ? d.b.n : cutEnd({ b: d.b, dist, k0: 0 }, fill.t)) : 0 } });
       need(d.model); // SIZE2FIX: in view and not stood for by a proxy: needed, whatever this frame's budget or pass draws
+    }
+    // ---- VIS1: what the last picture at this camera hides (gl/hiz.ts, gl/visible.ts) is left out: still frames and the
+    // fill's slices in 3D, when the pyramid's key is this frame's (camera, size, what is shown, lists, section box, links).
+    // VIS2: decided before the budget's cut, which then counts only what may be drawn (a still picture's fill on a project
+    // of links spent its slices on hidden items: hundreds of slices of 50 ms, the page never idle) ----
+    const vkey = visKeyOf(key, box);
+    const pyr = hiz && visibleOn() && !movingNow && !plan && !idMode ? hiz.ready : null;
+    const useVis = pyr !== null && pyr.key === vkey;
+    let visHid = 0, visHidTris = 0, visMasked = 0;
+    const tVis = performance.now();
+    const vk = useVis ? `${pyr.key}#${pyr.serial}` : "";
+    if (useVis) {
+      const kk = `${vk}|${visGen}`;
+      for (const { d, c } of seen) {
+        if (d.vkey !== vk || !d.vmask) { maskBatch(pyr, d, boxes, shown, d.g ? () => d.g!.ni / 3 : (i) => (m.ni[d.items[i]!] ?? 0) / 3); visMasked++; d.runsSerial = -1; }
+        if (d.kcumKey !== kk || !d.kcum) {
+          const base = d.b.vcum ?? d.b.cum, mask = d.vmask!, kc = d.kcum && d.kcum.length === d.b.n + 1 ? d.kcum : new Uint32Array(d.b.n + 1);
+          for (let i = 0; i < d.b.n; i++) kc[i + 1] = kc[i]! + (mask[i] ? base[i + 1]! - base[i]! : 0);
+          d.kcum = kc, d.kcumKey = kk;
+        }
+        c.cum = d.kcum;
+      }
     }
     if (slice && fillEdges) for (const { d } of seen) d.k0 = d.k1 = 0; // the last pass: edges only (below)
     else {
       if (movingNow || slice) budget = frameBudget();
+      // VIS2: a slice of the fill gets at least what a whole frame draws in a moving frame's time (wholeRate: whole frames'
+      // triangles over their fenced time). Slices draw few triangles for a fixed script cost (the batches' loop: tens of
+      // ms on 46,800 batches), so their own rate collapsed to the minimum budget and the fill took minutes
+      if (slice && wholeRate > 0 && budget < Infinity) budget = Math.max(budget, wholeRate * (1000 / Math.max(1, userSettings.value?.values.moving_fps || 30)));
       // 3D2: while moving, the batches take what the proxies leave of the budget
       if (movingNow && prxCells.length && budget < Infinity) budget = Math.max(MIN_MOVING_TRIS, budget - prxCells.reduce((n, k) => n + prx!.tris[k]!, 0));
       // VIS1 (P0-c): many batches (a project of links): the bucketed cut (gl/cull.ts budgetCutFast), the same rule
-      const cut = seen.length > 2000 && budget < Infinity && stats.exactCut !== true ? budgetCutFast(seen.map((x) => x.c), budget, `${visGen}|${listsGen}`) : budgetCut(seen.map((x) => x.c), budget);
+      let cut = seen.length > 2000 && budget < Infinity && stats.exactCut !== true ? budgetCutFast(seen.map((x) => x.c), budget, `${visGen}|${listsGen}|${vk}`) : budgetCut(seen.map((x) => x.c), budget);
+      // VIS2: a slice whose remainder (what may still be drawn) a whole frame draws within CAP_MS finishes the picture now
+      // (decision 44's rule for the fill): on the owner's project the fill crawled a few thousand triangles a slice (items of
+      // 22,000 triangles at nearly one size: each slice took one), the page awake for minutes after a zoom
+      if (slice && cut.t > 0 && wholeRate > 0) {
+        let rem = 0;
+        for (const { c } of seen) { const k = c.cum ?? c.b.vcum ?? c.b.cum; rem += k[c.b.n]! - k[c.k0]!; }
+        if (rem / wholeRate <= CAP_MS) cut = { t: 0, tris: rem };
+      }
       cutT = cut.t;
       const stillPx = stats.stillPx ?? opt().still_px; // VIS1: the setting still_px (0: off; a bench hook overrides)
       if (!movingNow && !slice && !idMode && stillPx > 0) { // VIS1 (option 3): what is under stillPx px left out of a still frame
         cutT = stillPx * (orthoEye ? orthoMmPx : pxK);
         for (const { d, c } of seen) d.k1 = cutEnd(c, cutT);
       }
-      if (!slice) { let all = 0; for (const { c } of seen) { const k = c.b.vcum ?? c.b.cum; all += k[c.b.n]! - k[c.k0]!; } lastAllTris = all; } // VIS1 (P0-a)
+      if (!slice) { let all = 0; for (const { c } of seen) { const k = c.cum ?? c.b.vcum ?? c.b.cum; all += k[c.b.n]! - k[c.k0]!; } lastAllTris = all; } // VIS1 (P0-a) (VIS2: what may be drawn)
       for (const { d, c } of seen) d.k0 = c.k0, d.k1 = cutEnd(c, cut.t);
+      // VIS2: a slice the size threshold stalls (the next size level alone is over the budget: thousands of copies of one
+      // 22,000-triangle shape at one size on the owner's project, the slice took one of them, the fill crawled for half a
+      // minute) is filled with whole batches, each then skipped by the rest of this fill (fillDone)
+      if (slice && fill?.id && cut.t > 0 && budget < Infinity) {
+        let kept = 0;
+        for (const { d, c } of seen) { const k = c.cum ?? c.b.vcum ?? c.b.cum; kept += k[d.k1]! - k[d.k0]!; }
+        if (kept < budget / 4) {
+          let room = budget - kept;
+          for (const { d, c } of seen) {
+            if (room <= 0) break;
+            if (d.k1 >= d.b.n) continue;
+            const k = c.cum ?? c.b.vcum ?? c.b.cum, more = k[d.b.n]! - k[d.k1]!;
+            if (more > room && kept > 0) continue;
+            d.k1 = d.b.n, d.fillDone = fill.id, room -= more, kept += more;
+          }
+        }
+      }
     }
     if (movingNow) for (const { d } of seen) if (d.k1 < d.b.n) d.noEdge = true; // LNK3D (F): a part drawn while moving: faces only
-    // ---- VIS1: what the last picture at this camera hides (gl/hiz.ts, gl/visible.ts) is left out: still frames and the
-    // fill's slices in 3D, when the pyramid's key is this frame's (camera, size, what is shown, lists, section box, links) ----
-    const vkey = visKeyOf(key, box);
-    const pyr = hiz && visibleOn() && !movingNow && !plan && !idMode ? hiz.ready : null;
-    const useVis = pyr !== null && pyr.key === vkey;
+    // (VIS1: the runs of what may be seen, from the masks made above)
     for (const d of dbs) d.runs = null;
-    let visHid = 0, visHidTris = 0, visMasked = 0;
-    const tVis = performance.now();
-    const vk = useVis ? `${pyr.key}#${pyr.serial}` : "";
     if (useVis) for (const { d } of seen) {
       if (d.k1 <= d.k0) continue;
-      if (d.vkey !== vk || !d.vmask) { maskBatch(pyr, d, boxes, shown, d.g ? () => d.g!.ni / 3 : (i) => (m.ni[d.items[i]!] ?? 0) / 3); visMasked++; d.runsSerial = -1; }
       // the runs and what they leave out, kept per mask and range (a still picture's frames and slices repeat them)
       if (d.runsSerial !== pyr.serial || d.runsK0 !== d.k0 || d.runsK1 !== d.k1) {
         const mask = d.vmask!;
@@ -2933,7 +3016,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const unfinished = [...unDs.map(({ d }) => d.b.box), ...missing];
     for (const x of slots) x.drawn = false; // LNK3D (D): a link drawn in detail by the last frame is needed (on screen)
     for (const d of dbs) if (d.k1 > d.k0 && d.model > 0) { const x = slots[d.model]; if (x) x.drawn = true; }
-    stats.moving = { moving: movingNow, slice, budget, t: cutT, batches: dbs.length, culled, outlines: unfinished.length, tris: 0, proxied: prxCells.length, motion, capped };
+    let cutKept = 0, cutRem = 0; // VIS2: what the cut chose (its kept triangles) and what remained after it
+    for (const { d, c } of seen) { const k = c.cum ?? c.b.vcum ?? c.b.cum; cutKept += k[d.k1]! - k[d.k0]!; cutRem += k[c.b.n]! - k[d.k1]!; }
+    stats.moving = { moving: movingNow, slice, budget, t: cutT, batches: dbs.length, culled, outlines: unfinished.length, tris: 0, proxied: prxCells.length, motion, capped, cutKept, cutRem };
     // 3D2: the proxies' runs (cells in order: their parts lie side by side), faces in a frame that starts
     // over, edges then and in the last pass of a fill
     const drawPrx = prxCells.length > 0 && (!slice || fill?.t === Infinity);
@@ -3198,7 +3283,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (slice) {
       if (fillEdges) fillEdges = false;
       else if (cutT === 0) fill = null, fillEdges = !scrEdges; // (VIS1: edges found on screen need no last pass of lines)
-      else fill = { t: cutT };
+      else fill = { t: cutT, id: fill?.id ?? 0 };
     }
     // 3D2: the picture complete (every batch drawn): a whole frame, the end of a fill, a moving frame that drew all
     if (stats.fullFrameMs === null && (slice ? fill === null && !fillEdges && cutT === 0 : cutT === 0 && !unfinished.length && !(stats.moving?.proxied ?? 0)))
@@ -4691,7 +4776,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     hiz?.poll(); // VIS1: the last picture's pyramid, when the GPU has it
     if (!dirty && stillDue && !drag && performance.now() >= stillDue && performance.now() - lastInputAt >= motionWin()) {
       stillDue = 0;
-      if ((stats.moving?.t ?? 0) > 0 || (stats.moving?.outlines ?? 0) > 0 || (stats.moving?.proxied ?? 0) > 0) fill = { t: Infinity }, fillEdges = false, dirty = fillStep = true; // 3D2: proxies at 3 px
+      if ((stats.moving?.t ?? 0) > 0 || (stats.moving?.outlines ?? 0) > 0 || (stats.moving?.proxied ?? 0) > 0) fill = { t: Infinity, id: ++fillSerial }, fillEdges = false, dirty = fillStep = true; // 3D2: proxies at 3 px
     } else if (!dirty && (fill !== null || fillEdges)) dirty = fillStep = true;
     if (!dirty && occPending && pollOcc()) dirty = true; // 3D2 (step 3): a hidden batch showed again
     if (dirty && !fillStep) fill = null, fillEdges = false;

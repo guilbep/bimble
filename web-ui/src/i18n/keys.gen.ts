@@ -1460,6 +1460,8 @@ export type PartKey =
   | "status.langFr"
   | "status.langGroup"
   | "status.linked"
+  | "status.linksSimplified"
+  | "status.linksSimplifiedTip"
   | "status.sectionBox"
   | "status.selected"
   | "status.selectedOne"

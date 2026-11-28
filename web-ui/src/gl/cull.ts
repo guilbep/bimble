@@ -17,7 +17,10 @@ export const MIN_MOVING_TRIS = 20000;
 
 /** A batch as a frame sees it: its distance from the eye (mm; 1 for an orthographic view) and the
  *  items already drawn (k0: a progressive fill continues from there). */
-export interface Cut { b: Batch; dist: number; k0: number }
+export interface Cut { b: Batch; dist: number; k0: number;
+  /** VIS2: the triangles of the first i items this frame may draw (shown and not hidden behind the last picture: the masked
+   *  ones count 0), when the visibility test applies; unset: `b.vcum ?? b.cum`. The budget then buys what is drawn. */
+  cum?: Uint32Array }
 
 /** The items of `c` this frame draws for a screen threshold t: those at least t * dist big (a prefix:
  *  largest first), from k0. */
@@ -30,7 +33,7 @@ export function cutEnd(c: Cut, t: number): number {
  *  that one is over the budget, so a frame is never empty while anything is left. t = 0: everything. */
 export function budgetCut(cs: Cut[], budget: number): { t: number; tris: number } {
   // LNK3D: the triangles of the items shown (vcum, when set): a hidden element costs no budget
-  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
+  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.cum ?? c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
   const all = at(0);
   if (all <= budget) return { t: 0, tris: all };
   let hi = 0;
@@ -224,7 +227,7 @@ const hists = new WeakMap<Batch, SizeHist>();
 function histOf(c: Cut, key: string): SizeHist {
   const b = c.b, h = hists.get(b);
   if (h && h.key === key) return h;
-  const k = b.vcum ?? b.cum, idx: number[] = [], tr: number[] = [];
+  const k = c.cum ?? b.vcum ?? b.cum, idx: number[] = [], tr: number[] = [];
   for (let i = 0; i < b.n; i++) {
     const t = k[i + 1]! - k[i]!;
     if (!t) continue;
@@ -238,13 +241,13 @@ function histOf(c: Cut, key: string): SizeHist {
 }
 /** budgetCut's answer through size buckets (for many batches); `key` changes when what is shown changes. */
 export function budgetCutFast(cs: Cut[], budget: number, key: string): { t: number; tris: number } {
-  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
+  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.cum ?? c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
   const H = new Float64Array(NB);
   let all = 0;
   for (const c of cs) {
     const shift = Math.floor(BPO * Math.log2(Math.max(c.dist, 1e-9)));
     if (c.k0 > 0) { // a slice of the fill: its items from k0 on (the smaller ones), counted one by one
-      const b = c.b, k = b.vcum ?? b.cum;
+      const b = c.b, k = c.cum ?? b.vcum ?? b.cum;
       for (let i = c.k0; i < b.n; i++) {
         const t = k[i + 1]! - k[i]!;
         if (!t) continue;
