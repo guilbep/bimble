@@ -223,10 +223,15 @@ export function batchShown(b: Batch, items: ArrayLike<number>, shown: Uint8Array
 // exactly (one search a batch) and raised a bucket at a time while over the budget. The same answer's kind: everything at least t big, at most `budget` triangles, never empty. ----
 const BPO = 16, B0 = -512, NB = 1536; // buckets per octave (a 4.4 % step); log2(size / dist) from -32 octaves, over 96 octaves
 interface SizeHist { key: string; bucket: Int16Array; tris: Float64Array }
-const hists = new WeakMap<Batch, SizeHist>();
+// (VIS2: two per batch: moving frames count every shown item, still frames and slices what the visibility test lets
+// through (Cut.cum, another key): one entry flipped between them and the first moving frame after a still picture made
+// 46,800 histograms again: 170 ms of script on the owner's project)
+const hists = new WeakMap<Batch, SizeHist[]>();
+/** VIS2: the size histograms made so far (a test reads it: moving and still frames alternating make none again). */
+export const cullStats = { histBuilds: 0 };
 function histOf(c: Cut, key: string): SizeHist {
-  const b = c.b, h = hists.get(b);
-  if (h && h.key === key) return h;
+  const b = c.b, hs = hists.get(b), h = hs ? hs.find((x) => x.key === key) : undefined;
+  if (h) return h;
   const k = c.cum ?? b.vcum ?? b.cum, idx: number[] = [], tr: number[] = [];
   for (let i = 0; i < b.n; i++) {
     const t = k[i + 1]! - k[i]!;
@@ -236,9 +241,13 @@ function histOf(c: Cut, key: string): SizeHist {
     else idx.push(q), tr.push(t);
   }
   const out = { key, bucket: Int16Array.from(idx), tris: Float64Array.from(tr) };
-  hists.set(b, out);
+  cullStats.histBuilds++;
+  if (hs) { hs.unshift(out); if (hs.length > 2) hs.length = 2; } else hists.set(b, [out]);
   return out;
 }
+/** VIS2: batch b's size histogram for `key` made now (what a moving frame's budgetCutFast would make at its first use):
+ *  the viewport makes them while idle, so the first moving frame of a gesture does not (170 ms on 46,800 batches). */
+export function warmHist(b: Batch, key: string): void { histOf({ b, dist: 1, k0: 0 }, key); }
 /** budgetCut's answer through size buckets (for many batches); `key` changes when what is shown changes. */
 export function budgetCutFast(cs: Cut[], budget: number, key: string): { t: number; tris: number } {
   const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.cum ?? c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };

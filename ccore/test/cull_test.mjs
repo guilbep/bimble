@@ -16,6 +16,8 @@
 //   (GET /mesh?proxies=N: 202 until built, then 200 with BPRX), parsed: every element in one leaf, a
 //   cell's leaves hold its children's; from far away the proxies stand for every leaf, at 0 px for none;
 //   a hidden element keeps every cell above it from standing; stand-ins never cover a leaf twice.
+// - VIS2: budgetCutFast keeps a batch's size histograms for moving frames and still frames (two keys): alternating them
+//   builds none again (one entry flipped: 46,800 histograms at each motion start, 170 ms on a real project).
 // - VIS2: an item larger than the budget is drawn alone even when its size over its distance, times the distance,
 //   rounds above its size (budgetCut, budgetCutFast: the fill's slices drew 0 triangles forever on a real project).
 // - VIS2 (the render origin, web-ui/src/gl/origin.ts): a link placed 2,600 km from the scene's origin (georeferenced
@@ -103,6 +105,22 @@ const check = (what, ok, more = "") => { if (ok) passed++; else failed++; consol
   const b = { first: 0, n: 2, size: new Float32Array([found.sz, 1]), cum: new Uint32Array([0, 60000, 60010]), ecum: new Uint32Array(3), box: new Float64Array(6), group: -1 };
   const ex = C.budgetCut([{ b, dist: found.d, k0: 0 }], 50000), fa = C.budgetCutFast([{ b, dist: found.d, k0: 0 }], 50000, "vis2");
   check(`VIS2: an item over the budget whose size over distance rounds up is drawn alone, never 0 triangles (a fill that never ended): exact ${ex.tris}, bucketed ${fa.tris}`, ex.tris === 60000 && fa.tris === 60000);
+}
+
+// ---- VIS2: the size histograms of budgetCutFast kept for moving frames and still frames alike ----
+{
+  const bs = [];
+  for (let k = 0; k < 2500; k++) {
+    const n = 8, size = new Float32Array(n), cum = new Uint32Array(n + 1), kept = new Uint32Array(n + 1);
+    for (let i = 0; i < n; i++) size[i] = 4000 - 300 * i - k % 7, cum[i + 1] = cum[i] + 500, kept[i + 1] = kept[i] + (i % 2 ? 500 : 0);
+    bs.push({ b: { first: 0, n, size, cum, ecum: new Uint32Array(n + 1), box: new Float64Array(6), group: -1 }, kept, dist: 5000 + 37 * k });
+  }
+  const moving = () => C.budgetCutFast(bs.map((x) => ({ b: x.b, dist: x.dist, k0: 0 })), 200000, "v1|l1|");
+  const still = () => C.budgetCutFast(bs.map((x) => ({ b: x.b, dist: x.dist, k0: 0, cum: x.kept })), 200000, "v1|l1|pyr#1");
+  const h0 = C.cullStats.histBuilds;
+  moving(), still(), moving(), still(), moving();
+  const built = C.cullStats.histBuilds - h0;
+  check(`VIS2: moving and still frames alternating make each batch's two histograms once (${built} for 2,500 batches, 5 frames)`, built === 5000);
 }
 
 // ---- frustum ----

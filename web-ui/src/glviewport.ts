@@ -85,7 +85,7 @@ import {
   type VisibilitySets,
 } from "./bimble";
 import { drawMeasure } from "./gl/measure";
-import { BATCH_TRIS, boxInFrustum, budgetCut, budgetCutFast, cutEnd, frustumPlanes, makeBatches, MIN_MOVING_TRIS, type Batch, type Cut } from "./gl/cull"; // 3D1
+import { BATCH_TRIS, boxInFrustum, budgetCut, budgetCutFast, cutEnd, frustumPlanes, makeBatches, MIN_MOVING_TRIS, warmHist, type Batch, type Cut } from "./gl/cull"; // 3D1
 import { batchShown, IDENTITY_XF, packState, sameXf, STATE_NONE, STATE_TEX_W, xfBox, xfPoint, xfRayToLocal, xfRows, type ModelXf } from "./gl/cull"; // LNK3D
 import { cutProxies, fitProxies, parseBprx, standIns, usableCells, type Proxies } from "./gl/proxies"; // 3D2
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
@@ -708,7 +708,9 @@ interface GlStats {
    *  picking again), the wheel's last pivot and the current drag's pivot (world mm; null: none) and
    *  what they came from, double-click fits. */
   nav: { picks: number; zoomPivot: number[] | null; zoomFrom: "hit" | "plane" | null; orbitPivot: number[] | null;
-    orbitFrom: "hit" | "selection" | "target" | null; fits: number };
+    orbitFrom: "hit" | "selection" | "target" | null; fits: number;
+    /** VIS2: the pick the last pivot came from ("readout": the last picture's element attachment, that element alone). */
+    pivotPick?: string | null };
   /** Test hooks (NAV1): the eye (world mm, 3D), an element's box (world mm) by GlobalId (the open model). */
   navEye?: () => number[] | null;
   elementBox?: (id: string) => { min: number[]; max: number[] } | null;
@@ -1594,7 +1596,20 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const FEEDBACK_MS = 60;
   const feedbackFrame = () => {
     const rate = trisPerMs || wholeRate;
-    if (rate > 0 && lastAllTris / rate > FEEDBACK_MS && stats.wholeFeedback !== true) lastCamChangeAt = performance.now(), feedbackPending = true;
+    // (VIS2: everything shown: the change that asks for feedback (a hide, a resize, a selection) makes the last pyramid stale,
+    // so the next whole frame draws everything in view: 83 to 105 M triangles on the owner's project, 300 to 800 ms)
+    if (rate > 0 && Math.max(lastAllTris, lastRawTris) / rate > FEEDBACK_MS && stats.wholeFeedback !== true) lastCamChangeAt = performance.now(), feedbackPending = true;
+  };
+  let lastRawTris = 0;
+  // VIS2: the moving frames' size histograms (gl/cull.ts) made while idle, 4 ms a loop at most, so the first moving frame of
+  // a gesture finds them (its own key: visGen, listsGen and no pyramid, as frame() makes it)
+  let warmAt = 0, warmKey = "";
+  const warmHists = () => {
+    if (dbs.length <= 2000) return;
+    const key = `${visGen}|${listsGen}|`;
+    if (key !== warmKey) warmKey = key, warmAt = 0;
+    const t = performance.now();
+    while (warmAt < dbs.length && performance.now() - t < 4) warmHist(dbs[warmAt++]!.b, key);
   };
   let feedbackPending = false, wholeNext = false, wholeAt = 0; // (after such a frame the next one is the whole picture)
   const inputNow = () => { lastInputAt = performance.now(); };
@@ -2891,7 +2906,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (useVis) {
       const kk = `${vk}|${visGen}`;
       for (const { d, c } of seen) {
-        if (d.vkey !== vk || !d.vmask) { maskBatch(pyr, d, boxes, shown, d.g ? () => d.g!.ni / 3 : (i) => (m.ni[d.items[i]!] ?? 0) / 3); visMasked++; d.runsSerial = -1; }
+        // (only batches already masked for this pyramid: making every batch's mask here cost 100 to 250 ms a slice on a
+        // project of links, an input waited behind it; the others count all their items and are masked below when drawn)
+        if (d.vkey !== vk || !d.vmask) { delete c.cum; continue; }
         if (d.kcumKey !== kk || !d.kcum) {
           const base = d.b.vcum ?? d.b.cum, mask = d.vmask!, kc = d.kcum && d.kcum.length === d.b.n + 1 ? d.kcum : new Uint32Array(d.b.n + 1);
           for (let i = 0; i < d.b.n; i++) kc[i + 1] = kc[i]! + (mask[i] ? base[i + 1]! - base[i]! : 0);
@@ -2925,7 +2942,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         cutT = stillPx * (orthoEye ? orthoMmPx : pxK);
         for (const { d, c } of seen) d.k1 = cutEnd(c, cutT);
       }
-      if (!slice) { let all = 0; for (const { c } of seen) { const k = c.cum ?? c.b.vcum ?? c.b.cum; all += k[c.b.n]! - k[c.k0]!; } lastAllTris = all; } // VIS1 (P0-a) (VIS2: what may be drawn)
+      if (!slice) { // VIS1 (P0-a) (VIS2: what may be drawn, and everything shown: a frame whose pyramid no longer applies draws that)
+        let all = 0, raw = 0;
+        for (const { c } of seen) { const k = c.cum ?? c.b.vcum ?? c.b.cum, kr = c.b.vcum ?? c.b.cum; all += k[c.b.n]! - k[c.k0]!; raw += kr[c.b.n]! - kr[c.k0]!; }
+        lastAllTris = all, lastRawTris = raw;
+      }
       for (const { d, c } of seen) d.k0 = c.k0, d.k1 = cutEnd(c, cut.t);
       // VIS2: a slice the size threshold stalls (the next size level alone is over the budget: thousands of copies of one
       // 22,000-triangle shape at one size on the owner's project, the slice took one of them, the fill crawled for half a
@@ -2950,6 +2971,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     for (const d of dbs) d.runs = null;
     if (useVis) for (const { d } of seen) {
       if (d.k1 <= d.k0) continue;
+      if (d.vkey !== vk || !d.vmask) { maskBatch(pyr, d, boxes, shown, d.g ? () => d.g!.ni / 3 : (i) => (m.ni[d.items[i]!] ?? 0) / 3); visMasked++; d.runsSerial = -1; }
       // the runs and what they leave out, kept per mask and range (a still picture's frames and slices repeat them)
       if (d.runsSerial !== pyr.serial || d.runsK0 !== d.k0 || d.runsK1 !== d.k1) {
         const mask = d.vmask!;
@@ -3980,7 +4002,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** lib.rs wheel_pivot in 3D: the geometry under the cursor, else the plane through the orbit target. */
   const wheelPivot = (x: number, y: number): V3 => {
     stats.nav.picks++;
-    const h = pickHit(x, y);
+    // (VIS2: from the last picture's element attachment, whatever its camera, that element alone, as the readout: the scan
+    // of every element ran when that picture was not this camera's complete one, 100 to 600 ms of a wheel step or a press
+    // on a project of links; a miss falls back to the plane, as before)
+    const h = pickHit(x, y, true);
+    stats.nav.pivotPick = stats.pickFrom ?? null;
     stats.nav.zoomFrom = h ? "hit" : "plane";
     if (h) return h.point;
     const r = rayAt(x, y);
@@ -4007,7 +4033,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** lib.rs orbit_pivot_at: the geometry under the press, else the selection's centre, else null (the target). */
   const orbitPivotAt = (x: number, y: number): V3 | null => {
     stats.nav.picks++;
-    const h = pickHit(x, y);
+    const h = pickHit(x, y, true); // (VIS2: as wheelPivot)
+    stats.nav.pivotPick = stats.pickFrom ?? null;
     const p = h ? h.point : selectionCentre();
     stats.nav.orbitFrom = h ? "hit" : p ? "selection" : "target";
     stats.nav.orbitPivot = p ? toWorld(p) : null;
@@ -4043,6 +4070,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     canvas.width = w;
     canvas.height = h;
     dirty = true;
+    if (mesh) feedbackFrame(); // VIS2: a panel shown by a click resizes the canvas: the feedback first, the whole picture after
   };
   new ResizeObserver(fitCanvas).observe(canvas);
   // ---- end BUG1 ----
@@ -4276,6 +4304,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // under the pointer" for good before).
     const key = `${ptrAt[0]},${ptrAt[1]}|${stats.frames}`;
     if (key === ptrDone) return;
+    // VIS2: not while the GPU still draws the last frame (its fence not signalled) nor with a frame about to be drawn: the
+    // readout's one-pixel readPixels waited for the GPU behind that frame, every frame the pointer rested on the canvas
+    // (up to 840 ms of a click's 2.6 s on the owner's project: the click's own frame started 660 ms late). Asked again next loop.
+    if (frameFence || dirty) return;
     ptrDone = key;
     stats.pointerQueries++;
     const w0 = pointerWorld(ptrAt[0], ptrAt[1]);
@@ -4765,7 +4797,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       colours(); // LNK3D: the state texture
       if (stats.loadSteps && !stats.loadSteps.colours) stats.loadSteps.colours = performance.now() - tc; // 3D2 (step 5)
       // 3D2 (step 4): only colours changed and nothing else asks for a frame: over the kept picture
-      if (dirty || fill !== null || fillEdges || !recoloured || !overpaint(recoloured)) dirty = true;
+      if (dirty || fill !== null || fillEdges || !recoloured || !overpaint(recoloured)) { if (!dirty) feedbackFrame(); dirty = true; } // (VIS2: a frame to draw: its feedback first)
     }
     fitCanvas(); // BUG1
     // 3D1: STILL_MS after the camera stopped (no button held), the picture is completed in slices, one a
@@ -4774,6 +4806,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     pollFence(); // VIS1 (P0-a)
     if (wholeNext && !dirty && performance.now() >= wholeAt) wholeNext = false, lastCamChangeAt = -Infinity, stillDue = 0, fill = null, fillEdges = false, dirty = true; // VIS1: after a feedback frame
     hiz?.poll(); // VIS1: the last picture's pyramid, when the GPU has it
+    if (!dirty && fill === null && !fillEdges && !drag && performance.now() - lastInputAt > 300) warmHists(); // VIS2
     if (!dirty && stillDue && !drag && performance.now() >= stillDue && performance.now() - lastInputAt >= motionWin()) {
       stillDue = 0;
       if ((stats.moving?.t ?? 0) > 0 || (stats.moving?.outlines ?? 0) > 0 || (stats.moving?.proxied ?? 0) > 0) fill = { t: Infinity, id: ++fillSerial }, fillEdges = false, dirty = fillStep = true; // 3D2: proxies at 3 px

@@ -16,6 +16,7 @@ export const hint = () => {
 </script>
 
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // D6 Quantities (wireframes v01 Quantities.html; ADR 0029). The table is the real schedule from Rust
 // (`schedule_rows`: text cells, subtotals and total as Rust writes them; nothing is summed here).
 // Groups carry `ids` (one GlobalId or null per row): a row click selects, the selected element's row is pink
@@ -32,7 +33,7 @@ import { foundationRows, type FoundationRow } from "../bimble"; // WAVE1B (B5)
 // ponytail: the built-in "All elements" schedule is shown (it mixes classes, as the reference); no schedule
 // picker in the reference. Add one when the navigator's schedule list opens a schedule here.
 const def = computed<ScheduleDef | null>(() => {
-  void state.value.rev;
+  void stateRev.value;
   const all = scheduleList() as ScheduleDef[];
   return all.find((d) => d.name === (pickedSchedule.value ?? "All elements")) ?? all.find((d) => d.name === "All elements") ?? all[0] ?? null; // DEAD1: the palette's pick
 });
@@ -43,12 +44,12 @@ const openColumns = () => { if (def.value) pickedSchedule.value = def.value.name
 const offset = ref(0);
 watch(() => def.value?.name, () => { offset.value = 0; });
 const table = computed<Table | null>(() => {
-  void state.value.rev;
+  void stateRev.value;
   if (!def.value) return null;
   try { return scheduleWindow(def.value.name, offset.value, PAGE); } catch { return null; }
 });
 const rowCount = computed(() => table.value?.row_count ?? 0);
-const allLists = computed(() => { void state.value.rev; return (scheduleList() as ScheduleDef[]).map((d) => d.name); });
+const allLists = computed(() => { void stateRev.value; return (scheduleList() as ScheduleDef[]).map((d) => d.name); });
 const pick = (name: string) => { pickedSchedule.value = name; };
 // Sort by a column: its field (the list's own order of fields, then its properties), stored in the list (one undo step).
 const colIds = computed(() => [...((def.value?.fields as string[] | undefined) ?? []), ...((def.value?.properties as string[] | undefined) ?? [])]);
@@ -65,12 +66,12 @@ const groupLabel = (g: Table["groups"][number]) => g.head || (g.material !== und
   ? (g.material ? t('qty1.material', { name: g.material }) : t('qty1.noMaterial'))
   : t('quantities.storey', { name: g.level });
 // ---- WAVE1B (B1): the openings and sleeves, a row each (a sleeve's volume: the exact cylinder) ----
-const opRows = computed<OpeningRow[]>(() => { void state.value.rev; return state.value.editable === false ? [] : openingRows(); });
+const opRows = computed<OpeningRow[]>(() => { void stateRev.value; return state.value.editable === false ? [] : openingRows(); });
 const opSize = (r: OpeningRow) => r.kind === "sleeve" ? `Ø ${r.diameter ?? 0}` : r.kind === "opening" ? `${r.width ?? 0} × ${r.height ?? r.length ?? 0}` : "—";
 const opTotal = computed(() => opRows.value.reduce((s, r) => s + (r.volume_m3 ?? 0), 0));
 const opPick = (r: OpeningRow) => { select([r.host]); selectedOpening.value = r.id ? { host: r.host, id: r.id } : null; };
 // ---- B5: the foundations (footings and rafts), apart from the slabs ----
-const fdRows = computed<FoundationRow[]>(() => { void state.value.rev; return state.value.editable === false ? [] : foundationRows(); });
+const fdRows = computed<FoundationRow[]>(() => { void stateRev.value; return state.value.editable === false ? [] : foundationRows(); });
 const fdTotal = computed(() => fdRows.value.reduce((s, r) => s + r.volume_m3, 0));
 // ---- end WAVE1B ----
 const shown = computed(() => table.value?.groups.reduce((n, g) => n + g.rows.length, 0) ?? 0);

@@ -6,7 +6,7 @@ import { send } from "../shell/send";
 /** The sheet the page shows: the sheet a tab opened last, else Rust's current sheet tab, else the first sheet; null
  *  without sheets. */
 export const currentSheet = computed<SheetSummary | null>(() => {
-  void state.value.rev;
+  void stateRev.value;
   let all: SheetSummary[] = [];
   try { all = sheets(); } catch { /* no model yet */ }
   const cur = openViews.value.current;
@@ -26,7 +26,7 @@ watch(sheetTab, (t) => {
 
 /** The selected placed view as the layout gives it (C core `sheet_layout`), null otherwise. */
 export const selectedLayout = computed<PlacedLayout | null>(() => {
-  void state.value.rev;
+  void stateRev.value;
   const s = currentSheet.value, id = selectedPlaced.value;
   if (!s || !id) return null;
   try { return sheetLayout(s.id).placed.find((p) => p.id === id) ?? null; } catch { return null; }
@@ -34,6 +34,7 @@ export const selectedLayout = computed<PlacedLayout | null>(() => {
 </script>
 
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // D3's left panel (fr/SheetLayout.html `.nav` sheet list, `.props`). Real: the sheets (number, name, revision),
 // "+" (add_sheet, then opened), number, name, paper and orientation, revision (set_sheet, one per blur/Enter),
 // delete (sheet_remove), "place view" (sheet_place at the paper's centre), the placed view selected on the sheet
@@ -48,7 +49,7 @@ const PAPERS = ["A4", "A3", "A2", "A1", "A0"];
 const SIZE: Record<string, [number, number]> = { A4: [297, 210], A3: [420, 297], A2: [594, 420], A1: [841, 594], A0: [1189, 841] };
 const error = sheetsError;
 const allSheets = computed<SheetSummary[]>(() => {
-  void state.value.rev;
+  void stateRev.value;
   try { return [...sheets()].sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true })); } catch { return []; }
 });
 

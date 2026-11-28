@@ -3,6 +3,7 @@ export const capability = "sheets"; // VIEWSHEET: verb sheet_place (SH1), query 
 </script>
 
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // Sheets → Place view… (ticket VIEWSHEET, ADR 0076): on the sheet shown, the views of the model; a click places
 // that view at the paper's centre (one sheet_place, one undo step) and selects it on the sheet, to be moved with
 // the Select tool. A view already on a sheet is placed again (the core keeps one view on several sheets, as Rust's
@@ -20,7 +21,7 @@ import { currentDialog } from ".";
 const SIZE: Record<string, [number, number]> = { A4: [297, 210], A3: [420, 297], A2: [594, 420], A1: [841, 594], A0: [1189, 841] };
 const error = ref<string | null>(null);
 const close = () => { currentDialog.value = null; };
-const all = computed<SheetSummary[]>(() => { void state.value.rev; try { return sheets(); } catch { return []; } });
+const all = computed<SheetSummary[]>(() => { void stateRev.value; try { return sheets(); } catch { return []; } });
 /** How many sheets already show each view. */
 const onSheets = computed(() => {
   const n = new Map<string, number>();

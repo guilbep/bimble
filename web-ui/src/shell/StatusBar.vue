@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 import { computed } from "vue";
 import { state, visibility, actions, runAction, pointer, status, placing, openViews, links } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
@@ -15,7 +16,7 @@ const chipTitle = (): string => { const h = renderer.asked === "webgpu" && rende
 const langs: Lang[] = ["fr", "en"];
 const preview = import.meta.env.VITE_CCORE === "1" ? `Preview, C core ${import.meta.env.VITE_CCORE_REV ?? "dev"} · openings drawn uncut (no boolean kernel in wasm)` : ""; // ticket PG1
 // Linked models and reference plans shown now; re-read when the model or the views change.
-const shownLinks = computed(() => { void state.value.rev; void openViews.value; return links().filter((k) => k.visible); });
+const shownLinks = computed(() => { void stateRev.value; void openViews.value; return links().filter((k) => k.visible); });
 // Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, enabled as `query("actions")` says.
 type Chip = { key: Parameters<typeof t>[0]; n: number; undo: string };
 const enabled = (name: string) => actions.value.some((a) => a.name === name && a.enabled);

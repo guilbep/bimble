@@ -3,6 +3,7 @@ export const hint = "palette.hint";
 </script>
 
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // Screen D8, Command palette (wireframes v01 fr/Palette.html). Lists the ribbon actions (`query("actions")`),
 // the views (`open_views`), the sheets and the schedules; each entry runs its Rust call.
 // Recent commands (`recent_actions`, Rust's last 5) come first when the query is empty, without a
@@ -40,7 +41,7 @@ const TAB: Record<string, string> = { File: "quick.file", Project: "tab.project"
 const copy = (key: string, rust: string) => { const s = t(key); return s === key ? rust : s; };
 
 const items = computed<Item[]>(() => {
-  void state.value.rev;
+  void stateRev.value;
   const list: Item[] = actions.value.map((a) => {
     const tool = tools.get(a.name);
     return {

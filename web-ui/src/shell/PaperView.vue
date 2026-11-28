@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // A view On paper (ticket PAPER1, Rust paper.rs paper_ui): the active plan or section drawn as its paper
 // (`query view_svg {view, bare: true}`: the drawing its PDF and sheets are made of), over the model's
 // viewport while `open_views.paper.on`. The viewport stays alive under it (App.vue hides the canvas only).
@@ -11,7 +12,7 @@ import { t } from "../i18n";
 
 /** The drawing of the active view, asked again at each rev and view; an error is shown, not thrown. */
 const drawn = computed<{ src: string; w: number; h: number; title: string } | { error: string } | null>(() => {
-  void state.value.rev;
+  void stateRev.value;
   const id = openViews.value.active;
   if (!id || !openViews.value.paper.on) return null;
   try {

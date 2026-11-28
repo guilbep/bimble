@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // Setting out tab's left panel (fr/Implantation.html aside.left > .props). Ticket G2: the project
 // base point is the model's georeference (ADR 0045, ccore/src/georef.c): read with `query north`
 // (system, turns) and `query coordinates` (the survey coordinates of the world origin: east, north,
@@ -16,9 +17,9 @@ import { has } from "./capability";
 
 const view = computed(() => openViews.value.views.find((v) => v.id === openViews.value.active) ?? null);
 const orient = (e: Event) => view.value && setView(view.value.id, { true_north: (e.target as HTMLSelectElement).value === "true" });
-const editable = computed(() => { void state.value.rev; void state.value.file; return editableNow(); });
+const editable = computed(() => { void stateRev.value; void state.value.file; return editableNow(); });
 /** The survey coordinates of the world origin = the georeference's east, north, height. */
-const base = computed(() => { void state.value.rev; void state.value.file; return editable.value ? coordinates([0, 0, 0]) : null; });
+const base = computed(() => { void stateRev.value; void state.value.file; return editable.value ? coordinates([0, 0, 0]) : null; });
 const error = ref<string | null>(null);
 const ver = ref(0);
 type Num = "east_m" | "north_m" | "height_m" | "rotation_deg" | "map_rotation_deg";
