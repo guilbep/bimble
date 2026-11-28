@@ -3,9 +3,9 @@
 // Six synthetic buildings (bench/buildings_synth.mjs, 2.7 M triangles, placed 2,600 km away: drive.mjs --georef) linked
 // into a new project on the native host, opened by tools/drive.mjs's Drive (one headless Chromium), draw_visible on (the
 // default). After a still picture: a press that selects (click), Escape, a wheel step, the start of an orbit drag, a press
-// that starts a pan; each answered by a frame drawn within 200 ms of the input (the frame's end, as drive.mjs measures:
-// the page's frames log, `window.__drv`). The first of each kind is checked, after the picture is complete and the page
-// idle. What made them slow on the owner's project: the first moving frame rebuilt every batch's size histogram (the
+// that starts a pan; each timed by lib/input_time.mjs (ADR 0074 as every lab test applies it: the page's part, the input to
+// the viewport frame drawn for it, at 200 ms always; the presented frame at 200 ms on a hardware GPU, reported on a CPU
+// rasteriser and failing above 1,000 ms), after the picture is complete, the page idle and the GPU settled. What made them slow on the owner's project: the first moving frame rebuilt every batch's size histogram (the
 // moving and still keys flipped one cache entry), a selection or a resize drew the whole picture with no pyramid,
 // navigation pivots scanned every element, and components re-asked the host on every state change.
 // Also: a selection and Escape ask the host nothing that does not depend on the selection, and the wheel's pivot comes
@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { Drive, GEOREF } from "../tools/drive.mjs";
 import { LAB_GPU } from "./lib/chromium.mjs";
 import { CCORE } from "./lib/lab.mjs";
+import { adapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => { if (ok) passed++; else failed++; console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`); };
@@ -26,7 +27,14 @@ const d = new Drive({ links: 6, storeys: 2, georef: true, gpu: LAB_GPU, size: "1
 d.dir = join(root, "out");
 const bye = async (code) => { await d.close(); rmSync(root, { recursive: true, force: true }); process.exit(code); };
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => bye(130));
-const LIMIT = 200;
+// ADR 0074's rule as lib/input_time.mjs applies it: the page's part (the input to the frame the page draws for it) at 200 ms
+// always; the presented frame at 200 ms on a hardware GPU, reported on a CPU rasteriser (SwiftShader: its GPU process, not
+// the product) and failing only above 1,000 ms
+const DOM = { click: "pointerdown", press: "pointerdown", drag: "pointerdown", key: "keydown", wheel: "wheel" };
+/** Arms lib/input_time's watcher for the input `kind`: its own feedback, a viewport frame drawn after it. */
+const arm = async (kind) => { const n0 = await d.ev("window.__bbGl.frames"); await d.ev(watchSource({ kind: DOM[kind], page: `window.__bbGl.frames > ${n0}` })); };
+let gpu = null;
+const timed = async (label) => { const v = verdict(await readTimes((e) => d.ev(e)), gpu); check(`${label}: ${v.line}`, v.pageOk && v.presOk); };
 
 async function main() {
   await d.open();
@@ -54,12 +62,12 @@ async function main() {
   const q0 = await d.ev("({ ...window.__vis2q })");
   const linksNow = () => d.ev("(async () => { const s = (await import('/src/bimble.ts')).state.value; return `${s.rev}|${s.links ?? 0}`; })()");
   const k0 = await linksNow();
+  gpu = await adapter((e) => d.ev(e));
+  console.log(`  adapter: ${gpu.renderer} (${gpu.software ? "a software rasteriser" : "a hardware GPU"})`);
   for (const [name, kind, g] of steps) {
-    const n0 = await d.ev("window.__drv.inputs.length");
+    await arm(kind);
     await d.gesture(g);
     await d.gesture(still);
-    const r = await d.ev(`(() => { const D = window.__drv, fr = D.frames; return D.inputs.slice(${n0}).filter((i) => i.what !== "release").map((i) => { const f = fr.find((x) => x.end >= i.t); return { what: i.what, ms: f ? f.end - i.t : null }; }); })()`);
-    const first = r.find((i) => kind === "click" || kind === "press" ? i.what === "press" : i.what === kind);
     if (kind === "click") { const sel = await d.ev("[...document.querySelectorAll('[data-bb=status-chip]')].map((e) => e.textContent).find((t) => /selected|sélectionn/.test(t)) ?? null"); check("the click selected an element (the press's feedback is its highlight)", !!sel, `${sel} at ${at}`); }
     if (kind === "key") { // after a selection and its clearing: what does not depend on the selection was not asked again
       const q1 = await d.ev("({ ...window.__vis2q })"), again = ["links_tree", "link_levels", "link_notes"].filter((k) => (q1[k] ?? 0) > (q0[k] ?? 0));
@@ -72,7 +80,7 @@ async function main() {
       const nav = await d.ev("window.__bbGl.nav");
       check("the wheel's pivot read from the last picture's element attachment (the GPU idle before it: no scan of every element, no wait)", nav.pivotPick === "readout", `${nav.pivotPick ?? "not recorded"} (${nav.zoomFrom})`);
     }
-    check(`${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms (${r.length} inputs, worst ${Math.round(Math.max(...r.map((i) => i.ms ?? Infinity)))} ms)` : "no input recorded");
+    await timed(name);
   }
   // the same on a machine 4 and 6 times slower than the reference one (the dev machine: Apple M1 Pro, Asahi Linux): this host
   // calibrated first (a fixed typed-array loop in the page, median of 5), then the CPU throttled (CDP) by what is left of the
@@ -97,11 +105,9 @@ async function main() {
     await d.S("Emulation.setCPUThrottlingRate", { rate });
     try {
       for (const [name, kind, g] of [["press (a click that selects)", "click", [`click ${at3[0]} ${at3[1]}`]], ["Escape", "key", ["key Escape"]], ["wheel (a zoom step)", "wheel", ["zoom 1 50"]], ["drag (an orbit starts)", "drag", ["orbit 200 0 400"]]]) {
-        const n0 = await d.ev("window.__drv.inputs.length");
+        await arm(kind);
         await d.gesture([...g, ...still]);
-        const r = await d.ev(`(() => { const D = window.__drv, fr = D.frames; return D.inputs.slice(${n0}).filter((i) => i.what !== "release").map((i) => { const f = fr.find((x) => x.end >= i.t); return { what: i.what, ms: f ? f.end - i.t : null }; }); })()`);
-        const first = r.find((i) => kind === "click" ? i.what === "press" : i.what === kind);
-        check(`${target}x slower than the reference machine (throttled ${rate}x): ${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms` : "no input recorded");
+        await timed(`${target}x slower than the reference machine (throttled ${rate}x): ${name}`);
       }
     } finally { await d.S("Emulation.setCPUThrottlingRate", { rate: 1 }); }
   }
@@ -111,12 +117,12 @@ async function main() {
   const selOf = () => d.ev("(async () => { const s = (await import('/src/bimble.ts')).state.value; return s.linked ? `${s.linked.link}/${s.linked.id}` : s.selection.join(','); })()");
   await d.gesture([`click ${at2[0]} ${at2[1]}`, ...still]);
   const want = await selOf();
-  const n1 = await d.ev("window.__drv.inputs.length");
-  await d.gesture(["key Escape", "sleep 60", `click ${at2[0]} ${at2[1]}`, ...still]);
+  await d.gesture(["key Escape", "sleep 60"]);
+  await arm("click");
+  await d.gesture([`click ${at2[0]} ${at2[1]}`, ...still]);
   const got = await selOf();
-  const r2 = await d.ev(`(() => { const D = window.__drv, fr = D.frames; return D.inputs.slice(${n1}).filter((i) => i.what === "press").map((i) => { const f = fr.find((x) => x.end >= i.t); return f ? f.end - i.t : null; }); })()`);
-  check(`a click 60 ms after Escape (its feedback frame, before the complete picture): within ${LIMIT} ms, the same element selected`, r2.length > 0 && r2[0] !== null && r2[0] <= LIMIT && !!want && got === want,
-    `${r2[0] === null || r2[0] === undefined ? "no frame" : `${Math.round(r2[0])} ms`}, ${got === want ? "the same element" : `selected ${got}, expected ${want}`}`);
+  await timed("a click 60 ms after Escape (its feedback frame, before the complete picture)");
+  check("that click selected the same element", !!want && got === want, got === want ? "" : `selected ${got}, expected ${want}`);
   console.log(`lab_inputs_links: ${passed} passed, ${failed} failed (LAB_GPU=${LAB_GPU}, ${d.gpu?.renderer})`);
   await bye(failed ? 1 : 0);
 }
