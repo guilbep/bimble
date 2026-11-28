@@ -1603,6 +1603,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (rate > 0 && Math.max(lastAllTris, lastRawTris) / rate > FEEDBACK_MS && stats.wholeFeedback !== true) lastCamChangeAt = performance.now(), feedbackPending = true;
   };
   let lastRawTris = 0;
+  /** VIS2: the last frame drawn has finished on the GPU (its own fence): a synchronous pixel read now does not wait behind it
+   *  (with a CPU rasteriser on a slow machine the GPU process may still draw a frame seconds after the page went quiet). */
+  let latestSync: WebGLSync | null = null;
+  const gpuIdle = (): boolean => {
+    if (!latestSync) return true;
+    if (gl.getSyncParameter(latestSync, gl.SYNC_STATUS) !== gl.SIGNALED) return false;
+    gl.deleteSync(latestSync), latestSync = null;
+    return true;
+  };
   // VIS2: the moving frames' size histograms (gl/cull.ts) made while idle, 4 ms a loop at most, so the first moving frame of
   // a gesture finds them (its own key: visGen, listsGen and no pyramid, as frame() makes it)
   let warmAt = 0, warmKey = "";
@@ -1617,6 +1626,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const inputNow = () => { lastInputAt = performance.now(); };
   canvas.addEventListener("pointermove", (ev) => { if (ev.buttons) inputNow(); }, { capture: true, passive: true });
   canvas.addEventListener("wheel", inputNow, { capture: true, passive: true });
+  canvas.addEventListener("pointerdown", inputNow, { capture: true, passive: true }); // (VIS2: a press too: no pyramid read-back on its path)
   window.addEventListener("keydown", inputNow, true);
   /** The last frame's fence: its time (draw start to the GPU's end, to a loop's resolution) and, for a whole
    *  frame, the triangles a ms a whole picture is drawn at. */
@@ -1793,6 +1803,37 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         : sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : shown[e] === 2 ? REVEALED_SRGB
         : (CATEGORY_SRGB[m.cats[e] ?? 7] ?? CATEGORY_SRGB[7] ?? SELECTION_SRGB);
     };
+    // VIS2: only the selection changed since the last colours (what is shown, the links' colours and the mesh as then): the
+    // elements selected then and now recoloured, not every element (252,189 on the owner's project: the click's own work)
+    const baseKey = `${visGen}|${(m.links ?? []).map((l) => l.colour ?? -1).join(",")}`;
+    const nowSel: number[] = [];
+    if (linked) { const k = (m.links ?? []).findIndex((l) => l.name === linked.link), l = k >= 0 ? m.links![k]! : null; if (l) for (let e = l.e0; e < l.e0 + l.elements; e++) if (m.ids[e] === linked.id) { nowSel.push(e); break; } }
+    else if (sel.size) { const end = m.links?.[0]?.e0 ?? m.ids.length; for (let e = 0; e < end; e++) if (sel.has(m.ids[e] ?? "")) nowSel.push(e); }
+    if (colMesh === m && colBase === baseKey && elColour.length === m.ids.length && stateTexels.length >= 4 * m.ids.length && stateRows > 0) {
+      const changed = [...new Set([...colSel, ...nowSel])];
+      recoloured = [];
+      const links = new Set<number>();
+      for (const e of changed) {
+        const c = colourOf(e), v = (c[0] << 16) | (c[1] << 8) | c[2];
+        if (elColour[e] !== v) recoloured.push(e);
+        elColour[e] = v;
+        packState(stateTexels, e, c, m.model?.[e] ?? 0, shown[e]! > 0);
+        if ((m.model?.[e] ?? 0) > 0) links.add(m.model![e]!);
+      }
+      for (const k of links) { // a link all shown in its own colour (u_plain): checked again for the links touched
+        const l = m.links![k - 1]!, c = LINK_SRGB[l.colour ?? -1] ?? REFERENCE_SRGB, v = (c[0] << 16) | (c[1] << 8) | c[2];
+        let plain = true;
+        for (let e = l.e0; e < l.e0 + l.elements && plain; e++) if (shown[e] !== 1 || elColour[e] !== v) plain = false;
+        plainOf[k] = plain ? c : null;
+      }
+      colSel = nowSel;
+      const t0 = performance.now();
+      for (const e of changed) uploadStates(e, e + 1); // (each one's row: two selections far apart are not one range)
+      stats.stateUpload = { elements: changed.length, ms: performance.now() - t0 };
+      stats.plain = plainOf.map((x) => x !== null);
+      return;
+    }
+    colMesh = m, colBase = baseKey, colSel = nowSel;
     // 3D2 (step 4): each element's colour kept, the ones that changed listed (a selection is drawn over the
     // kept picture when only colours changed: overpaint below)
     const was = elColour.length === m.ids.length ? elColour : null;
@@ -1827,6 +1868,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // ---- 3D2 (step 4; Rust's #3, highlights over the kept picture): a change of colours alone (a selection)
   // redraws the elements whose colour changed over the last complete picture, not the whole model. ----
   let elColour = new Uint32Array(0), recoloured: number[] | null = null;
+  /** VIS2: what the last colours() ran for: the mesh, what is shown and the links' colours (colBase), the elements selected. */
+  let colMesh: Bmsh | null = null, colBase = "", colSel: number[] = [];
   /** Per element: its first index in the merged face list and edge list (-1: instanced or not drawn), its
    *  instance and group (-1: merged). */
   let elFace = new Int32Array(0), elEdge = new Int32Array(0), elInst = new Int32Array(0), elGroup = new Int32Array(0), elDb = new Int32Array(0); // (LNK3D: its batch)
@@ -3347,6 +3390,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       proxied: prxCells.length + linkCut.reduce((n, c) => n + c.cells.length, 0), outlines: unfinished.length, linkPrxTris, budget, gpu: null, fence: null };
     ftime.end(rec); // VIS1: the frame log
     if (!frameFence) frameFence = { s: gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!, t0: tNow, tris: fTris, whole: !movingNow && !slice && cutT === 0, rec }; // VIS1 (P0-a)
+    if (latestSync) gl.deleteSync(latestSync); // VIS2: every frame's own fence (frameFence is made only when none is pending)
+    latestSync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     perfFrame(motion, tNow, gl, movingNow && fps0); // GPU1 (VIS1: moving = in motion; capped: "draw everything" kept under 100 ms)
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
   };
@@ -4011,8 +4056,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // (VIS2: from the last picture's element attachment, whatever its camera, that element alone, as the readout: the scan
     // of every element ran when that picture was not this camera's complete one, 100 to 600 ms of a wheel step or a press
     // on a project of links; a miss falls back to the plane, as before)
-    const h = pickHit(x, y, true);
-    stats.nav.pivotPick = stats.pickFrom ?? null;
+    // (VIS2: and only when the GPU has finished the last frame: else the plane at once, never a read that waits for the GPU:
+    // a wheel step took 575 ms on a slow runner whose CPU rasteriser was still drawing)
+    const idle = gpuIdle(), h = idle ? pickHit(x, y, true) : null;
+    stats.nav.pivotPick = idle ? stats.pickFrom ?? null : "gpu busy";
     stats.nav.zoomFrom = h ? "hit" : "plane";
     if (h) return h.point;
     const r = rayAt(x, y);
@@ -4039,8 +4086,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** lib.rs orbit_pivot_at: the geometry under the press, else the selection's centre, else null (the target). */
   const orbitPivotAt = (x: number, y: number): V3 | null => {
     stats.nav.picks++;
-    const h = pickHit(x, y, true); // (VIS2: as wheelPivot)
-    stats.nav.pivotPick = stats.pickFrom ?? null;
+    const idle = gpuIdle(), h = idle ? pickHit(x, y, true) : null; // (VIS2: as wheelPivot)
+    stats.nav.pivotPick = idle ? stats.pickFrom ?? null : "gpu busy";
     const p = h ? h.point : selectionCentre();
     stats.nav.orbitFrom = h ? "hit" : p ? "selection" : "target";
     stats.nav.orbitPivot = p ? toWorld(p) : null;
@@ -4313,7 +4360,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // VIS2: not while the GPU still draws the last frame (its fence not signalled) nor with a frame about to be drawn: the
     // readout's one-pixel readPixels waited for the GPU behind that frame, every frame the pointer rested on the canvas
     // (up to 840 ms of a click's 2.6 s on the owner's project: the click's own frame started 660 ms late). Asked again next loop.
-    if (frameFence || dirty) return;
+    if (!gpuIdle() || dirty) return;
     ptrDone = key;
     stats.pointerQueries++;
     const w0 = pointerWorld(ptrAt[0], ptrAt[1]);
@@ -4810,10 +4857,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // frame; anything else that redraws (a move, a selection) abandons the fill
     let fillStep = false;
     pollFence(); // VIS1 (P0-a)
-    if (wholeNext && !dirty && performance.now() >= wholeAt) wholeNext = false, lastCamChangeAt = -Infinity, stillDue = 0, fill = null, fillEdges = false, dirty = true; // VIS1: after a feedback frame
+    // VIS1: after a feedback frame, the complete picture. VIS2: as a fill (slices within the budget, culled once this camera's
+    // pyramid is back; an input abandons it between two slices), not one whole frame: with the pyramid stale (the change that
+    // asked for feedback) that frame drew everything in view, 22 to 105 M triangles on the owner's project, about a second
+    // in which the next click waited (the press after Escape, 620 to 750 ms)
+    if (wholeNext && !dirty && performance.now() >= wholeAt) wholeNext = false, lastCamChangeAt = -Infinity, stillDue = 0, fill = { t: Infinity, id: ++fillSerial }, fillEdges = false, dirty = fillStep = true;
     // VIS1: the last picture's pyramid, when the GPU has it. VIS2: not while a later frame is in flight (its fence pending): the
     // read-back's getBufferSubData waited for the GPU behind that frame (170 to 300 ms after a whole frame on the owner's project)
-    if (!frameFence) hiz?.poll();
+    // (and not on an input's path: not with a frame to draw, nor within 200 ms of an input; the pyramid before serves meanwhile)
+    if (gpuIdle() && !dirty && performance.now() - lastInputAt > 200) hiz?.poll();
     if (!dirty && fill === null && !fillEdges && !drag && performance.now() - lastInputAt > 300) warmHists(); // VIS2
     if (!dirty && stillDue && !drag && performance.now() >= stillDue && performance.now() - lastInputAt >= motionWin()) {
       stillDue = 0;

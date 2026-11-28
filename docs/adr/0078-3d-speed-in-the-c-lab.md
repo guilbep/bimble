@@ -954,6 +954,22 @@ on his data; every optimisation a setting with a good default and an off value).
    the app's mount replaces it before the next paint): GitHub's runner measured 217.8 ms to the card when it waited for
    the bundle (ADR 0074's 200 ms). `lab_open_url` checks it with the CPU throttled 4, 6 and 10 times.
 
+71. **Inputs on a project of links** (measured on the owner's project with `drive.mjs`, each cause in a CPU profile):
+   the status bar's pointer readout read a pixel with a synchronous `readPixels` every frame the pointer rested on the
+   canvas, waiting for the GPU behind the frame in flight (up to 840 ms of a click's 2.6 s): it now waits while a frame
+   is in flight or about to be drawn. Components read `state.value.rev` inside computeds and re-ran on every state change:
+   a click's selection re-asked the host, synchronously, for the links' tree (90 ms), levels and notes: `stateRev` and
+   keyed computeds. The wheel's and an orbit's pivots read the last picture's element attachment (that element alone)
+   instead of scanning every element. `budgetCutFast` keeps two size histograms per batch (moving and still keys had
+   flipped one entry: 46,800 rebuilt at each motion start) and the moving ones are made while idle. The feedback rule
+   estimates a frame by everything shown (the change that asks for feedback makes the pyramid stale), and a canvas resize
+   or a selection's redraw asks for the feedback frame first. Masks are made for the batches a frame draws only.
+72. **A pyramid serves a picture of the same camera at another canvas size** (a click opens the properties panel, Escape
+   closes it): the same eye and direction give the same rays; what lies beyond the old picture is never hidden
+   (`boxHidden`'s `beyond`). The whole frame after such a resize drew 22 M triangles instead of 105 M.
+73. **The pyramid's read-back waits for the last frame's fence**: its `getBufferSubData` is a synchronous round trip to
+   the GPU process, which waited behind the frame drawn since.
+
 ### Evidence (ticket VIS2)
 
 `ccore/test/cull_test.mjs` (VIS2 section): a link placed 2,600 km from the scene's origin, a 12 m beam turned 30 degrees
@@ -977,6 +993,17 @@ differed on 237,853 pixels. A close still frame drew 72 M triangles without the 
 a far one 110 M and 14 M (52 → 12 ms). "wait idle" after a gesture (default settings): before 83 to over 115 s after a
 zoom; after 0.5 to 2.2 s for each of 8 gestures.
 
+Inputs on the owner's project (his window, 11 gestures: orbit, zooms, clicks, a pan, Escape; `drive.mjs`; median / worst
+ms, `draw_visible` on), the commit of decision 67 against decisions 71 to 73: press 257 / 801 → 195 / 619, Escape 296 → 137,
+wheel 139 / 255 → 95 / 190, drag 10 / 213 → 9 / 173 (off: press 257 / 737 → 140 / 627, Escape 302 → 100). Run to run
+the worst cases move by tens of ms (a repeat: press 255 / 740, wheel 189, drag 195). Over 200 ms still: the press after
+Escape (619–754 ms: Escape's resize, the whole frame of the complete picture after its feedback frame and the pyramid's
+read-back, about 1.1 s with no frame) and the press that starts an orbit (about 250 ms: the first moving frame's 160 ms
+of script). `lab_inputs_links.mjs` (six georeferenced buildings, 2.7 M triangles, a whole frame 380–520 ms under
+SwiftShader): press, Escape, wheel, orbit start, pan start, each answered within 18–96 ms; a click 60 ms after Escape
+answered within 200 ms with the same element; a selection and Escape ask the host nothing that does not depend on the
+selection, and the wheel's pivot comes from the readout (these two fail on the page before).
+
 `lab_open_url` (local SwiftShader, the page's part, navigation start to the opening card): before 89–170 ms, CPU
 throttled 4x 124–147, 6x 157–184, 10x 294.7 ms (fails); after 39–41, 59–73, 78–115, 105.9 ms. The viewer wasm: 638,521
 bytes.
@@ -984,8 +1011,10 @@ bytes.
 ### The tile path (planned, not built: its own tickets)
 
 What the measurements say the page needs next, for links: a project's frame on this path is bound by script, not by the
-GPU: 46,800 batches walked every frame (a moving frame 55 to 80 ms of script for 5 to 8 ms of GPU on the owner's
-project), the inputs' p95 150 to 250 ms; every link's whole mesh asked at open (339 MB on the wire), the tab up to 2.4 GB.
+GPU: 46,800 batches walked every frame (a moving frame 35 to 80 ms of script for 4 to 8 ms of GPU on the owner's
+project; over a session of 11 gestures the profile gives the frame's own loops 4.0 s, `prefixCount` 1.6 s,
+`boxInFrustum` 1.1 s, the cut's `at` 0.8 s, `drawOutlines` 0.6 s, `budgetCutFast` 0.5 s, `cutEnd` 0.5 s), the first
+moving frame of a gesture 160 ms; every link's whole mesh asked at open (339 MB on the wire), the tab up to 2.4 GB.
 The baked pyramid (amendment 6) holds 8,190 leaves for that project (0.76 GB of leaves, 44 MB of proxies, a 2 MB table).
 Planned as its own tickets, each behind the setting `tiles` (off until measured better on the owner's project):
 
@@ -1015,6 +1044,10 @@ Out-of-core indexing for a 5 GB IFC: the indexing job reads its cache in place, 
 
 From ticket VIS1 (amendment 7):
 
+- **From ticket VIS2 (amendment 9)**: the press after Escape (619–754 ms on the owner's project): the complete picture
+  after a feedback frame as budgeted slices, the pyramid's read-back never synchronous on the input path, an input
+  pre-empting a whole frame's slices; the press that starts an orbit (the per-batch loops: the tile path). Web session log
+  on Windows. A mirrored copy in the synthetic buildings (the model JSON's placement cannot mirror).
 - **`draw_visible` on a real project of links**: done by amendment 9 (VIS2: f32 at georeferenced coordinates, copies'
   shape offsets; on by default). **The fill counts what culling left out**: done (amendment 9, decision 67).
 

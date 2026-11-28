@@ -4,9 +4,10 @@
 // native app's session folder's shape, ccore/native/ui/slog.c):
 //   session.log   the page's start (build, browser, renderer, window, settings in force), errors and warnings
 //   frames.csv    one row a second while frames are drawn: frames, frame ms median / p95 / max, input -> frame
-//                 median / max, triangles and draws of the last frame, GPU MB, moving or still
+//                 median / max, triangles and draws of the last frame, GPU MB, moving (a frame of that second in
+//                 motion) or still
 //   inputs.csv    inputs answered in more than 100 ms (what, ms, at)
-//   report.txt    the Performance report, every 10 s while frames are drawn (replaced)
+//   report.txt    the Performance report, every 10 s after frames were drawn (replaced), and when the page closes
 // Local only (127.0.0.1, the host's token and Origin rules); the setting session_log (on by default with the host; off:
 // the host writes nothing and answers 204); nothing at all in the pure web / wasm build (this module is not loaded).
 import { shallowRef } from "vue";
@@ -75,11 +76,11 @@ export async function startSessionLog(hostBase: string, hostToken: string): Prom
   setInterval(() => {
     const s = sec;
     sec = { ms: [], inp: [], moving: false, tris: 0, draws: 0 };
+    if (drewSince && performance.now() - lastReport > REPORT_MS) { lastReport = performance.now(), drewSince = false; post("report.txt", perfReport(true, null), true); }
     if (!s.ms.length) return;
     drewSince = true;
     const gpu = window.__bbGl?.gpuBytes ?? 0;
     post("frames.csv", `${stamp()},${s.ms.length},${q(s.ms, 0.5).toFixed(1)},${q(s.ms, 0.95).toFixed(1)},${Math.max(...s.ms).toFixed(1)},${s.inp.length ? q(s.inp, 0.5).toFixed(1) : ""},${s.inp.length ? Math.max(...s.inp).toFixed(1) : ""},${s.tris},${s.draws},${(gpu / 1048576).toFixed(1)},${s.moving ? "moving" : "still"}\n`);
-    if (drewSince && performance.now() - lastReport > REPORT_MS) { lastReport = performance.now(), drewSince = false; post("report.txt", perfReport(true, null), true); }
   }, 1000);
   addEventListener("pagehide", () => { line("page closed"); post("report.txt", perfReport(true, null), true); });
 }

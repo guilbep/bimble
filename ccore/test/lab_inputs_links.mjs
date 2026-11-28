@@ -50,6 +50,8 @@ async function main() {
   // computed values are lazy: the next render after it asks again. Both warmed here: two selections and their clearing)
   for (let i = 0; i < 2; i++) await d.gesture([`click ${at[0]} ${at[1]}`, ...still, "key Escape", ...still]);
   const q0 = await d.ev("({ ...window.__vis2q })");
+  const linksNow = () => d.ev("(async () => { const s = (await import('/src/bimble.ts')).state.value; return `${s.rev}|${s.links ?? 0}`; })()");
+  const k0 = await linksNow();
   for (const [name, kind, g] of steps) {
     const n0 = await d.ev("window.__drv.inputs.length");
     await d.gesture(g);
@@ -59,10 +61,27 @@ async function main() {
     if (kind === "click") { const sel = await d.ev("[...document.querySelectorAll('[data-bb=status-chip]')].map((e) => e.textContent).find((t) => /selected|sélectionn/.test(t)) ?? null"); check("the click selected an element (the press's feedback is its highlight)", !!sel, `${sel} at ${at}`); }
     if (kind === "key") { // after a selection and its clearing: what does not depend on the selection was not asked again
       const q1 = await d.ev("({ ...window.__vis2q })"), again = ["links_tree", "link_levels", "link_notes"].filter((k) => (q1[k] ?? 0) > (q0[k] ?? 0));
-      check("a selection and Escape ask the host nothing that does not depend on the selection (the links' tree, levels, notes: synchronous, 90 ms each on a real project)", again.length === 0, again.length ? `asked again: ${again.map((k) => `${k} ${q0[k] ?? 0} -> ${q1[k]}`).join(", ")}` : "");
+      const k1 = await linksNow(); // (the model or the links changed meanwhile (a link's indexing ending): then asking again is right)
+      if (k1 !== k0) console.log(`  (the links or the model changed during the selection (${k0} -> ${k1}): the queries' count not checked)`);
+      else check("a selection and Escape ask the host nothing that does not depend on the selection (the links' tree, levels, notes: synchronous, 90 ms each on a real project)", again.length === 0, again.length ? `asked again: ${again.map((k) => `${k} ${q0[k] ?? 0} -> ${q1[k]}`).join(", ")}` : "");
     }
     if (kind === "wheel") { const nav = await d.ev("window.__bbGl.nav"); check("the wheel's pivot read from the last picture's element attachment (no scan of every element)", nav.pivotPick === "readout", `${nav.pivotPick ?? "not recorded"} (${nav.zoomFrom})`); }
     check(`${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms (${r.length} inputs, worst ${Math.round(Math.max(...r.map((i) => i.ms ?? Infinity)))} ms)` : "no input recorded");
+  }
+  // the same with the CPU throttled (CDP Emulation.setCPUThrottlingRate: a slow runner), after a still picture each time
+  for (const rate of (process.env.VIS2_THROTTLE ?? "4,6").split(",").map(Number).filter((x) => x > 1)) {
+    await d.gesture(["fit", ...still]);
+    const at3 = await d.ev(`(() => { const p = window.__bbGl.toScreen(${GEOREF[0] + 18000}, ${GEOREF[1] + 150}, ${GEOREF[2] + 3000}); return p ? [Math.round(p[0]), Math.round(p[1])] : null; })()`);
+    await d.S("Emulation.setCPUThrottlingRate", { rate });
+    try {
+      for (const [name, kind, g] of [["press (a click that selects)", "click", [`click ${at3[0]} ${at3[1]}`]], ["Escape", "key", ["key Escape"]], ["wheel (a zoom step)", "wheel", ["zoom 1 50"]], ["drag (an orbit starts)", "drag", ["orbit 200 0 400"]]]) {
+        const n0 = await d.ev("window.__drv.inputs.length");
+        await d.gesture([...g, ...still]);
+        const r = await d.ev(`(() => { const D = window.__drv, fr = D.frames; return D.inputs.slice(${n0}).filter((i) => i.what !== "release").map((i) => { const f = fr.find((x) => x.end >= i.t); return { what: i.what, ms: f ? f.end - i.t : null }; }); })()`);
+        const first = r.find((i) => kind === "click" ? i.what === "press" : i.what === kind);
+        check(`CPU throttled ${rate}x: ${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms` : "no input recorded");
+      }
+    } finally { await d.S("Emulation.setCPUThrottlingRate", { rate: 1 }); }
   }
   // a click right after a feedback frame (Escape), before the complete picture: answered within 200 ms, the same element
   await d.gesture(["fit", ...still]); // (the home camera again: the pan moved the building)
