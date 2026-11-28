@@ -65,7 +65,8 @@ function inputs(name, r, software) {
   try { rows = readFileSync(join(r.out, "inputs.csv"), "utf8").trim().split("\n").slice(1).map((l) => l.split(",")); } catch {}
   const app = rows.map((x) => Number(x[2])), fr = rows.map((x) => Number(x[3]));
   const maxApp = Math.max(0, ...app), maxFrame = Math.max(0, ...fr), med = fr.sort((a, b) => a - b)[fr.length >> 1] ?? 0;
-  check(`${name}: ${rows.length} inputs, event -> the app's work done within 200 ms (max ${maxApp.toFixed(1)} ms)`, rows.length > 0 && maxApp <= 200);
+  const slow = rows.find((x) => Number(x[2]) === maxApp); // MACAPP: which input, and when (inputs.csv: t_s,what,app_ms,frame_ms)
+  check(`${name}: ${rows.length} inputs, event -> the app's work done within 200 ms (max ${maxApp.toFixed(1)} ms${slow ? `: ${slow[1]} at ${slow[0]} s` : ""})`, rows.length > 0 && maxApp <= 200);
   const limit = software ? 1000 : 200;
   check(`${name}: event -> the frame's GPU fence within ${limit} ms (median ${med.toFixed(1)}, max ${maxFrame.toFixed(1)} ms${software ? ", software rasteriser: 200 ms reported, not asserted" : ""})`, maxFrame <= limit);
 }

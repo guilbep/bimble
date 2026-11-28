@@ -61,8 +61,11 @@ takes MSL (or a metallib), not SPIR-V. The release's macOS rows already build `b
    the window go through `SDL_EVENT_QUIT`. Finder's open-with and `open -a` arrive as `SDL_EVENT_DROP_FILE`, and a
    `-psn_…` argument is ignored. Retina sizes come from the swapchain texture (the Linux fix). Pinch and two-finger
    pan work as on Linux.
-7. **Offscreen on Metal**: SDL's offscreen video driver has no Metal layer to claim. The window is therefore not
-   claimed offscreen on macOS; the 3D view and the UI draw into the app's own textures, as before.
+7. **Offscreen on Metal**: SDL's Metal backend needs a video driver that has Metal views, and SDL's offscreen driver has
+   none (measured: "No supported SDL_GPU backend found!"). `--offscreen` on macOS therefore uses Cocoa, with a hidden
+   window that is never claimed: no swapchain, no Dock icon (`SDL_HINT_MAC_BACKGROUND_APP`), pixel density 1. The 3D view
+   and the UI draw into the app's own textures, as on Linux. So `--offscreen --preset orbit-zoom` runs from Terminal on
+   any Mac with the same `summary.md`.
 8. **The bundle and the image** (`native/macos/bundle.sh`):
    - `bimble.app` has `ch.bimble.bimble`, the version from `ccore/VERSION` (`CFBundleShortVersionString` gets its
      three numbers, `BimbleVersion` the full string), the document types and UTIs (`.bimble` and `.bimbleview`
@@ -87,7 +90,41 @@ takes MSL (or a metallib), not SPIR-V. The release's macOS rows already build `b
 
 ## Measured
 
-(GitHub runners, 28 Nov 2026; filled from the macapp runs: see the journal `2026-11-28-macapp.md`.)
+GitHub runners, 28 Nov 2026 (`.github/workflows/macapp.yml`, runs 46150628076, 46151176806 and 46151797259; the journal
+`2026-11-28-macapp.md` has the order).
+
+- **Metal on the runners** (`MTLCopyAllDevices`):
+  - `macos-15`, arm64 (macOS 15.8.2, Xcode 16.4): "Apple Paravirtual device", Mac2 family, read-write texture tier 2,
+    3.5 GB maximum buffer. It is the same under Rosetta.
+  - `macos-15-intel` (i7-8700B): a paravirtual device without Mac2 and with tier 1, which SDL refuses ("Device does not
+    meet the hardware requirements for SDL_GPU Metal").
+  The Intel build is therefore checked for build and image there, and run under Rosetta 2 on Apple Silicon. The
+  release's `macos-x86_64` row does the same (it runs on `macos-15`, which is arm64).
+- **Offscreen needs Cocoa.** SDL's offscreen video driver offers no Metal view, so the device is refused ("No supported
+  SDL_GPU backend found!"). Offscreen on macOS is therefore Cocoa with a hidden, unclaimed window (no Dock icon,
+  density 1).
+- **The suites on Metal**, arm64 and Rosetta:
+  - `native_app_test` 81/0 and `native_geo_test` 7/0;
+  - the truth test reports 0 ids missing (orbit-zoom 2,847 frames; tiles fixture 278; tiles links 167);
+  - against the Linux references: the fixture differs by 0.12 % of pixels (limit 6 %), the far building by 0.184 %
+    (limit 0.2 %), from edge rasterisation on another GPU;
+  - Metal API and GPU validation report no error;
+  - every input is answered within 200 ms (worst event → GPU fence 88 ms).
+  Frame times on a VM with load average 17–21 are only indicative: on arm64, orbit-zoom moving frames are 5.3 / 8.0 ms
+  median / p95, input → frame 7.4 / 11.4 ms, and the first picture 1.6 s.
+- **Sizes** (0.1.0-preview.8):
+
+  | | arm64 | x86_64 |
+  |---|---|---|
+  | executable (stripped, static) | 6.03 MB | 6.84 MB |
+  | .dmg UDZO (zlib) | 3.25 MB | 3.70 MB |
+  | .dmg ULFO (lzfse) | 3.09 MB | 3.45 MB |
+  | **.dmg ULMO (lzma, chosen)** | **2.40 MB** | **2.89 MB** |
+  | .dSYM.zip | 0.95 MB | 0.98 MB |
+
+  A universal executable (`lipo`) is 12.9 MB, and its image 6.39 MB in ULFO, against 3.09 MB for arm64 alone.
+  **Two images**: a universal image would make every download about twice as large for nothing, and the architecture is
+  one word in the file name. ULMO needs macOS 10.15 or newer, below our minimum of 11.
 
 ## Consequences
 
