@@ -71,7 +71,7 @@ typedef struct cc_platform {
     int (*read_range)(void *ctx, const char *path, uint64_t off, size_t n, char *p, size_t *got);
     /* The folder for caches that cannot go next to their file (a read-only folder): written to
      * out[0..n), created when missing. 0 ok, -1 none. Native: BIMBLE_CACHE_DIR, else
-     * $XDG_CACHE_HOME/bimble, else $HOME/.cache/bimble. */
+     * $XDG_CACHE_HOME/bimble, else $HOME/.cache/bimble (macOS: $HOME/Library/Caches/bimble, ADR 0088). */
     int (*cache_dir)(void *ctx, char *out, size_t n);
     /* Runs fn(arg) on another thread and returns at once: 0 started, -1 none (the caller then runs
      * it itself). The thread touches only what `arg` holds; it is the carrier's. */
