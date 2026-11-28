@@ -140,14 +140,23 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
         a->lx = ev->motion.x, a->ly = ev->motion.y;
         a->moving = 1, a->last_move = app_now(), a->dirty = 1;
         break;
-    case SDL_EVENT_MOUSE_WHEEL: {
+    case SDL_EVENT_MOUSE_WHEEL: { /* NUI3: a mouse's wheel and Ctrl + wheel zoom, a touchpad's two fingers pan (desktop.c) */
         float mx = ev->wheel.mouse_x, my = ev->wheel.mouse_y;
         if (ui_wants_mouse || !in_view(a, mx, my)) break;
         input_start(a, ev, "wheel");
-        nv_cam_zoom_at(&a->cam, ev->wheel.y > 0 ? 1 : -1, mx - a->vx, my - a->vy, a->vw, a->vh);
+        desk_wheel(a, &ev->wheel, mx, my);
         a->moving = 1, a->last_move = app_now(), a->dirty = 1;
         break;
     }
+    case SDL_EVENT_PINCH_UPDATE: /* NUI3: a touchpad's pinch zooms */
+        if (ui_wants_mouse) break;
+        input_start(a, ev, "pinch");
+        desk_pinch(a, ev->pinch.scale);
+        a->moving = 1, a->last_move = app_now(), a->dirty = 1;
+        break;
+    case SDL_EVENT_DROP_FILE: /* NUI3: a file or folder dropped on the window */
+        desk_drop(a, ev->drop.data);
+        break;
     case SDL_EVENT_KEY_DOWN: /* the key table, data/keys.json (keys.ts KEYS) */
         if (!ev->key.repeat) {
             char kw[48];
@@ -159,6 +168,23 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
         break;
     default: break;
     }
+}
+
+/* NUI3: the UI's clipboard calls logged (desktop.c's neighbours; the Copy report logs its own) */
+static void (*clip_set0)(ImGuiContext *, const char *);
+static const char *(*clip_get0)(ImGuiContext *);
+static void clip_set(ImGuiContext *c, const char *t) {
+    SDL_ClearError();
+    if (clip_set0) clip_set0(c, t);
+    const char *e = SDL_GetError();
+    slog("clipboard: write of %zu bytes%s%s", t ? strlen(t) : 0, e && *e ? ": " : " ok", e && *e ? e : "");
+}
+static const char *clip_get(ImGuiContext *c) {
+    SDL_ClearError();
+    const char *t = clip_get0 ? clip_get0(c) : NULL;
+    const char *e = SDL_GetError();
+    slog("clipboard: read %zu bytes%s%s", t ? strlen(t) : 0, e && *e ? ": " : "", e && *e ? e : "");
+    return t;
 }
 
 /* ---- the open, on a thread of its own (an IFC read for display takes seconds): the UI shows its
@@ -300,6 +326,40 @@ static void truth_grab(App *a, SDL_GPUCommandBuffer *cmd, int which) {
     }
     SDL_EndGPUCopyPass(cp);
 }
+/* NUI3, the first correct picture after a jump (driver: ids_ref, tiles_reset, wait_correct): the elements a complete frame
+ * shows kept (mode 1); then (mode 2) each frame's ids read back until every one of them is shown again */
+static void correct_check(App *a, double t1) {
+    uint32_t n = a->vpw * a->vph, ne = a->next_elem + 1;
+    if (!truth_tb[0] || !n) return;
+    const uint32_t *x = SDL_MapGPUTransferBuffer(a->dev, truth_tb[0], false);
+    if (!x) return;
+    if (a->correct_cap < ne) {
+        uint8_t *r2 = realloc(a->correct_ref, ne);
+        if (!r2) { SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]); return; }
+        memset(r2 + a->correct_cap, 0, ne - a->correct_cap), a->correct_ref = r2, a->correct_cap = ne;
+    }
+    if (a->correct_mode == 1) {
+        memset(a->correct_ref, 0, a->correct_cap), a->correct_nref = 0;
+        for (uint32_t i = 0; i < n; i++)
+            if (x[i] > NV_ELEM0 && x[i] < ne && !a->correct_ref[x[i]]) a->correct_ref[x[i]] = 1, a->correct_nref++;
+        a->correct_mode = 0;
+        fprintf(stderr, "drive: correct: %u elements shown kept\n", a->correct_nref);
+    } else {
+        uint8_t *seen = calloc(ne, 1);
+        uint32_t got = 0;
+        for (uint32_t i = 0; seen && i < n; i++)
+            if (x[i] > NV_ELEM0 && x[i] < ne && a->correct_ref[x[i]] == 1 && !seen[x[i]]) seen[x[i]] = 1, got++;
+        free(seen);
+        static const double STEP[4] = {0.9, 0.99, 0.999, 1.0};
+        while (a->correct_step < 4 && got >= STEP[a->correct_step] * a->correct_nref) {
+            fprintf(stderr, "drive: correct: %.1f %% of the complete picture's elements shown %.0f ms after the reset (%u of %u)\n", STEP[a->correct_step] * 100,
+                    t1 - a->correct_t0, got, a->correct_nref);
+            a->correct_step++;
+        }
+        if (got >= a->correct_nref) a->correct_ms = t1 - a->correct_t0, a->correct_mode = 0;
+    }
+    SDL_UnmapGPUTransferBuffer(a->dev, truth_tb[0]);
+}
 /* An element in the reference only is MISSING when one of its pixels shows something farther with occlusion (its surface
  * was not drawn there). Otherwise another element at the same depth won the pixel (coplanar faces: the order of the
  * draws, pass 1 or 2, decides): a tie, counted apart (truth_ties), not a loss. */
@@ -348,6 +408,7 @@ static int truth_compare(App *a) {
 static void frame(App *a) {
     double t0 = app_now();
     if (a->screen_kind == SCR_OPENING) opening_tick(a);
+    desk_tick(a); /* NUI3: the system dialog's answer, the title */
     core_poll(a);
     core_refresh(a);
     if (a->screen_kind == SCR_MAIN) {
@@ -434,6 +495,8 @@ static void frame(App *a) {
             view_cube(a, fg, mp.x, mp.y, 0);
         }
         panel_links(a);
+        panel_section_box(a); /* NUI3 */
+        palette_ui(a);        /* NUI3 */
         shell_context_menu(a);
         shell_status(a);
     }
@@ -457,6 +520,13 @@ static void frame(App *a) {
         nv_render_set_skip(a->r, a->bench_skip);
         nv_tiles_opts to = a->topts;
         to.tri_budget = mv ? a->tri_live : 0;
+        /* NUI3 still_ramp: the still frames after a move start from the last moving frame's budget and double it each
+         * frame until there is none (the full detail in a few frames, no single frame drawing it all at once) */
+        if (!mv && a->still_ramp && a->ramp_budget) {
+            to.tri_budget = a->ramp_budget;
+            a->ramp_budget = a->ramp_budget > (UINT64_MAX >> 2) || a->ramp_budget * 2 > 64000000ull ? 0 : a->ramp_budget * 2;
+        }
+        if (mv) a->ramp_budget = a->tri_live ? a->tri_live : 0;
         if (a->truth && a->use_tiles) { /* the truth test: the same frame without occlusion first, its ids kept */
             to.reference = 1;
             nv_render_tiles_opts(a->r, &to);
@@ -467,6 +537,7 @@ static void frame(App *a) {
         nv_render_tiles_opts(a->r, &to);
         nv_render_record(a->r, cmd, &a->cam, pick, a->pick_x, a->pick_y);
         if (a->truth && a->use_tiles) truth_grab(a, cmd, 1);
+        else if (a->correct_mode) truth_grab(a, cmd, 0); /* NUI3: the elements this frame shows (the first correct picture) */
         drew3d = 1, a->dirty = 0;
     }
     double t_rec = app_now();
@@ -540,6 +611,7 @@ static void frame_done(App *a, Pend *p, double t1) {
         uint32_t picked = 0;
         nv_render_collect(a->r, pick ? &picked : NULL);
         a->truth_missing = a->truth && a->use_tiles ? truth_compare(a) : -1;
+        if (a->correct_mode && !a->truth) correct_check(a, t1);
         if (p->moving && a->adaptive && a->moving_fps > 0 && a->use_tiles) { /* the moving budget's triangles (the walker's) */
             double target = 1000.0 / a->moving_fps;
             uint64_t drawn = nv_render_get_stats(a->r).tris;
@@ -679,7 +751,7 @@ int main(int argc, char **argv) {
     a->moving_cut = 2, a->still_cut = 0, a->adaptive = 1, a->moving_fps = 30, a->gpu_budget = (uint64_t)768 << 20;
     a->draw_key = -1, a->links_synced = -1, a->truth_missing = -1;
     const char *model = NULL, *shot = NULL, *link_folder = NULL, *conf = NULL;
-    int loaders = 2, dark = 0, lang = -1;
+    int loaders = 4, loaders_given = 0, dark = 0, lang = -1; /* NUI3: 4 (2 before): a large project complete in about half the time (the A/B: the ticket's report) */
     for (int i = 1; i < argc; i++) {
         const char *x = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(x, "--version")) { printf("bimble %s (native)\n", CC_RELEASE_VERSION); return 0; }
@@ -697,7 +769,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(x, "--edges") && v) a->ro.edges = !strcmp(v, "lines") ? NV_EDGES_LINES : !strcmp(v, "none") ? NV_EDGES_NONE : NV_EDGES_SCREEN, i++;
         else if (!strcmp(x, "--no-hlod")) a->hlod = 0, a->ro.hlod = 0;
         else if (!strcmp(x, "--no-budget")) a->adaptive = 0;
-        else if (!strcmp(x, "--loaders") && v) loaders = atoi(v), i++;
+        else if (!strcmp(x, "--loaders") && v) loaders = atoi(v), loaders_given = 1, i++;
         else if (!strcmp(x, "--link-folder") && v) link_folder = v, i++;
         else if (!strcmp(x, "--config-dir") && v) conf = v, i++;
         else if (!strcmp(x, "--shot") && v) shot = v, i++;
@@ -765,7 +837,8 @@ int main(int argc, char **argv) {
         }
     a->bench_skip = (unsigned)nset_num("bench_skip", 0);
     a->in_flight = (int)nset_num("frames_in_flight", 2) > 1 ? 2 : 1; /* NUI2 */
-    a->pace_tiles = nset_num("pace_tiles", 0) != 0;                     /* NUI3: measured worse for still frames: off */
+    a->pace_tiles = nset_num("pace_tiles", 0) != 0;
+    a->still_ramp = nset_num("still_ramp", 0) != 0; /* NUI3: measured below */                     /* NUI3: measured worse for still frames: off */
     { /* the local session log: on in a window unless session_log is false; offscreen only when BIMBLE_LOG_DIR is set */
         const char *ld = getenv("BIMBLE_LOG_DIR");
         a->session_log = (int)nset_num("session_log", a->offscreen ? (ld && *ld) : 1);
@@ -776,6 +849,9 @@ int main(int argc, char **argv) {
 
     /* the window and the GPU */
     if (a->offscreen) SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+    /* NUI3: the app id (Wayland's app_id, X11's class: a compositor's window rules; the .desktop file's name) */
+    SDL_SetHint(SDL_HINT_APP_ID, "ch.bimble.bimble");
+    SDL_SetAppMetadata("Bimble", CC_RELEASE_VERSION, "ch.bimble.bimble");
     if (!SDL_Init(SDL_INIT_VIDEO)) { no_gpu("no video", model); return 3; }
     sdl_base = app_now() - SDL_GetTicksNS() / 1e6;
     a->dev = nv_gpu_device(&a->gpu_name, &a->gpu_driver);
@@ -802,12 +878,24 @@ int main(int argc, char **argv) {
     char err[256];
     a->r = nv_render_new(a->dev, &a->ro, err, sizeof err);
     if (!a->r) { no_gpu(err, model); return 3; }
+    { /* NUI3: native.json loaders (a run's --set too) unless --loaders or BIMBLE_NATIVE_LOADERS said */
+        const char *nl = getenv("BIMBLE_NATIVE_LOADERS");
+        if (!loaders_given && !(nl && *nl)) loaders = (int)nset_num("loaders", loaders);
+        if (loaders < 1) loaders = 1;
+        if (loaders > 16) loaders = 16;
+    }
     a->loader = nv_loader_new(a->dev, loaders);
     igCreateContext(NULL);
     igGetIO_Nil()->IniFilename = NULL;
     theme_set(a, dark);
     if (theme_apply(a) != 0) fprintf(stderr, "bimble: the lab's fonts did not load: the default font\n");
     if (nui_backend_init(a->win, a->dev, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM) != 0) { no_gpu("the UI's renderer", model); return 3; }
+    { /* NUI3: every clipboard write and read of the UI (Ctrl+C / Ctrl+V in a field) in the session log, with SDL's answer:
+       * Wayland's clipboard needs a focused window and the data device; an offscreen run logs what SDL says */
+        ImGuiPlatformIO *pio = igGetPlatformIO_Nil();
+        clip_set0 = pio->Platform_SetClipboardTextFn, clip_get0 = pio->Platform_GetClipboardTextFn;
+        pio->Platform_SetClipboardTextFn = clip_set, pio->Platform_GetClipboardTextFn = clip_get;
+    }
     if (icons_build(a) != 0) fprintf(stderr, "bimble: no icons\n");
     a->cut_live = a->moving_cut;
     a->cam.yaw = -55 * NV_PI / 180, a->cam.pitch = 28 * NV_PI / 180, a->cam.dist = 20000;

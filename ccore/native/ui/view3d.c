@@ -11,6 +11,7 @@
 #include "ui.h"
 #include "links.h"
 #include "mesh.h"
+#include "xshell.h"
 
 /* ---- the global element numbers: the open model's part, then each link part's, never reused while
  * the model is open (a link reloaded gets new numbers; the colour table grows by 4 bytes an element) ---- */
@@ -314,6 +315,26 @@ void scene_tick(App *a) {
     int key = a->mesh_draw_key;
     if (key != a->draw_key) a->draw_key = key, model_part(a);
     if (a->links_rev != a->links_synced) a->links_synced = a->links_rev, links_sync(a);
+    if (a->use_tiles && a->topts.priority && a->nlinks > 1 && app_now() - a->xshell_t > 500) { /* NUI3: the cross-link shell */
+        a->xshell_t = app_now();
+        nv_ses_wr(a->loader);
+        int st = cc_xshell_poll(a->ses);
+        if (st != a->xshell_state) slog("cross-link shell: %s", st == 2 ? "ready" : st == 1 ? "computing" : st == 0 ? "none" : "failed"), a->xshell_state = st;
+        for (size_t k = 0; st == 2 && k < a->ses->nlinks; k++) {
+            int i = slot_of(a, a->ses->links[k].uid);
+            if (i < 0 || !a->links_s[i].ts) continue;
+            uint32_t n = 0;
+            const uint8_t *m = cc_xshell_marks(a->ses, &a->ses->links[k], &n);
+            if (!m || m == a->links_s[i].xmarks) continue;
+            if (nv_tileset_set_xmask(a->links_s[i].ts, m, n) == 0) {
+                uint64_t ext = 0;
+                for (uint32_t e = 0; e < n; e++) ext += m[e] != 0;
+                slog("link %s: cross-link shell attached (%llu of %u elements exterior)", a->links_s[i].name, (unsigned long long)ext, n);
+            }
+            a->links_s[i].xmarks = m;
+        }
+        nv_ses_unwr(a->loader);
+    }
     for (nv_job *j; (j = nv_loader_take(a->loader));) {
         int i = slot_of(a, j->uid);
         SLink *L = i >= 0 ? &a->links_s[i] : NULL;
@@ -398,7 +419,7 @@ void scene_tick(App *a) {
     /* NUI2: the tiles the last frame wanted (seen, not loaded), nearest first; two a loader thread on their way */
     if (a->use_tiles) {
         nv_tile_want w[64];
-        int room = 2 * 4 - a->tile_jobs;
+        int room = 2 * (nv_loader_threads(a->loader) > 4 ? nv_loader_threads(a->loader) : 4) - a->tile_jobs; /* NUI3: two a loader, 8 at least */
         uint32_t nw = room > 0 ? nv_render_tiles_want(a->r, w, (uint32_t)room < 64 ? (uint32_t)room : 64) : 0;
         for (uint32_t k = 0; k < nw; k++) {
             SLink *L = NULL;

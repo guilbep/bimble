@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NUI3: the file types the native app opens (shared-mime-info). IFC (STEP physical file, ISO 10303-21) has no type
+     in shared-mime-info: application/x-ifc, a sub-class of text/plain. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-bimble">
+    <comment>Bimble project</comment>
+    <glob pattern="*.bimble"/>
+    <icon name="ch.bimble.bimble"/>
+  </mime-type>
+  <mime-type type="application/x-bimbleview">
+    <comment>Bimble view file</comment>
+    <glob pattern="*.bimbleview"/>
+    <icon name="ch.bimble.bimble"/>
+  </mime-type>
+  <mime-type type="application/x-ifc">
+    <comment>IFC model (Industry Foundation Classes)</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.ifc"/>
+    <magic priority="50"><match type="string" value="ISO-10303-21;" offset="0"/></magic>
+  </mime-type>
+</mime-info>

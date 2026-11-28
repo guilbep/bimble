@@ -51,6 +51,7 @@ typedef struct nv_job {
 } nv_job;
 
 nv_loader *nv_loader_new(SDL_GPUDevice *dev, int threads);
+int nv_loader_threads(const nv_loader *L); /* NUI3 */
 void nv_loader_free(nv_loader *L);
 /* The session's lock, as the writer (the UI thread, around every call into the session). */
 void nv_ses_wr(nv_loader *L);

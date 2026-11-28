@@ -463,3 +463,4 @@ void nv_loader_cancel(nv_loader *L, uint32_t uid) {
     if (L->ncancel < 64) L->cancel_uid[L->ncancel++] = uid;
     pthread_mutex_unlock(&L->mu);
 }
+int nv_loader_threads(const nv_loader *L) { return L ? L->nthreads : 0; }

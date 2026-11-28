@@ -81,6 +81,7 @@ typedef struct {
     nv_tileset *ts;      /* NUI2: drawn by tiles (its cache's section TILE); NULL: as parts */
     char (*ids)[22];     /* its elements' GlobalIds (tiles: no part holds them) */
     int tiles_inflight;
+    const uint8_t *xmarks;  /* NUI3: the cross-link shell's marks attached to its tiles (the session's pointer, compared) */
 } SLink;
 
 typedef struct App App;
@@ -150,6 +151,13 @@ struct App {
     uint32_t link_gen, next_elem;
     double origin0[3];
     double core_origin[3];     /* the open scene's origin (world mm): the core's rays and boxes are relative to it */
+    int correct_mode;          /* NUI3, the first correct picture: 1 the next 3D frame's elements kept, 2 waiting for them all */
+    uint8_t *correct_ref;
+    uint32_t correct_cap, correct_nref;
+    int correct_step;
+    double correct_t0, correct_ms;
+    double xshell_t;           /* NUI3: the cross-link shell polled (every 500 ms) */
+    int xshell_state;
     int have_origin, origin_links, draw_key, fitted, ids_dirty, vis_dirty;
     uint32_t *id_slot;
     size_t id_cap;
@@ -175,6 +183,7 @@ struct App {
     char sel_id[23], sel_link[256];
     int box_on, box_drag;      /* the section box (scene mm) and its handle held */
     double box_min[3], box_max[3];
+    double box_org[3];         /* NUI3: the core's frame of the box (its origin_mm, world mm) */
     char view_name[128];       /* the view shown ("" the 3D view) */
     double view_lo[3], view_hi[3]; /* the view's clip (scene mm) while a plan or section is shown */
     int view_clip;
@@ -249,6 +258,8 @@ struct App {
     char (*model_ids)[22];       /* a view file opened (no mesh answer): its elements' ids for the tiles */
     uint32_t model_elem0, model_nE;
     uint64_t tri_live;           /* the moving budget's triangles for the walker (0: none) */
+    uint64_t ramp_budget;        /* NUI3 still_ramp: the next still frame's budget (0: none) */
+    int still_ramp;
     double tiles_checked;
     Pend pend;
     int in_flight;               /* frames_in_flight: 2 (the next frame recorded while the GPU draws this one) or 1 */
@@ -353,6 +364,17 @@ int slog_last(void);
 int slog_save_report(App *a, char *path, size_t n);
 /* nset.c: the native app's own settings (native.json) */
 void nset_load(App *a);
+/* NUI3 (desktop.c): the system's file dialogs, drops, the title, the touchpad, the box by numbers, the palette */
+void desk_dialog(App *a, const char *purpose);
+void desk_tick(App *a);
+void desk_drop(App *a, const char *path);
+int desk_wheel(App *a, const SDL_MouseWheelEvent *w, float mx, float my);
+void desk_pinch(App *a, float scale);
+void panel_section_box(App *a);
+int desk_box_set(App *a, const double v[6]); /* min x y z, max x y z: metres, the project's frame */
+void palette_toggle(App *a);
+int palette_shown(void);
+void palette_ui(App *a);
 const char *nset_get(const char *key);
 double nset_num(const char *key, double dflt);
 void nset_set(const char *key, const char *json, int run);

@@ -14,6 +14,7 @@ layout(set = 0, binding = 0) uniform sampler2D hiz;
 struct Test { vec4 c; vec4 ax; vec4 ay; vec4 az; uvec4 g; }; // g.x own gate, g.y its stand-in's gate (0 none)
 layout(std430, set = 0, binding = 1) readonly buffer Tests { Test test[]; };
 layout(std430, set = 1, binding = 0) buffer Gates { uint gate[]; };
+layout(std430, set = 1, binding = 1) buffer Res { uint res[]; }; // NUI3: each test's own answer (read back: an element's cold mark)
 // px: W, H, near, pixels a level-0 texel side; n: tests, levels; o: pieces a side at most, pixels a piece, texels a side read; lv: x offset, w, h
 layout(set = 2, binding = 0) uniform U { mat4 vp; vec4 px; ivec4 n; ivec4 o; ivec4 lv[16]; };
 
@@ -64,6 +65,7 @@ void main() {
                     }
         }
     }
+    res[i] = vis ? 1u : 0u;
     if (vis) {
         gate[t.g.x] = 1u;
         if (t.g.y != 0u) gate[t.g.y] = 1u;

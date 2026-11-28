@@ -379,6 +379,10 @@ release() {
         cp out/native/deps/imgui/LICENSE.txt "$stage/licences/DearImGui-LICENSE.txt"
         cp out/native/deps/cimgui/LICENSE "$stage/licences/cimgui-LICENSE.txt"
         cp out/native/deps/nanosvg/LICENSE.txt "$stage/licences/nanosvg-LICENSE.txt"
+        # NUI3: the desktop's parts (desktop/install.sh: the menu entry, the icon, .bimble/.bimbleview/.ifc for this user)
+        mkdir -p "$stage/desktop"
+        cp native/linux/ch.bimble.bimble.desktop native/linux/ch.bimble.bimble.xml native/linux/install.sh "$stage/desktop/"
+        for lf in 32 128 256 512; do cp "../packaging/icon-$lf.png" "$stage/desktop/icon-$lf.png"; done
     fi
     local needs="Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed."
     local last=""
@@ -415,7 +419,7 @@ Files:  bimble-ccore, web/ (the lab: keep it next to the program), THIRD-PARTY.t
 Needs:  $needs
 EOF
     if [[ -f $stage/bimble ]]; then # NUI1: one line (the README stays within ten)
-        echo "Native: ./bimble model.bimble   (the native Linux app, preview: needs SDL 3.4+ and a Vulkan driver)" >> "$stage/README.txt"
+        echo "Native: ./bimble model.bimble   (preview: SDL 3.4+, Vulkan); desktop/install.sh: in the menu, opens .bimble .ifc" >> "$stage/README.txt"
     fi
     [[ -z $last ]] || echo "$last" >> "$stage/README.txt"
     # GNU tar: sorted, owner 0. BSD tar (macOS) has neither option; COPYFILE_DISABLE keeps
