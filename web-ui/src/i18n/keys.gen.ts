@@ -1260,6 +1260,8 @@ export type PartKey =
   | "settings.renderer.webgl2"
   | "settings.renderer.webgpu"
   | "settings.rendererNote"
+  | "settings.sessionLog"
+  | "settings.sessionLogNote"
   | "settings.stillPx"
   | "settings.stillPx.0"
   | "settings.stillPx.px"

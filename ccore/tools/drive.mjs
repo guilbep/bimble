@@ -256,7 +256,7 @@ export class Drive {
     const bin = o.hostBin ?? process.env.HOST_BIN ?? join(CCORE, "out/native/bimble-ccore"); // (a lab test: the tcc build the gate makes)
     if (!existsSync(bin)) throw new Error(`no ${bin}: ccore/build.sh native`);
     const hostHome = o.links ? synthDir : home;
-    this.host = this.start("host", bin, [String(this.port), ...(what ? [what] : [])], { cwd: tmp, env: { ...process.env, BIMBLE_TOKEN: this.token, HOME: hostHome, BIMBLE_CONFIG_DIR: config,
+    this.host = this.start("host", bin, [String(this.port), ...(what ? [what] : [])], { cwd: tmp, env: { ...process.env, BIMBLE_TOKEN: this.token, HOME: hostHome, BIMBLE_CONFIG_DIR: config, XDG_STATE_HOME: join(tmp, "state"), /* VIS2: the web session log in the run's folder */
       BIMBLE_CACHE_DIR: o.links ? join(synthDir, "cache") : this.cacheDir ?? cache, BIMBLE_LINK_CACHE_BESIDE: "0", BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_ORIGINS: `http://localhost:${this.vite},http://127.0.0.1:${this.vite}` } });
     await this.waitFor("the host", 600000, () => this.host.out.includes("listening") || (this.host.exitCode !== null && Promise.reject(new Error(this.host.out.slice(-600)))), 50);
     if (o.links) {

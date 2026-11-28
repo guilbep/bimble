@@ -646,6 +646,8 @@ export async function start(): Promise<void> {
     } else if (native) {
       // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
       w = nativeClient(native.port, native.token);
+      // VIS2: the web session log (sessionlog.ts): with a host only, after the start (nothing in the pure web build)
+      setTimeout(() => { void import("./sessionlog").then((m) => m.startSessionLog(`http://127.0.0.1:${native.port}`, native.token)).catch(() => undefined); }, 0);
       // `&gl=1`: draw the host's /mesh with WebGL2 (the C host, spec §2) instead of /frame.
       viewportDirty = url.searchParams.get("gl") === "1"
         ? (await import("./glviewport")).glViewport(`http://127.0.0.1:${native.port}`, native.token)
@@ -1015,6 +1017,8 @@ export interface SettingsValues {
   shell_mode?: "off" | "priority" | "filter";
   /** VIS1 (ADR 0078 amendment 7): "Draw only what can be seen" (not Rust's; absent from an older core: off). */
   draw_visible?: boolean;
+  /** VIS2: the web session log with the native host (ccore/host/server.c /session_log); true by default. */
+  session_log?: boolean;
   /** VIS1: the 3D view's edges, back faces culled, the still frame's pixel cut, the refill offscreen (not Rust's). */
   edge_mode?: "screen" | "lines" | "none"; cull_back?: boolean; still_px?: number; refill_offscreen?: boolean;
 }

@@ -21,7 +21,7 @@
 // open) and a few rows tests still in flight append after; a new row is never needed.
 // Also CHROMIUM, the browser every lab test starts, and RUN_TAG (below).
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, unlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -68,6 +68,15 @@ export const CHROMIUM = process.env.CHROMIUM ||
 // A suffix for fixed scratch paths under out/: "" unset, -<base> with a number, -p<pid> with auto,
 // so two runs at once in one tree never share a scratch directory.
 export const RUN_TAG = MODE === "unset" ? "" : MODE === "base" ? `-${BASE}` : `-p${process.pid}`;
+
+// VIS2: every test and tool that imports this module gives the hosts it starts (process.env) a state folder of its own,
+// so the page's web session log (ccore/host/server.c /session_log: $XDG_STATE_HOME/bimble/web-sessions, the last 20 kept)
+// never lands in, nor prunes, the user's own sessions. Removed at exit.
+if (!process.env.BIMBLE_TEST_STATE_KEEP) {
+  const st = join(tmpdir(), `bimble-test-state-${process.pid}`);
+  process.env.XDG_STATE_HOME = st;
+  process.on("exit", () => { try { rmSync(st, { recursive: true, force: true }); } catch { /* gone */ } });
+}
 
 // FNV-1a 32 of a string.
 function hash(s) {

@@ -15,5 +15,6 @@ process.on("exit", () => {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone already */ }
 });
 
-/** process.env with BIMBLE_CONFIG_DIR a temporary folder, then `extra`. */
-export const hostEnv = (extra = {}) => ({ ...process.env, BIMBLE_CONFIG_DIR: join(dir, "config"), ...extra });
+/** process.env with BIMBLE_CONFIG_DIR a temporary folder (VIS2: and XDG_STATE_HOME: the web session log goes there,
+ *  never into the user's own sessions), then `extra`. */
+export const hostEnv = (extra = {}) => ({ ...process.env, BIMBLE_CONFIG_DIR: join(dir, "config"), XDG_STATE_HOME: join(dir, "state"), ...extra });

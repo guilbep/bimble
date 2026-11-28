@@ -13,6 +13,7 @@ export const capability = "settings"; // SET1: query settings, action set_settin
 // fields) and, with WebGPU, "Cull copies on the graphics card" (gpu_cull) apply.
 import { computed, ref, watch } from "vue";
 import { setSettings, userSettings, type SettingsValues } from "../bimble";
+import { sessionLogDir } from "../sessionlog"; // VIS2
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/settings";
 import { currentDialog } from ".";
@@ -140,6 +141,10 @@ const close = () => { currentDialog.value = null; };
         <label v-if="s?.applies.draw_visible" class="row"><span>{{ tx('settings.visible') }}</span>
           <input type="checkbox" :checked="v.draw_visible !== false" data-bb="settings-draw-visible" data-setting="draw_visible" @change="set({ draw_visible: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s?.applies.draw_visible" class="note" data-bb="settings-visible-note">{{ tx('settings.visibleNote') }}</p>
+        <!-- VIS2: the web session log with the native host (session_log, not Rust's): where it is written -->
+        <label v-if="s?.applies.session_log" class="row"><span>{{ tx('settings.sessionLog') }}</span>
+          <input type="checkbox" :checked="v.session_log !== false" data-bb="settings-session-log" data-setting="session_log" @change="set({ session_log: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.session_log" class="note" data-bb="settings-session-log-note">{{ tx('settings.sessionLogNote') }}<span v-if="sessionLogDir" class="mono" data-bb="settings-session-log-dir"> {{ sessionLogDir }}</span></p>
         <!-- VIS1: the 3D view's other optimisations, each with an exact value -->
         <label v-if="s?.applies.edge_mode" class="row"><span>{{ tx('settings.edgeMode') }}</span>
           <select class="inp" :value="v.edge_mode ?? 'screen'" data-bb="settings-edge-mode" data-setting="edge_mode" @change="set({ edge_mode: ($event.target as HTMLSelectElement).value as 'screen' | 'lines' | 'none' })">
