@@ -1048,6 +1048,14 @@ From ticket VIS1 (amendment 7):
   after a feedback frame as budgeted slices, the pyramid's read-back never synchronous on the input path, an input
   pre-empting a whole frame's slices; the press that starts an orbit (the per-batch loops: the tile path). Web session log
   on Windows. A mirrored copy in the synthetic buildings (the model JSON's placement cannot mirror).
+- **OPEN requirement: the selection change within 200 ms on a CPU 4× slower than the reference** (28 Nov 2026,
+  `ccore/results/inputs.md`): on the real GPU, CPU throttled to 4× the reference machine, the press that selects takes
+  212 ms and Escape 204 ms of the page's own part (6×: 93 and 81 ms; wheel and orbit start 23–42 ms). The gate runs
+  `lab_inputs_links.mjs`'s unthrottled cases and its invariants; the 4× and 6× cases run with `LAB_SLOW=1
+  LAB_GPU=vulkan` and the gate prints the skip with these numbers. Leads: the host's query batch per selection change,
+  the masks for the resized pyramid on the feedback frame, the canvas resize itself (the panel over the canvas instead);
+  the skip is removed when the cases pass 10 of 10 on the real GPU. The same path is the lead for the press after
+  Escape on the owner's project.
 - **`draw_visible` on a real project of links**: done by amendment 9 (VIS2: f32 at georeferenced coordinates, copies'
   shape offsets; on by default). **The fill counts what culling left out**: done (amendment 9, decision 67).
 

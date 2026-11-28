@@ -807,6 +807,9 @@ interface GlStats {
   linkDraw?: { name: string; visible: boolean; colour: number; xf: ModelXf }[];
   /** LNK3D (E): the notes on linked elements as last drawn (client px of the anchor) and the selected one. */
   notes?: { link: string; element: string; text: string; drawn: boolean; x: number; y: number }[];
+  /** VIS2: the key the viewport last asked `link_notes` with (the links' count, the mesh's rev and size): a test tells a
+   * re-ask the mesh caused (a link's detail arriving) from one a selection caused. */
+  notesKey?: string;
   noteSelected?: number | null;
   /** LNK3D (D): the GPU budget across links (bytes; a test hook: unset, automatic from memory_share), each link's
    *  detail on the GPU or not (its bytes, its uploads), the last upload of a link's detail (ms). */
@@ -2482,7 +2485,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!m) { notes = []; return; }
     const key = `${state.value.links ?? 0}|${m.rev}|${m.size}`;
     if (key === notesKey) return;
-    notesKey = key;
+    notesKey = stats.notesKey = key;
     const L = m.links ?? [];
     notes = (L.length ? linkNotes() : []).map((n) => {
       const k = L.findIndex((l) => l.name === n.link), x = k >= 0 ? L[k]!.xf : IDENTITY_XF;
