@@ -11,14 +11,14 @@ export interface VisBatch { b: { n: number; box: ArrayLike<number>; cum: Uint32A
 
 /** The mask of a batch's items against the pyramid (made once per pyramid): hidden ones 0. `shown[e]` 0: not drawn
  *  anyway (left out too). Returns the triangles and items left out. */
-export function maskBatch(p: Pyramid, d: VisBatch, boxes: ArrayLike<number>, shown: Uint8Array, tris: (i: number) => number): { items: number; tris: number } {
+export function maskBatch(p: Pyramid, d: VisBatch, boxes: ArrayLike<number>, shown: Uint8Array, tris: (i: number) => number, beyond = false): { items: number; tris: number } {
   const n = d.b.n, mask = d.vmask && d.vmask.length === n ? d.vmask : new Uint8Array(n);
   let items = 0, t = 0;
   // (each item by its own box: a batch's box is kept from when its list was made, and on a project of links it was found
   // stale against its items' boxes: a whole batch left out while its elements showed)
   for (let i = 0; i < n; i++) {
     const e = d.items[i]!;
-    const on = shown[e]! > 0 && !boxHidden(p, boxes, 6 * e);
+    const on = shown[e]! > 0 && !boxHidden(p, boxes, 6 * e, beyond);
     mask[i] = on ? 1 : 0;
     if (!on) items++, t += tris(i);
   }

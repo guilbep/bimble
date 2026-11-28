@@ -1583,6 +1583,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const visibleOn = () => stats.visible !== undefined ? stats.visible : (userSettings.value?.values.draw_visible ?? true);
   // (detailGen: a link's detail released, element boxes placed: the pyramid and the masks made before are stale; VIS2: a
   // detail loaded is not: it adds to a picture whose pyramid counted that link's proxies as the farthest depth)
+  /** VIS2: a pyramid key without its canvas size (the part after the camera key: `|W x H|`). */
+  const sizeless = (k: string) => k.replace(/\|\d+x\d+\|/, "||");
   const visKeyOf = (key: string, box: unknown) => `${key}|${canvas.width}x${canvas.height}|${visGen}|${listsGen}|${JSON.stringify(box)}|${state.value.links ?? 0}|${detailGen}`;
   /** Edges found on screen: in 3D (not in a plan, where the drawing's lines stay), with the target, unless a bench hook asks the line pass. */
   const screenEdgesNow = () => !!tgt && !plan && stats.lineEdges !== true && opt().edge_mode === "screen" && pressed("edges", true) && !stats.noEdges;
@@ -2899,10 +2901,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // of links spent its slices on hidden items: hundreds of slices of 50 ms, the page never idle) ----
     const vkey = visKeyOf(key, box);
     const pyr = hiz && visibleOn() && !movingNow && !plan && !idMode ? hiz.ready : null;
-    const useVis = pyr !== null && pyr.key === vkey;
+    // VIS2: a pyramid of this camera at another canvas size (a panel shown or hidden by a click, by Escape) serves too, what lies
+    // beyond its picture never hidden (hiz.ts boxHidden `beyond`): a selection's resize drew the whole view without it,
+    // 83 to 105 M triangles on the owner's project, and the click's or Escape's frame waited behind it
+    const resized = pyr !== null && pyr.key !== vkey && sizeless(pyr.key) === sizeless(vkey);
+    const useVis = pyr !== null && (pyr.key === vkey || resized);
     let visHid = 0, visHidTris = 0, visMasked = 0;
     const tVis = performance.now();
-    const vk = useVis ? `${pyr.key}#${pyr.serial}` : "";
+    const vk = useVis ? `${pyr.key}#${pyr.serial}${resized ? `@${canvas.width}x${canvas.height}` : ""}` : "";
     if (useVis) {
       const kk = `${vk}|${visGen}`;
       for (const { d, c } of seen) {
@@ -2971,7 +2977,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     for (const d of dbs) d.runs = null;
     if (useVis) for (const { d } of seen) {
       if (d.k1 <= d.k0) continue;
-      if (d.vkey !== vk || !d.vmask) { maskBatch(pyr, d, boxes, shown, d.g ? () => d.g!.ni / 3 : (i) => (m.ni[d.items[i]!] ?? 0) / 3); visMasked++; d.runsSerial = -1; }
+      if (d.vkey !== vk || !d.vmask) { maskBatch(pyr, d, boxes, shown, d.g ? () => d.g!.ni / 3 : (i) => (m.ni[d.items[i]!] ?? 0) / 3, resized); visMasked++; d.runsSerial = -1; }
       // the runs and what they leave out, kept per mask and range (a still picture's frames and slices repeat them)
       if (d.runsSerial !== pyr.serial || d.runsK0 !== d.k0 || d.runsK1 !== d.k1) {
         const mask = d.vmask!;

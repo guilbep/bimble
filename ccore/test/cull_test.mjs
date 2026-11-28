@@ -96,6 +96,18 @@ const check = (what, ok, more = "") => { if (ok) passed++; else failed++; consol
   const behind = new Float32Array([10000, 200, 1200, 10400, 220, 1600]), bb = new Float64Array(6);
   C.xfBox(xf, behind, 0, bb, 0);
   check("VIS2: a plate 20 mm in front of the wall is not hidden by the wall's depth; a part 200 mm behind it is", !H.boxHidden(pyr, pb, 0) && H.boxHidden(pyr, bb, 0));
+  // a pyramid of the same camera at another canvas size (a panel shown by a click): what lies beyond its picture may be seen
+  // (axis-aligned here: the camera looks along +y at a wall at y = 0, the picture 3 m wide at its depth)
+  {
+    const e2 = [0, -3000, 0], m2 = mul4(persp, look(e2, [0, 0, 0]));
+    const zw = (ndc(m2, [0, 0, 0])[2] + 1) / 2, lv0 = new Float32Array(W * W).fill(zw), lvs = [lv0];
+    for (let w = W; w > 1; w /= 2) lvs.push(new Float32Array((w / 2) * (w / 2)).fill(zw));
+    const p2 = { key: "", serial: 1, complete: true, w: W, h: W, cw: 4 * W, ch: 4 * W, mvp: m2, levels: lvs, lw: lvs.map((_, i) => W >> i), lh: lvs.map((_, i) => W >> i) };
+    const inside = new Float64Array([-500, 300, -500, 500, 400, 500]), across = new Float64Array([-9000, 300, -500, 9000, 400, 500]);
+    check("VIS2: a pyramid of another canvas size: a box behind the wall reaching beyond that picture is not hidden (`beyond`); one within it, behind the wall, is",
+      H.boxHidden(p2, inside, 0) && H.boxHidden(p2, inside, 0, true) && H.boxHidden(p2, across, 0) && !H.boxHidden(p2, across, 0, true),
+      `${H.boxHidden(p2, inside, 0, true)} ${H.boxHidden(p2, across, 0)} ${H.boxHidden(p2, across, 0, true)}`);
+  }
 }
 
 // ---- VIS2: one item over the budget is drawn alone, even when (size / dist) * dist rounds above its size ----
