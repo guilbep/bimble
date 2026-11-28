@@ -4360,7 +4360,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // VIS2: not while the GPU still draws the last frame (its fence not signalled) nor with a frame about to be drawn: the
     // readout's one-pixel readPixels waited for the GPU behind that frame, every frame the pointer rested on the canvas
     // (up to 840 ms of a click's 2.6 s on the owner's project: the click's own frame started 660 ms late). Asked again next loop.
-    if (!gpuIdle() || dirty) return;
+    // (nor within 200 ms of an input: its one-pixel read is the status bar's, the input's own frame first; 27 ms of an Escape's
+    // 98 with the CPU throttled 6x)
+    if (!gpuIdle() || dirty || performance.now() - lastInputAt < 200) return;
     ptrDone = key;
     stats.pointerQueries++;
     const w0 = pointerWorld(ptrAt[0], ptrAt[1]);

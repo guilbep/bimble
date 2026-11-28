@@ -30,7 +30,9 @@ const LIMIT = 200;
 
 async function main() {
   await d.open();
-  const still = ["wait idle", "sleep 400", "wait idle"];
+  // (each measured input starts after the last frame has finished on the GPU too: gl.finish() on the page's own context, after
+  // the page is idle; the claim under test is the input's own cost, not a GPU-process backlog left by the frame before)
+  const still = ["wait idle", "sleep 400", "wait idle", "js document.getElementById('bimble').getContext('webgl2').finish()"];
   await d.gesture(["wait ready", ...still]);
   const whole = await d.ev("({ tris: window.__bbGl.frameTris, ms: window.__bbGl.frameMs ?? null })");
   console.log(`  a still picture: ${whole.tris.toLocaleString("en-US")} triangles, the last frame ${Math.round(whole.ms ?? 0)} ms (draw start to the GPU's end)`);
@@ -65,11 +67,31 @@ async function main() {
       if (k1 !== k0) console.log(`  (the links or the model changed during the selection (${k0} -> ${k1}): the queries' count not checked)`);
       else check("a selection and Escape ask the host nothing that does not depend on the selection (the links' tree, levels, notes: synchronous, 90 ms each on a real project)", again.length === 0, again.length ? `asked again: ${again.map((k) => `${k} ${q0[k] ?? 0} -> ${q1[k]}`).join(", ")}` : "");
     }
-    if (kind === "wheel") { const nav = await d.ev("window.__bbGl.nav"); check("the wheel's pivot read from the last picture's element attachment (no scan of every element)", nav.pivotPick === "readout", `${nav.pivotPick ?? "not recorded"} (${nav.zoomFrom})`); }
+    if (kind === "wheel") { // the pivot without a scan of every element and without waiting for the GPU: the readout, or the plane at
+      // once while the GPU still draws ("gpu busy"); here the GPU was idle before the wheel (gl.finish): the readout
+      const nav = await d.ev("window.__bbGl.nav");
+      check("the wheel's pivot read from the last picture's element attachment (the GPU idle before it: no scan of every element, no wait)", nav.pivotPick === "readout", `${nav.pivotPick ?? "not recorded"} (${nav.zoomFrom})`);
+    }
     check(`${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms (${r.length} inputs, worst ${Math.round(Math.max(...r.map((i) => i.ms ?? Infinity)))} ms)` : "no input recorded");
   }
-  // the same with the CPU throttled (CDP Emulation.setCPUThrottlingRate: a slow runner), after a still picture each time
-  for (const rate of (process.env.VIS2_THROTTLE ?? "4,6").split(",").map(Number).filter((x) => x > 1)) {
+  // the same on a machine 4 and 6 times slower than the reference one (the dev machine: Apple M1 Pro, Asahi Linux): this host
+  // calibrated first (a fixed typed-array loop in the page, median of 5), then the CPU throttled (CDP) by what is left of the
+  // factor; a host already that much slower is covered by the unthrottled run above
+  const REF_LOOP_MS = 25.0; // (the reference machine's median, 28 Nov 2026)
+  const loop = `(() => { const a = new Float64Array(1 << 16); let s = 0; const t0 = performance.now(); for (let r = 0; r < 300; r++) for (let i = 0; i < a.length; i++) { a[i] = a[i] * 1.0000001 + i; s += a[i]; } return s > -1 ? performance.now() - t0 : 0; })()`;
+  const runs = [];
+  for (let i = 0; i < 5; i++) runs.push(await d.ev(loop));
+  runs.sort((a, b) => a - b);
+  const slower = Math.max(0.1, runs[2] / REF_LOOP_MS);
+  console.log(`  calibration: the loop ${runs[2].toFixed(1)} ms here, ${REF_LOOP_MS} ms on the reference machine: this host is ${slower.toFixed(2)}x as slow`);
+  const rates = [];
+  for (const target of (process.env.VIS2_SLOWER ?? "4,6").split(",").map(Number).filter((x) => x > 1)) {
+    const rate = target / slower;
+    if (rate < 1.05) console.log(`  ${target}x the reference: the host is already ${slower.toFixed(2)}x slower than the reference: covered by the unthrottled run`);
+    else rates.push({ target, rate: Math.round(rate * 100) / 100 });
+  }
+  for (const { target, rate } of rates) {
+    console.log(`  ${target}x the reference machine: the CPU throttled ${rate}x`);
     await d.gesture(["fit", ...still]);
     const at3 = await d.ev(`(() => { const p = window.__bbGl.toScreen(${GEOREF[0] + 18000}, ${GEOREF[1] + 150}, ${GEOREF[2] + 3000}); return p ? [Math.round(p[0]), Math.round(p[1])] : null; })()`);
     await d.S("Emulation.setCPUThrottlingRate", { rate });
@@ -79,7 +101,7 @@ async function main() {
         await d.gesture([...g, ...still]);
         const r = await d.ev(`(() => { const D = window.__drv, fr = D.frames; return D.inputs.slice(${n0}).filter((i) => i.what !== "release").map((i) => { const f = fr.find((x) => x.end >= i.t); return { what: i.what, ms: f ? f.end - i.t : null }; }); })()`);
         const first = r.find((i) => kind === "click" ? i.what === "press" : i.what === kind);
-        check(`CPU throttled ${rate}x: ${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms` : "no input recorded");
+        check(`${target}x slower than the reference machine (throttled ${rate}x): ${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms` : "no input recorded");
       }
     } finally { await d.S("Emulation.setCPUThrottlingRate", { rate: 1 }); }
   }
