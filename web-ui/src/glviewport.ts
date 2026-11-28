@@ -1617,6 +1617,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const inputNow = () => { lastInputAt = performance.now(); };
   canvas.addEventListener("pointermove", (ev) => { if (ev.buttons) inputNow(); }, { capture: true, passive: true });
   canvas.addEventListener("wheel", inputNow, { capture: true, passive: true });
+  canvas.addEventListener("pointerdown", inputNow, { capture: true, passive: true }); // (VIS2: a press too: no pyramid read-back on its path)
   window.addEventListener("keydown", inputNow, true);
   /** The last frame's fence: its time (draw start to the GPU's end, to a loop's resolution) and, for a whole
    *  frame, the triangles a ms a whole picture is drawn at. */
@@ -4810,10 +4811,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // frame; anything else that redraws (a move, a selection) abandons the fill
     let fillStep = false;
     pollFence(); // VIS1 (P0-a)
-    if (wholeNext && !dirty && performance.now() >= wholeAt) wholeNext = false, lastCamChangeAt = -Infinity, stillDue = 0, fill = null, fillEdges = false, dirty = true; // VIS1: after a feedback frame
+    // VIS1: after a feedback frame, the complete picture. VIS2: as a fill (slices within the budget, culled once this camera's
+    // pyramid is back; an input abandons it between two slices), not one whole frame: with the pyramid stale (the change that
+    // asked for feedback) that frame drew everything in view, 22 to 105 M triangles on the owner's project, about a second
+    // in which the next click waited (the press after Escape, 620 to 750 ms)
+    if (wholeNext && !dirty && performance.now() >= wholeAt) wholeNext = false, lastCamChangeAt = -Infinity, stillDue = 0, fill = { t: Infinity, id: ++fillSerial }, fillEdges = false, dirty = fillStep = true;
     // VIS1: the last picture's pyramid, when the GPU has it. VIS2: not while a later frame is in flight (its fence pending): the
     // read-back's getBufferSubData waited for the GPU behind that frame (170 to 300 ms after a whole frame on the owner's project)
-    if (!frameFence) hiz?.poll();
+    // (and not on an input's path: not with a frame to draw, nor within 200 ms of an input; the pyramid before serves meanwhile)
+    if (!frameFence && !dirty && performance.now() - lastInputAt > 200) hiz?.poll();
     if (!dirty && fill === null && !fillEdges && !drag && performance.now() - lastInputAt > 300) warmHists(); // VIS2
     if (!dirty && stillDue && !drag && performance.now() >= stillDue && performance.now() - lastInputAt >= motionWin()) {
       stillDue = 0;
