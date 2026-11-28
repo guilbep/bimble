@@ -1803,6 +1803,37 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         : sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : shown[e] === 2 ? REVEALED_SRGB
         : (CATEGORY_SRGB[m.cats[e] ?? 7] ?? CATEGORY_SRGB[7] ?? SELECTION_SRGB);
     };
+    // VIS2: only the selection changed since the last colours (what is shown, the links' colours and the mesh as then): the
+    // elements selected then and now recoloured, not every element (252,189 on the owner's project: the click's own work)
+    const baseKey = `${visGen}|${(m.links ?? []).map((l) => l.colour ?? -1).join(",")}`;
+    const nowSel: number[] = [];
+    if (linked) { const k = (m.links ?? []).findIndex((l) => l.name === linked.link), l = k >= 0 ? m.links![k]! : null; if (l) for (let e = l.e0; e < l.e0 + l.elements; e++) if (m.ids[e] === linked.id) { nowSel.push(e); break; } }
+    else if (sel.size) { const end = m.links?.[0]?.e0 ?? m.ids.length; for (let e = 0; e < end; e++) if (sel.has(m.ids[e] ?? "")) nowSel.push(e); }
+    if (colMesh === m && colBase === baseKey && elColour.length === m.ids.length && stateTexels.length >= 4 * m.ids.length && stateRows > 0) {
+      const changed = [...new Set([...colSel, ...nowSel])];
+      recoloured = [];
+      const links = new Set<number>();
+      for (const e of changed) {
+        const c = colourOf(e), v = (c[0] << 16) | (c[1] << 8) | c[2];
+        if (elColour[e] !== v) recoloured.push(e);
+        elColour[e] = v;
+        packState(stateTexels, e, c, m.model?.[e] ?? 0, shown[e]! > 0);
+        if ((m.model?.[e] ?? 0) > 0) links.add(m.model![e]!);
+      }
+      for (const k of links) { // a link all shown in its own colour (u_plain): checked again for the links touched
+        const l = m.links![k - 1]!, c = LINK_SRGB[l.colour ?? -1] ?? REFERENCE_SRGB, v = (c[0] << 16) | (c[1] << 8) | c[2];
+        let plain = true;
+        for (let e = l.e0; e < l.e0 + l.elements && plain; e++) if (shown[e] !== 1 || elColour[e] !== v) plain = false;
+        plainOf[k] = plain ? c : null;
+      }
+      colSel = nowSel;
+      const t0 = performance.now();
+      for (const e of changed) uploadStates(e, e + 1); // (each one's row: two selections far apart are not one range)
+      stats.stateUpload = { elements: changed.length, ms: performance.now() - t0 };
+      stats.plain = plainOf.map((x) => x !== null);
+      return;
+    }
+    colMesh = m, colBase = baseKey, colSel = nowSel;
     // 3D2 (step 4): each element's colour kept, the ones that changed listed (a selection is drawn over the
     // kept picture when only colours changed: overpaint below)
     const was = elColour.length === m.ids.length ? elColour : null;
@@ -1837,6 +1868,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // ---- 3D2 (step 4; Rust's #3, highlights over the kept picture): a change of colours alone (a selection)
   // redraws the elements whose colour changed over the last complete picture, not the whole model. ----
   let elColour = new Uint32Array(0), recoloured: number[] | null = null;
+  /** VIS2: what the last colours() ran for: the mesh, what is shown and the links' colours (colBase), the elements selected. */
+  let colMesh: Bmsh | null = null, colBase = "", colSel: number[] = [];
   /** Per element: its first index in the merged face list and edge list (-1: instanced or not drawn), its
    *  instance and group (-1: merged). */
   let elFace = new Int32Array(0), elEdge = new Int32Array(0), elInst = new Int32Array(0), elGroup = new Int32Array(0), elDb = new Int32Array(0); // (LNK3D: its batch)

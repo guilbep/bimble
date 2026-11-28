@@ -36,12 +36,21 @@ const readOnly = computed(() =>
   linkedName.value !== null ? { kind: "linked", text: t("props.linkedReadOnly", { name: linkedName.value }) }
   : fileReadOnly.value ? { kind: "file", text: t("props.fileReadOnly") } : null);
 
-// Reload on selection or model change (rev). The watcher runs after the frame, so the viewer is free.
+// Reload on selection or model change (rev), after the next frame is presented (VIS2: a press's feedback is the selection's
+// highlight in the viewport first; the element's query and this panel's render came before that frame, in the click's
+// task: 100 to 200 ms with the CPU throttled 6 times). A load asked again before it runs is the one that counts.
+let loadSeq = 0;
 watch(
   () => [one.value, state.value.rev] as const,
   ([id]) => {
     loadError.value = null;
-    if (!id) { detail.value = null; return; }
+    if (!id) { detail.value = null; loadSeq++; return; }
+    if (detail.value && detail.value.id !== id) detail.value = null; // (another element: nothing stale shown meanwhile)
+    const seq = ++loadSeq;
+    requestAnimationFrame(() => setTimeout(() => { if (seq === loadSeq && one.value === id) load(id); }, 0));
+  },
+);
+function load(id: string): void {
     try {
       const d = element(id);
       if (d.id !== detail.value?.id) renameError.value = materialError.value = null;
@@ -51,8 +60,7 @@ watch(
       detail.value = null;
       loadError.value = e instanceof Error ? e.message : String(e);
     }
-  },
-);
+}
 
 // ---- WAVE1B (B2): openings of the selected host; the selected one's fields ----
 const openings = computed<OpeningInfo[]>(() => { void stateRev.value; const d = detail.value; return d && d.openings > 0 ? openingsOf(d.id) : []; });

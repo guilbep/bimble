@@ -50,6 +50,8 @@ async function main() {
   // computed values are lazy: the next render after it asks again. Both warmed here: two selections and their clearing)
   for (let i = 0; i < 2; i++) await d.gesture([`click ${at[0]} ${at[1]}`, ...still, "key Escape", ...still]);
   const q0 = await d.ev("({ ...window.__vis2q })");
+  const linksNow = () => d.ev("(async () => { const s = (await import('/src/bimble.ts')).state.value; return `${s.rev}|${s.links ?? 0}`; })()");
+  const k0 = await linksNow();
   for (const [name, kind, g] of steps) {
     const n0 = await d.ev("window.__drv.inputs.length");
     await d.gesture(g);
@@ -59,7 +61,9 @@ async function main() {
     if (kind === "click") { const sel = await d.ev("[...document.querySelectorAll('[data-bb=status-chip]')].map((e) => e.textContent).find((t) => /selected|sélectionn/.test(t)) ?? null"); check("the click selected an element (the press's feedback is its highlight)", !!sel, `${sel} at ${at}`); }
     if (kind === "key") { // after a selection and its clearing: what does not depend on the selection was not asked again
       const q1 = await d.ev("({ ...window.__vis2q })"), again = ["links_tree", "link_levels", "link_notes"].filter((k) => (q1[k] ?? 0) > (q0[k] ?? 0));
-      check("a selection and Escape ask the host nothing that does not depend on the selection (the links' tree, levels, notes: synchronous, 90 ms each on a real project)", again.length === 0, again.length ? `asked again: ${again.map((k) => `${k} ${q0[k] ?? 0} -> ${q1[k]}`).join(", ")}` : "");
+      const k1 = await linksNow(); // (the model or the links changed meanwhile (a link's indexing ending): then asking again is right)
+      if (k1 !== k0) console.log(`  (the links or the model changed during the selection (${k0} -> ${k1}): the queries' count not checked)`);
+      else check("a selection and Escape ask the host nothing that does not depend on the selection (the links' tree, levels, notes: synchronous, 90 ms each on a real project)", again.length === 0, again.length ? `asked again: ${again.map((k) => `${k} ${q0[k] ?? 0} -> ${q1[k]}`).join(", ")}` : "");
     }
     if (kind === "wheel") { const nav = await d.ev("window.__bbGl.nav"); check("the wheel's pivot read from the last picture's element attachment (no scan of every element)", nav.pivotPick === "readout", `${nav.pivotPick ?? "not recorded"} (${nav.zoomFrom})`); }
     check(`${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms (${r.length} inputs, worst ${Math.round(Math.max(...r.map((i) => i.ms ?? Infinity)))} ms)` : "no input recorded");
