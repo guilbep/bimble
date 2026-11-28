@@ -58,13 +58,13 @@ map (rows sum to the stripped binary exactly; `linker` = what no object owns). L
 
 | artefact | bytes | gzip -9 | limit |
 |---|---:|---:|---|
-| ccore.wasm (editor) | 1,406,120 | 576,427 | none yet |
-| ccore-view.wasm (viewer, shipped, after wasm-opt) | 643,158 | 300,060 | 1,000,000 (ADR 0069 as amended; 64.3 % used) |
+| ccore.wasm (editor) | 1,406,131 | 576,447 | none yet |
+| ccore-view.wasm (viewer, shipped, after wasm-opt) | 643,169 | 300,063 | 1,000,000 (ADR 0069 as amended; 64.3 % used) |
 | editor, sum of the objects (before wasm-opt) | 1,583,344 | | |
 | viewer, sum of the objects (before wasm-opt) | 721,831 | | |
 | bimble-ccore (native, stripped) | 3,608,016 | | none yet |
 | bimble-ccore-0.1.0-preview.8-aarch64-linux.tar.gz (release archive) | 5,892,227 | | none yet |
-| web build (build:ccore), 27 files | 3,393,401 | 1,421,481 | none yet |
+| web build (build:ccore), 27 files | 3,393,460 | 1,421,513 | none yet |
 
 ## Files of the release archive (bimble-ccore-0.1.0-preview.8-aarch64-linux)
 
@@ -129,14 +129,14 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 
 | file | bytes | gzip -9 |
 |---|---:|---:|
-| ccore/ccore.wasm | 1,406,120 | 576,427 |
-| assets/index-*.js | 655,520 | 188,043 |
-| ccore/ccore-view.wasm | 643,158 | 300,060 |
-| assets/glviewport-*.js | 162,656 | 58,193 |
+| ccore/ccore.wasm | 1,406,131 | 576,447 |
+| assets/index-*.js | 655,520 | 188,042 |
+| ccore/ccore-view.wasm | 643,169 | 300,063 |
+| assets/glviewport-*.js | 162,693 | 58,208 |
 | assets/index-*.css | 101,886 | 14,803 |
 | samples/frame.ifc | 68,059 | 14,224 |
 | ccore/frame.json | 49,491 | 3,200 |
-| assets/render-*.js | 41,774 | 15,132 |
+| assets/render-*.js | 41,774 | 15,130 |
 | assets/source-sans-3-latin-ext-400-normal-*.woff2 | 33,024 | 33,057 |
 | assets/source-sans-3-latin-ext-600-normal-*.woff2 | 32,704 | 32,732 |
 | assets/source-sans-3-latin-ext-400-italic-*.woff2 | 32,208 | 32,236 |
@@ -149,12 +149,12 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 | assets/dm-mono-latin-400-normal-*.woff2 | 14,820 | 14,843 |
 | assets/dm-mono-latin-ext-500-normal-*.woff2 | 9,616 | 9,639 |
 | assets/dm-mono-latin-ext-400-normal-*.woff2 | 9,552 | 9,575 |
-| assets/ccore-*.js | 8,803 | 3,247 |
+| assets/ccore-*.js | 8,803 | 3,246 |
 | assets/sora-latin-ext-500-normal-*.woff2 | 7,476 | 7,499 |
 | assets/sora-latin-ext-700-normal-*.woff2 | 7,448 | 7,471 |
 | assets/bmsh4.worker-*.js | 7,016 | 2,719 |
-| assets/device-*.js | 4,185 | 1,952 |
-| index.html | 3,127 | 1,512 |
+| assets/device-*.js | 4,185 | 1,951 |
+| index.html | 3,127 | 1,511 |
 | samples/frame.bimbleview | 2,414 | 2,437 |
-| **total** | 3,393,401 | 1,421,481 |
+| **total** | 3,393,460 | 1,421,513 |
 

@@ -807,6 +807,9 @@ interface GlStats {
   linkDraw?: { name: string; visible: boolean; colour: number; xf: ModelXf }[];
   /** LNK3D (E): the notes on linked elements as last drawn (client px of the anchor) and the selected one. */
   notes?: { link: string; element: string; text: string; drawn: boolean; x: number; y: number }[];
+  /** VIS2: the key the viewport last asked `link_notes` with (the links' count, the mesh's rev and size): a test tells a
+   * re-ask the mesh caused (a link's detail arriving) from one a selection caused. */
+  notesKey?: string;
   noteSelected?: number | null;
   /** LNK3D (D): the GPU budget across links (bytes; a test hook: unset, automatic from memory_share), each link's
    *  detail on the GPU or not (its bytes, its uploads), the last upload of a link's detail (ms). */
@@ -2482,7 +2485,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!m) { notes = []; return; }
     const key = `${state.value.links ?? 0}|${m.rev}|${m.size}`;
     if (key === notesKey) return;
-    notesKey = key;
+    notesKey = stats.notesKey = key;
     const L = m.links ?? [];
     notes = (L.length ? linkNotes() : []).map((n) => {
       const k = L.findIndex((l) => l.name === n.link), x = k >= 0 ? L[k]!.xf : IDENTITY_XF;
@@ -4360,7 +4363,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // VIS2: not while the GPU still draws the last frame (its fence not signalled) nor with a frame about to be drawn: the
     // readout's one-pixel readPixels waited for the GPU behind that frame, every frame the pointer rested on the canvas
     // (up to 840 ms of a click's 2.6 s on the owner's project: the click's own frame started 660 ms late). Asked again next loop.
-    if (!gpuIdle() || dirty) return;
+    // (nor within 200 ms of an input: its one-pixel read is the status bar's, the input's own frame first; 27 ms of an Escape's
+    // 98 with the CPU throttled 6x)
+    if (!gpuIdle() || dirty || performance.now() - lastInputAt < 200) return;
     ptrDone = key;
     stats.pointerQueries++;
     const w0 = pointerWorld(ptrAt[0], ptrAt[1]);
