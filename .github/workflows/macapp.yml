@@ -131,7 +131,7 @@ jobs:
         working-directory: ccore
         run: node test/macapp_test.mjs 2>&1 | tee "../$OUT/macapp_test.log"
       # The app on the runner's GPU. Under Rosetta (x86_64 on arm64) every run goes through `arch -x86_64`.
-      - name: The GPU path (selftest, a shot with Metal's validation, orbit-zoom)
+      - name: The GPU path (selftest, a shot with Metal's validation, orbit-zoom, truth, a crash, a window)
         id: gpu
         continue-on-error: true
         working-directory: ccore
@@ -148,10 +148,26 @@ jobs:
           cat "$O/orbit-zoom/summary.md" 2> /dev/null || echo "no summary.md"
           BIMBLE_LOG_DIR="$O/logs-truth" $B --offscreen --truth --preset orbit-zoom --out "$O/truth" --config-dir "$O/conf" golden/frame.json \
             > "$O/truth.txt" 2>&1; echo "truth: exit $?" >> "$O/truth.txt"; tail -20 "$O/truth.txt"
+          # the crash handler and native/symbolize.sh (atos against out/app/debug/<UUID>.dSYM)
+          printf 'frames 3\ncrash\n' > "$O/crash-script.txt"
+          BIMBLE_TEST_CRASH=1 BIMBLE_LOG_DIR="$O/logs-crash" $B --offscreen --script "$O/crash-script.txt" --out "$O/crash" --config-dir "$O/conf" \
+            golden/frame.json > "$O/crash.txt" 2>&1; echo "crash: exit $?" >> "$O/crash.txt"; tail -12 "$O/crash.txt"
+          d=$(BIMBLE_LOG_DIR="$O/logs-crash" $B --last-log); echo "--last-log: $d" | tee -a "$O/crash.txt"
+          native/symbolize.sh "$d" 2>&1 | tee "$O/symbolize.txt" | head -12
+          # a real window on the runner's display (Cocoa, the swapchain, vsync), its session log in ~/Library/Logs (HOME moved)
+          printf 'frames 30\nswheel 0.5 0.5 0 1\npinch 1.3\nframes 10\nshot window.png\nreport report.txt\nquit\n' > "$O/window-script.txt"
+          mkdir -p "$O/home"
+          HOME=$PWD/$O/home $B --script "$O/window-script.txt" --out "$O/window" --config-dir "$O/conf" golden/frame.json > "$O/window.txt" 2>&1
+          echo "window: exit $?" >> "$O/window.txt"; tail -8 "$O/window.txt"
+          HOME=$PWD/$O/home $B --last-log | tee -a "$O/window.txt"
+          ls -R "$O/home/Library" 2> /dev/null | head -20
+      # Required on arm64 and under Rosetta (green there since round 3); the Intel row's GPU is refused by SDL (no Mac2
+      # family): its suites say "skipped:" and the row is a probe
       - name: test/native_app_test.mjs, test/native_geo_test.mjs (Metal)
         id: suites
-        continue-on-error: true
         working-directory: ccore
+        env:
+          CCORE_NATIVE_REQUIRED: ${{ matrix.probe && '0' || '1' }}
         run: |
           if [[ $MACAPP_ARCH == x86_64 && $(uname -m) == arm64 ]]; then
             printf '#!/bin/sh\nexec arch -x86_64 "%s" "$@"\n' "$PWD/out/app/bimble" > out/app/bimble-rosetta && chmod +x out/app/bimble-rosetta
@@ -174,6 +190,8 @@ jobs:
             grep -E "selftest-window: (video|GPU|claimed|size|ok|FAILED|exit)" "$OUT/selftest.txt" 2> /dev/null || true
             grep -E "exit|first picture|FAIL|refused|error" "$OUT/shot.txt" "$OUT/orbit.txt" "$OUT/truth.txt" 2> /dev/null | head -30 || true
             grep -E "passed|skipped|FAIL" "$OUT/native_app_test.log" "$OUT/native_geo_test.log" 2> /dev/null | head -40 || true
+            grep -E "exit|crash|last-log" "$OUT/crash.txt" "$OUT/window.txt" 2> /dev/null | head -12 || true
+            head -6 "$OUT/symbolize.txt" 2> /dev/null || true
             echo '```'
             echo "gpu step: ${{ steps.gpu.outcome }}, suites: ${{ steps.suites.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -810,6 +810,14 @@ int main(int argc, char **argv) {
     { /* French by default, as the lab; LANG=en_* gives English */
         const char *l = getenv("LANG");
         a->lang_en = lang >= 0 ? lang : (l && !strncmp(l, "en", 2));
+#ifdef __APPLE__
+        if (lang < 0 && !(l && *l)) { /* MACAPP: Finder passes no LANG: the system's first preferred language */
+            int nl = 0;
+            SDL_Locale **loc = SDL_GetPreferredLocales(&nl);
+            if (loc && nl > 0 && loc[0]->language) a->lang_en = !strcmp(loc[0]->language, "en");
+            SDL_free(loc);
+        }
+#endif
     }
     int sv = SDL_GetVersion();
     if (SDL_VERSIONNUM_MAJOR(sv) < BIMBLE_SDL_MIN_MAJOR || (SDL_VERSIONNUM_MAJOR(sv) == BIMBLE_SDL_MIN_MAJOR && SDL_VERSIONNUM_MINOR(sv) < BIMBLE_SDL_MIN_MINOR)) {
