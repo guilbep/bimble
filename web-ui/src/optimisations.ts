@@ -67,6 +67,12 @@ registerOptimisation(setting("link_detail", { // TESS1 (ADR 0085): off is "exact
   choices: [{ value: "exact", label: { fr: "exact", en: "exact" } }, { value: "standard", label: { fr: "standard", en: "standard" } },
     { value: "light", label: { fr: "léger", en: "light" } }, { value: "custom", label: { fr: "personnalisé", en: "custom" } }],
 }));
+registerOptimisation(setting("shell_mode", { // SHELL1 (ADR 0078 amendment 8): the exterior shell baked in each link's tiles
+  label: { fr: "Extérieur d'abord", en: "Exterior first" }, kind: "choice", default: "priority", off: "off",
+  hint: { fr: "Les éléments visibles du dehors sont chargés et dessinés en premier ; rien n'est omis. « filtre » (expérimental) omet le reste : peut cacher des éléments visibles.",
+    en: "The elements seen from outside are fetched and drawn first; nothing is left out. \u201cfilter\u201d (experimental) leaves the rest out: can hide visible elements." },
+  choices: [{ value: "priority", label: { fr: "extérieur d'abord", en: "exterior first" } }, { value: "off", label: { fr: "inactif", en: "off" } }, { value: "filter", label: { fr: "filtre (expérimental)", en: "filter (experimental)" } }],
+}));
 registerOptimisation(setting("gpu_cull", {
   label: { fr: "Tri des copies sur la carte", en: "GPU culling of copies" }, kind: "toggle", default: false, off: false,
   hint: { fr: "Avec WebGPU : les copies d'une forme testées par un compute shader.", en: "With WebGPU: a shape's copies tested by a compute shader." },
@@ -75,9 +81,9 @@ registerOptimisation(setting("gpu_cull", {
 // ---- VIS1 (ADR 0078 amendment 7): the 3D view's own; WebGL2 only for now (the WebGPU renderer draws everything, with
 // lines, and completes its picture on screen: ADR 0078 amendment 7, "What the WebGPU renderer needs") ----
 registerOptimisation(setting("draw_visible", {
-  label: { fr: "Dessiner seulement ce qui se voit", en: "Draw only what can be seen" }, kind: "toggle", default: false, off: false,
-  hint: { fr: "WebGL2 : une image au repos laisse de côté ce que l'image précédente montre caché (désactivé par défaut : en vérification sur de grands projets de liens).",
-    en: "WebGL2: a still picture leaves out what the previous one shows hidden (off by default: being checked on large projects of links)." },
+  label: { fr: "Dessiner seulement ce qui se voit", en: "Draw only what can be seen" }, kind: "toggle", default: true, off: false,
+  hint: { fr: "WebGL2 : une image au repos laisse de côté ce que l'image précédente montre caché (vérifié sur un grand projet de liens : rien de visible omis).",
+    en: "WebGL2: a still picture leaves out what the previous one shows hidden (verified on a large project of links: nothing seen left out)." },
 }));
 registerOptimisation(setting("edge_mode", {
   label: { fr: "Arêtes en 3D", en: "Edges in 3D" }, kind: "choice", default: "screen", off: "lines",

@@ -774,10 +774,268 @@ fed to its GPU culling: a bit per element in the storage buffer its compute pass
 copies and ranges dropped there), or the runs turned into its indirect draws; (4) the pick: one texel of the element
 attachment (`copyTextureToBuffer`, `mapAsync`).
 
+## Amendment 8 (27 Nov 2026, ticket SHELL1): the exterior shell, per link and across the links
+
+The orchestrator's ticket, on the owner's folder of 17 linked IFC files (110.5 M triangles): the pyramid alone leaves an
+outside view at 76.1 M triangles at 1 px (32.0 M with the per-tile occluders): the buildings' parts are too large on
+screen to simplify and most triangles are inside. The research note's first technique (`docs/research/2026-11-27-massive-model-rendering-literature.md`):
+bake which elements can be seen from outside at all. Choices by Claude on ticket SHELL1 under the owner's rules ("performance
+is everything"; decisions on facts measured on his data; every optimisation a setting with a good default and an off value).
+Code: `ccore/src/shell.{h,c}` (the classification, pure), `src/tiles.{h,c}` (the section, the walk, the answers),
+`session/link_cache.c` (the bake), `session/xshell.{h,c}` (the cross-link pass), `session/mesh.c` + `host/server.c`
+(answers, the frame query, the truth render), `ccore/tools/tiles.mjs --shell` (the numbers).
+
+53. **The classification: orthographic depth views over the sphere, an element seen in one of them is exterior.** For N
+   directions (the six sides, the eight corner diagonals, then a Fibonacci sphere; no libm: the golden angle's rotation by
+   recurrence) an orthographic view of the link's bounding sphere at R x R pixels. Pass 1: the opaque elements write their
+   depth at the pixel centres they cover (both faces). Pass 2: every element not yet exterior is tested, its box first (hidden
+   when every 8 x 8 block it covers holds only surfaces nearer than its nearest point by more than d), then its triangles:
+   seen when one is no more than d mm behind the buffer at a pixel centre it covers; a triangle that covers no pixel centre
+   (a part thinner than a pixel) is tested with conservative coverage at the depth of its point nearest the pixel's centre,
+   unless it faces the view edge on (|n . f| < 0.05: its neighbours show, or not). **Opaque = the occluders' rule** (decision
+   37: `IfcWall*`, `IfcSlab`, `IfcRoof`, `IfcFooting`, `IfcColumn`, `IfcBeam`, `IfcCovering`, never the glass category): windows,
+   curtain walls' plates and members, doors, railings, stairs, furniture and MEP never hide anything, so what is behind a
+   window is exterior. **Why orthographic and complete**: a ray from an eye outside the link's box to a point inside meets the
+   box's hull once, so the whole line in front of the point lies outside the hull: the view along that direction sees what the
+   eye sees. Only the sampling can miss (a direction between the samples, a sliver behind an edge). The depth pass skips an
+   element whose box is behind every block it covers (exact: it would write nothing; the pyramid's order draws a cell's large
+   elements first). Bounded: a batch of views' buffers (at most 64 MB), a run of leaves' placed triangles (400,000); work views
+   x triangles; deterministic (a view drawn by one worker in the elements' order, marks or-ed: the same bytes for 1 and 4
+   threads and in steps, `shell_test`). **Alternatives:** perspective viewpoints on a sphere (Pixyz: 256 at 512 px), which
+   sample eye positions where the orthographic views sample lines (complete in the limit); ray casting from the outside
+   (two-stage recursive tracing); voxels (needs closed solids, a voxel's size of error); an id buffer with one pass (what is
+   behind glass and thin parts need the second pass anyway); the "touch" safeguard (an element reaching the link's box faces
+   counted exterior: built, `cross_touch=1`, measured below, off).
+54. **The defaults, by measurement: 64 views at 1024 px, d = 100 mm.** On the synthetic buildings (6.69 M triangles, 18
+   buildings of 10 storeys with interiors, walls 300 mm in a 200 m scene) 64, 256 and 1,024 views at 1024 px mark the same
+   8,298 of 73,260 elements (14.7 % of the triangles), 0 missing in 31 truth frames; at 512 px the walls (about a pixel) leak:
+   15.6 k (24 %), still 0 missing: the resolution matters, not the views. On the local folder the cross-link pass's views do
+   not converge (below): more directions keep finding gaps (glazing, joinery, open fronts).
+55. **Stored in the reserved places, the layout unchanged** (`tiles.h`): element flag 4 EXTERIOR, tile flag 16 "holds
+   exterior elements", the header's bake flag 1 "shell computed". The exterior triangle counts and the shell proxies do not fit
+   the record (one free u16): the blobs end with a SHELL TABLE (`TSH1`: per tile its exterior detail triangles and its shell
+   proxy: offset, bytes, triangles, vertices, error) found by a 16-byte trailer (`TSHT`, table bytes, offset). Readers of the
+   layout before it read the new sections unchanged (the blobs only longer; the reserved flags already accepted): the cache's
+   format stays (8 since TESS1); the SRCE record of the bake settings gains `shell=64x1024 shell_d=100`, so a cache baked
+   before is indexed again from itself, never converted. The shell proxies (a tile with both kinds: a proxy of its exterior
+   elements only, the same tree built with the others left out) are kept beside the tiles' own and used by the experimental
+   filter only: **the coarse levels the renderers draw stay the tiles' own proxies, from all elements** (a proxy of the
+   exterior only would hide what a section or a window reveals; nothing measured shows it safe). Bytes: about 12 % of a
+   `TILE` section on a real project, 0.95 MB on the buildings set.
+56. **Across the links.** On the local folder (17 links of one project split by discipline) the links' own shells marked
+   97.6 % of the elements exterior, **99.2 % of the triangles**: an MEP, structure or joinery file has no envelope of its
+   own. So a cross-link pass is built (`session/xshell.{h,c}`, the same code: `cc_shell_start_parts`): the visible links
+   classified together, each link's cache read in place and placed, every link's opaque elements hiding the others', in
+   groups of links whose world boxes overlap (grown by 1 m: a link far from the others, a georeference kilometres away, made
+   every view's pixel metres wide: the first run left 26 elements exterior, the truth render caught it), in a background job
+   started when the visible links, their caches, placements or the settings change; per link a mark per entry of its element
+   list (`toc.xmask`), the link's own shell the fallback; kept in the cache folder (`links/xshell-<key>.bin`, read untrusted),
+   not beside the `.bimble` (the project's folder may be the user's and read only; it is a cache); `tiles=xshell` (202 while it
+   runs); settings `cross=0|1|<views>x<res>`, `cross_d=`, `cross_touch=` in `BIMBLE_TILES` (not in a cache's SRCE). On the
+   local folder it marks about two elements in five, in under half a minute and 106 MB of buffers (the numbers: the ticket's
+   report, private data).
+57. **The shell orders, it never removes (the orchestrator's decision on these numbers).** As a FILTER (the outside walk:
+   tiles without exterior elements skipped, leaves drawn by their exterior elements) the cross-link shell selects 29 M
+   triangles at the site view instead of 77 M (17–19 M with the occluders), but **misses up to 1.2 % of the elements seen**,
+   and large ones (coverings, slabs, a pipe, tens of metres long). Neither 2048 px nor d = 400 mm nor the box-touch safeguard brings it to zero (fewer misses,
+   never none), and the views curve does not converge (from 32 to 256 views the marks keep growing: more directions find more
+   gaps). The native renderer's run-time occlusion on the
+   same project draws a few million triangles with 0 missing (its truth frames, ticket NUI2). So: **`shell_mode` = `priority` (the default) | `off` |
+   `filter` (EXPERIMENTAL, off: "can hide visible elements: measured 0–1.2 % on a real project")**. In priority the walk
+   (`CC_TILES_SEL_PRIORITY`) returns the same selection as without the shell, ordered exterior first (the tiles holding an
+   exterior element, front to back, then the others); `&tile=...&shell=1` answers a leaf's exterior elements and a proxy whole
+   (the first fetch), `&shell=2` the leaf's other elements (what follows): after an open or a camera jump a renderer fetches
+   and draws what is probably seen first, and its run-time occlusion decides what is seen. A miss of the shell is a later
+   arrival, never a hole. What it buys (triangles fetched before every element the truth render sees is drawn, plain order
+   against exterior first): synthetic buildings, site view 6.57 M against 0.98 M, approach at 20 m 2.14 M against 0.29 M;
+   on the local folder 1.1 to 3.4 times fewer (the shell's misses arrive with the rest, front to back: they set the figure).
+   Rows in the page's Optimisations registry and the native app's Optimisations group.
+58. **What the shell does not guarantee.** It is sampled: a part seen only through a gap narrower than a pixel of the views,
+   or only from a direction between two sampled ones, is not marked (in priority it arrives later). It assumes the occluder
+   classes are opaque where the model says so: an open door leaf (an `IfcDoor` never hides) makes more exterior; a wall standing
+   where an opening was not cut hides what is behind it. Its marks hold for an eye outside the link's (or group's) box only; a
+   moved, added, hidden or re-read link starts the cross-link pass again (the links' own shells meanwhile). It decides an order,
+   not visibility: the renderers' occlusion does.
+59. **Back-face culling proven per element.** The element flag 1 "closed and outward" (decision 38) is checked by
+   `cc_shell_cull_proof`: each flagged element drawn alone from 26 sphere directions, whole and culled; no pixel may be deeper
+   culled, at most 1 % of the pixel centres left by edge rounding (a centre on an edge both faces leave). `shell_test` proves
+   every flagged element of the golden IFC files and fixtures, on the reader's meshes and on the cache's (BMG1 read in place),
+   and any folder named by `SHELL_PROOF_DIR`: 397 and, on the 17 synthetic links, 8,285 flags hold, 0 fail; at a few pixels
+   across, 0 of 187,106 views lose an element by culling. A renderer losing elements with culling has another cause (the
+   front face's convention under a flipped Y, mirrored copies not flipped, the flag read by row instead of list entry).
+
+### Evidence (ticket SHELL1)
+
+`ccore/test/shell_test.c` (also under ASan and UBSan): a closed room's contents interior, a window's view exterior, an open
+courtyard, nested shells, the section with its shell (flags, table, walks, answers, 2,000 damaged tables), hostile links
+(a zero-size link, non-finite points, 100,000 tiny elements in 1.0 s within 31 MB), the same bytes with 1 and 4 threads and in
+steps, the cross-link pass (a thing inside another scene's room, turned and moved: exterior alone, interior together), the
+priority walk, the culling proofs. `ccore/test/link_tiles_test.mjs`: the bake, the table, the first fetch and the rest
+together each leaf, the walker's modes, the truth render (0 missing in priority), the invalidations (a section box, hidden
+exterior elements), the cross-link pass (two links), `shell=0`.
+
+`ccore/tools/tiles.mjs --shell` (native host, 1920 x 1080, 60°, 1 px; orbits at the site distance, a half and a quarter of it,
+8 azimuths, 25° up; an approach to 2 m of the box's face; one inside camera):
+
+| set | camera | off | off + occ | filter: own shells | filter: cross-link (+ occ) | filter missing | priority missing | first picture plain / priority |
+|---|---|---|---|---|---|---|---|---|
+| buildings (synthetic) | site orbit | 5.5–6.7 M | 3.9–5.4 M | 0.82–0.94 M | (one scene) | 0 | 0 | 6.57 M / 0.98 M |
+| buildings | approach 20 m | 3.90 M | 1.00 M | 0.57 M (0.17 M) | | 0 | 0 | 2.14 M / 0.29 M |
+
+Local folder: priority misses 0 in every frame (by construction: the same tiles); the filter's figures above; the rest in
+the ticket's report (private data). Bake: a link's own shell takes seconds per 10 M triangles at 64 views x 1024 (buffers at
+most 106 MB; the indexing peak stays the pyramid's); the cross-link pass about as long over the links together. Synthetic links (17 x 93 k, objects apart): 100 % exterior, as they are. The viewer wasm:
+637,787 bytes after the merge with `next` at 9161472 (shell 635,764 against 612,384 on next at a490b49; budget 1,000,000).
+
+## Amendment 9 (27 Nov 2026, ticket VIS2): the page's hidden-surface skipping exact on a real project; the tile path planned
+
+The orchestrator's ticket: find why `draw_visible` dropped visible elements on the owner's project of 17 linked IFC files
+(the truth test: thousands of seen elements not drawn, 17 lost by the frustum test alone), fix it at the source, then draw
+links from the baked tile pyramid. Choices by Claude on ticket VIS2 under the owner's rules (decisions on facts measured
+on his data; every optimisation a setting with a good default and an off value).
+
+60. **The box fault was float32 at georeferenced coordinates.** The page's scene frame is the open model's; the owner's
+   open model is empty (origin 0) and 16 of his 17 links are placed at Swiss national coordinates, 2,536 km east and
+   1,153 km north, where f32 steps are 256 mm (2^31 to 2^32 mm). The GPU computed `R p + t` and `u_mvp p` in f32 there,
+   the CPU's view and projection were `Float32Array`s (a rotation entry rounded at 1e-7 is 250 mm at 2.5e9), and the
+   element and batch boxes were `Float32Array`s rounded to 256 mm (one missing element's box had zero width in x and y).
+   The depth pyramid (the GPU's picture) and the boxes (the CPU's) disagreed by up to hundreds of millimetres: thin and
+   flush elements were found "behind" what they are in front of, boxes at the picture's edges outside it. Ruled out by
+   measurement first (`bench.boxAudit`: every element's box rebuilt from its link's mesh asked again, placed by its
+   placement: 0 of 21,192 / 783 / 30,295 elements outside the page's own-frame box): SIZE3's `preBox`, turned and
+   instanced copies, the host's rows answer. **Fix: the render origin** (`gl/origin.ts`). The CPU keeps the scene frame in
+   f64 (matrices, `boxes`, batch boxes; the own-frame `lboxes` stay f32: small numbers); the GPU draws relative to a point
+   near the geometry, the scene's bounds' centre on a 1 m grid when it is more than 1 km from the origin (else 0, nothing
+   changes): `u_mvp = f32(mvp T(ro))`, a link's translation `t - ro` (f64, then f32: small), the open model's vertices
+   `p - u_ro`, the eye, the section box's frame and the outlines relative to it. The WebGPU renderer takes the same
+   (`Frame.ro`, its rows' `t - ro`). **Alternative:** the open model's origin moved to the links (every coordinate the
+   page exchanges with the host would move: section box, measure, notes, place tool); f64 emulation on the GPU (two
+   floats a coordinate: twice the vertex bytes).
+61. **Copies drew their link's first shape** (the second fault, found behind the first). A link opened from its rows only
+   (SIZE3's path: every large link) had its instanced groups made before its shapes were packed (`shapeI0` still 0): each
+   group's first index 0, every copy drew the link's first shape at its own placement, and the truth test counted pixels
+   where those elements' boxes are not. The groups' offsets are read again whenever their model's buffers load.
+62. **A link's detail coming back keeps the pyramid.** `detailGen` (part of the pyramid's key) moved on every load and
+   release of a link's detail, so the first still frame after fast turns often had no pyramid (the real-GPU check's
+   "11 of 12"). A load only adds geometry to a picture that drew that link as proxies, which the pyramid counts as the
+   farthest depth: that pyramid stays conservative. A release, a move or a change of lists still makes it stale.
+   `stats.vis.why` says which part of the key differed. The check is the invariant: reused unless made stale.
+63. **An item larger than the budget is drawn alone, always.** `budgetCut`/`budgetCutFast`'s never-empty branch set the
+   threshold to the largest item's size over its distance; `(s / d) * d` can round above `s`, and that item was then left
+   out: a still picture's fill drew 0 triangles every frame, forever (seen on the owner's project after a zoom out: 50 ms
+   slices, the page never idle). The threshold is now a hair under.
+64. **`draw_visible` on by default** (the core's default: the page and the native app read it; written to the file only
+   once set off). The owner's project, 6 cameras (close, far, inside, each at two azimuths), proxies off: 0 missing, 0
+   pixels differ.
+65. **The web session log** (the owner's "so that when I try the app you have observability"): with the native host the
+   page posts its start, errors and warnings, a row of frame and input statistics a second, inputs over 100 ms and its
+   Performance report every 10 s; the host writes them under `$XDG_STATE_HOME/bimble/web-sessions/<UTC>-<pid>/`
+   (`session.log`, `frames.csv`, `inputs.csv`, `report.txt`: the native app's session shape), local only (the token and
+   Origin rules of every route), at most 20 MB a session, the last 20 kept; the setting `session_log` (on; off: nothing
+   written); nothing in the pure web or wasm build. Not on Windows yet.
+66. **A fix found on the way:** `cc_settings.shell_mode` was `char[8]` for "priority" (9 bytes with its NUL): the NUL
+   landed in the next field (harmless while it was padding; the new `session_log` field made it visible). Now 12.
+
+67. **The page reaches idle on a project of links.** After an orbit on the owner's project the page drew a fill of slices
+   for minutes: each slice cost about 50 ms of script for its 46,800 batches whatever it drew, so the triangles-per-ms
+   rate the slices measured on themselves fell to the minimum budget (20,000) and each slice drew a few thousand
+   triangles; and the cut counted the triangles of items the visibility test then leaves out. Now the visibility test is
+   decided before the cut, which counts only what may be drawn (`Cut.cum`: the shown and not hidden items' triangles),
+   and a slice gets at least a whole frame's rate (fenced whole frames) times a moving frame's time. **Alternative:** a
+   rate model with a fixed cost per frame (needs the script's share measured per frame: left for the tile path, which
+   removes most of that cost).
+68. **Late proxies do not discard detail on screen.** A link whose proxies come after its detail is on the GPU keeps that
+   detail when its proxies would not stand for all of it from the camera of the moment; the proxies wait and are swapped
+   in (its batches made again by their leaves) when the budget next releases it. A link the proxies stand for entirely
+   (a far one) gives its detail back at once, as before. (`lateProxyRelease`, a test hook, restores SIZE3's way.)
+69. **The status bar says when the budget holds links at their proxies**: "N links simplified: 768 MB GPU budget reached"
+   (with a tip: raise "Links' GPU memory" in Settings), shown only while the links' detail on the GPU is at the budget.
+70. **The opening card for a link in the address is drawn by `index.html`** (an inline script, while the HTML is parsed;
+   the app's mount replaces it before the next paint): GitHub's runner measured 217.8 ms to the card when it waited for
+   the bundle (ADR 0074's 200 ms). `lab_open_url` checks it with the CPU throttled 4, 6 and 10 times.
+
+71. **Inputs on a project of links** (measured on the owner's project with `drive.mjs`, each cause in a CPU profile):
+   the status bar's pointer readout read a pixel with a synchronous `readPixels` every frame the pointer rested on the
+   canvas, waiting for the GPU behind the frame in flight (up to 840 ms of a click's 2.6 s): it now waits while a frame
+   is in flight or about to be drawn. Components read `state.value.rev` inside computeds and re-ran on every state change:
+   a click's selection re-asked the host, synchronously, for the links' tree (90 ms), levels and notes: `stateRev` and
+   keyed computeds. The wheel's and an orbit's pivots read the last picture's element attachment (that element alone)
+   instead of scanning every element. `budgetCutFast` keeps two size histograms per batch (moving and still keys had
+   flipped one entry: 46,800 rebuilt at each motion start) and the moving ones are made while idle. The feedback rule
+   estimates a frame by everything shown (the change that asks for feedback makes the pyramid stale), and a canvas resize
+   or a selection's redraw asks for the feedback frame first. Masks are made for the batches a frame draws only.
+72. **A pyramid serves a picture of the same camera at another canvas size** (a click opens the properties panel, Escape
+   closes it): the same eye and direction give the same rays; what lies beyond the old picture is never hidden
+   (`boxHidden`'s `beyond`). The whole frame after such a resize drew 22 M triangles instead of 105 M.
+73. **The pyramid's read-back waits for the last frame's fence**: its `getBufferSubData` is a synchronous round trip to
+   the GPU process, which waited behind the frame drawn since.
+
+### Evidence (ticket VIS2)
+
+`ccore/test/cull_test.mjs` (VIS2 section): a link placed 2,600 km from the scene's origin, a 12 m beam turned 30 degrees
+and tilted, the GPU's f32 arithmetic emulated: vertices within 0.008 mm of their f64 projection with the render origin,
+14,518 mm off with the old arithmetic (asserted too, so the case keeps catching it); a box placed into f64 holds its placed
+corners, into f32 it does not; a plate 20 mm in front of a wall is not hidden by the wall's depth, a part 200 mm behind it
+is; an item over the budget whose size over distance rounds up is drawn alone (0 triangles on the old code).
+
+`ccore/test/lab_visible.mjs`, `LAB_GPU=vulkan` (ANGLE, Mesa, Apple M1 Pro), 6 synthetic buildings now with braces, tilted
+instanced beams and risers, placed 2,600 km away (`drive.mjs --georef`): 60 cameras, 0 seen elements missing, 0 pixels
+differ, this camera's pyramid used on 60 of 60, the moving frame's pyramid reused after fast turns on 12 of 12 (none
+stale); triangles submitted far 54.4 → 27.8 M (the seen elements' 0.72 M), close 18.8 → 3.05 M (31,488), inside
+9.90 → 0.40 M (24,884); an open from the links' rows only gives the same picture as an open keeping them whole. The
+same test against the page before VIS2: 9,788 seen elements missing, 566,692 pixels differ. Software: 7 of 7, three
+times while the fast gate ran alongside (load 11 to 17).
+
+The owner's project (a local folder of 17 linked IFC files, 110.5 M triangles; his window 1492 × 790 at device pixel ratio
+2, `drive.mjs` truth frames, proxies off, occlusion on): 0 seen elements missing and 0 pixels differing on 6 cameras
+(close, far and inside, each at two azimuths); before the render origin, the close camera missed 4,365 and its picture
+differed on 237,853 pixels. A close still frame drew 72 M triangles without the test and 7.4 M with it (GPU 35 → 10 ms),
+a far one 110 M and 14 M (52 → 12 ms). "wait idle" after a gesture (default settings): before 83 to over 115 s after a
+zoom; after 0.5 to 2.2 s for each of 8 gestures.
+
+Inputs on the owner's project (his window, 11 gestures: orbit, zooms, clicks, a pan, Escape; `drive.mjs`; median / worst
+ms, `draw_visible` on), the commit of decision 67 against decisions 71 to 73: press 257 / 801 → 195 / 619, Escape 296 → 137,
+wheel 139 / 255 → 95 / 190, drag 10 / 213 → 9 / 173 (off: press 257 / 737 → 140 / 627, Escape 302 → 100). Run to run
+the worst cases move by tens of ms (a repeat: press 255 / 740, wheel 189, drag 195). Over 200 ms still: the press after
+Escape (619–754 ms: Escape's resize, the whole frame of the complete picture after its feedback frame and the pyramid's
+read-back, about 1.1 s with no frame) and the press that starts an orbit (about 250 ms: the first moving frame's 160 ms
+of script). `lab_inputs_links.mjs` (six georeferenced buildings, 2.7 M triangles, a whole frame 380–520 ms under
+SwiftShader): press, Escape, wheel, orbit start, pan start, each answered within 18–96 ms; a click 60 ms after Escape
+answered within 200 ms with the same element; a selection and Escape ask the host nothing that does not depend on the
+selection, and the wheel's pivot comes from the readout (these two fail on the page before).
+
+`lab_open_url` (local SwiftShader, the page's part, navigation start to the opening card): before 89–170 ms, CPU
+throttled 4x 124–147, 6x 157–184, 10x 294.7 ms (fails); after 39–41, 59–73, 78–115, 105.9 ms. The viewer wasm: 638,521
+bytes.
+
+### The tile path (planned, not built: its own tickets)
+
+What the measurements say the page needs next, for links: a project's frame on this path is bound by script, not by the
+GPU: 46,800 batches walked every frame (a moving frame 35 to 80 ms of script for 4 to 8 ms of GPU on the owner's
+project; over a session of 11 gestures the profile gives the frame's own loops 4.0 s, `prefixCount` 1.6 s,
+`boxInFrustum` 1.1 s, the cut's `at` 0.8 s, `drawOutlines` 0.6 s, `budgetCutFast` 0.5 s, `cutEnd` 0.5 s), the first
+moving frame of a gesture 160 ms; every link's whole mesh asked at open (339 MB on the wire), the tab up to 2.4 GB.
+The baked pyramid (amendment 6) holds 8,190 leaves for that project (0.76 GB of leaves, 44 MB of proxies, a 2 MB table).
+Planned as its own tickets, each behind the setting `tiles` (off until measured better on the owner's project):
+
+1. **Tiles drawn** (`gl/tiles.ts` decodes already): each link's table read once (`tiles=toc`), a walk each frame by
+   projected error (`cc_tiles_select`'s rule in TypeScript; measure against asking the host), tiles fetched in batches
+   (`tile=a,b,c`, `&shell=1` then `&shell=2` in priority), decoded in the worker, uploaded per tile in their compact
+   vertices (leaves 21-bit on the link's lattice, proxies 16-bit in the tile's box: new vertex inputs for both renderers),
+   released least recently selected first within `link_gpu_mb`; a tile not there is covered by its nearest uploaded
+   ancestor's proxy (never a hole, never a box). Element state texels and the id buffer per element as today.
+2. **Occlusion per tile**: the depth pyramid tested per tile and per element run; the occluders (`tiles=occ`) drawn first
+   after a camera jump, so the first frame of a new camera is culled too.
+3. **Parity, then the switch**: hide, isolate, colour, pick, section and measure on tiles (their lab tests), the A/B of
+   `drive.mjs --compare` (tiles off / on × occlusion off / on: first picture, complete, frames, inputs per kind,
+   triangles against the measured need, tab memory, GPU bytes, bytes fetched); then whole-link buffers and HLOD cells
+   dropped for links. The open model keeps today's path unless tiles come out simpler. WebGPU follows (its panel row says
+   WebGL2 only until then).
+
 ## What is left
 
 From ticket TILE1 (amendment 6): the page drawing by tiles (VIS1) and a native viewer (NAT2); then `HLOD` dropped (or
-served from the pyramid's levels). The exterior shell at bake time (SHELL1). Edge collapse with locked borders for the
+served from the pyramid's levels). The exterior shell: done as an order, not a filter (amendment 8, SHELL1); left: the renderers' first fetch exterior first (VIS1, NUI2 read `&shell=1` then `&shell=2`). Edge collapse with locked borders for the
 coarse levels (better shape per triangle than clustering; decision 32). A vertex-cache and fetch order at bake
 (meshoptimizer's, C++: not in the core now). Leaf answers without BMG1's edges (`&edges=0`: re-encoded by the host) and
 compressed over HTTP for the web version (deflate saves 91 % of leaves' bytes on the synthetic links; decision 35).
@@ -786,19 +1044,22 @@ Out-of-core indexing for a 5 GB IFC: the indexing job reads its cache in place, 
 
 From ticket VIS1 (amendment 7):
 
-- **`draw_visible` on a real project of links** (first lead): on a local folder of 17 IFC files the culled still frame
-  left out seen elements (decision 47), and the plain frustum test already loses 17 there. The native renderer's truth
-  test on the same folder (tiles and two-pass occlusion) misses none and its `check_tiles` finds every element inside
-  its leaf's box: the cache's boxes are right, the PAGE's own element boxes are the suspect (SIZE3's `preBox`, boxes
-  of turned or instanced copies, long members). Reproduce: `node ccore/tools/drive.mjs --project <the .bimble>
-  --cache-dir <scratch> --size 1492x790 --dpr 2 --settings '{"link_gpu_mb":4096}' --do 'wait ready; wait idle; camera
-  close; js g.noProxies = true; js g.visible = false; truth all ref; js g.visible = true; truth visible; eval
-  g.bench.missing()'`. Under SwiftShader one element (9 pixels) of one inside camera of the synthetic sweep is missed
-  too (not on the GPU): `lab_visible` runs its sweep only with `LAB_GPU=vulkan` and says so.
-- **The fill counts what culling left out**: a slice's budget is spent on items the mask drops (many empty slices on a
-  large project): the budget's cut should count the kept items only.
+- **From ticket VIS2 (amendment 9)**: the press after Escape (619–754 ms on the owner's project): the complete picture
+  after a feedback frame as budgeted slices, the pyramid's read-back never synchronous on the input path, an input
+  pre-empting a whole frame's slices; the press that starts an orbit (the per-batch loops: the tile path). Web session log
+  on Windows. A mirrored copy in the synthetic buildings (the model JSON's placement cannot mirror).
+- **OPEN requirement: the selection change within 200 ms on a CPU 4× slower than the reference** (28 Nov 2026,
+  `ccore/results/inputs.md`): on the real GPU, CPU throttled to 4× the reference machine, the press that selects takes
+  212 ms and Escape 204 ms of the page's own part (6×: 93 and 81 ms; wheel and orbit start 23–42 ms). The gate runs
+  `lab_inputs_links.mjs`'s unthrottled cases and its invariants; the 4× and 6× cases run with `LAB_SLOW=1
+  LAB_GPU=vulkan` and the gate prints the skip with these numbers. Leads: the host's query batch per selection change,
+  the masks for the resized pyramid on the feedback frame, the canvas resize itself (the panel over the canvas instead);
+  the skip is removed when the cases pass 10 of 10 on the real GPU. The same path is the lead for the press after
+  Escape on the owner's project.
+- **`draw_visible` on a real project of links**: done by amendment 9 (VIS2: f32 at georeferenced coordinates, copies'
+  shape offsets; on by default). **The fill counts what culling left out**: done (amendment 9, decision 67).
 
-- **The page drawing by tiles (VIS1's follow-up; amendment 6's contract)**: the walk of each link's tiles by projected error
+- **The page drawing by tiles (VIS1's follow-up; amendment 6's contract)**, planned in amendment 9 ("The tile path"): the walk of each link's tiles by projected error
   replaces the per-batch tests (46,800 batches on Pierre's project); its occluder triangles (real surfaces, up to 64
   a tile) drawn first into the depth pyramid give the first frame of a new camera its culling (today a camera's
   first still frame is drawn whole and the next ones culled); a parent tile is the moving picture (no outlines).

@@ -8,7 +8,8 @@
 // exceeds it without declaring, a gzip-encoded answer, a .ifc.gz), and drives one headless Chromium
 // over raw CDP. Each case reaches the stated state with the stated message:
 //   - #open=samples/frame.ifc (same origin): no question; the first feedback (the `opening` card)
-//     within 200 ms of the navigation's start (lib/input_time.mjs, the page's part asserted); the
+//     within 200 ms of the navigation's start (lib/input_time.mjs, the page's part asserted), also with
+//     the CPU throttled 4x, 6x and 10x (index.html draws the card while the HTML is parsed); the
 //     model is frame.ifc, read-only; identical to the same file dropped on the page (state rev, the
 //     elements' ids, status counts, the mesh's bytes and triangles drawn); no demo model fetched;
 //   - ?view=1#open=samples/frame.ifc: the viewer-only wasm, ccore.wasm not fetched; the bytes a
@@ -264,6 +265,19 @@ async function main() {
   const first = await readTimes(evalJs);
   const v1 = verdict(first, gpu);
   check(`#open=samples/frame.ifc: the opening card from the navigation's start: ${v1.line}`, v1.pageOk && v1.presOk);
+  // the same on a slow machine (GitHub's runner: SwiftShader on 2-4 slow cores measured 217.8 ms before the card was
+  // drawn by index.html's inline script): the CPU throttled 4x, 6x and 10x (Emulation.setCPUThrottlingRate), so the rule cannot
+  // pass only on a fast machine
+  for (const rate of [4, 6, 10]) { // (10x: the code before measured 162-184 ms at 6x, so 10x is the case that fails on it)
+    await S("Emulation.setCPUThrottlingRate", { rate });
+    await S("Network.setCacheDisabled", { cacheDisabled: true }); // (a fresh runner: the bundle fetched and compiled again)
+    try {
+      await go(`${A}/?c=sample#open=samples/frame.ifc`);
+      const v = verdict(await readTimes(evalJs, 20000), gpu);
+      check(`#open=samples/frame.ifc, the CPU throttled ${rate}x: the opening card from the navigation's start: ${v.line}`, v.pageOk && v.presOk);
+      await ready();
+    } finally { await S("Emulation.setCPUThrottlingRate", { rate: 1 }); await S("Network.setCacheDisabled", { cacheDisabled: false }); }
+  }
   check("same origin: no question asked", (await evalJs("window.__seen['shell-openurl-ask'] === undefined")) === true);
   const idLink = await identity();
   check("the link's model is samples/frame.ifc, read-only, 72 elements", idLink.file === "frame.ifc" && idLink.editable === false && idLink.counts.total === 72, JSON.stringify(idLink));

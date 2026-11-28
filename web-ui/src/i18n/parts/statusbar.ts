@@ -17,6 +17,8 @@ export const fr = {
   "status.langFr": "Français",
   "status.langEn": "English",
   "status.linked": "Lié : {name}",
+  "status.linksSimplified": "{n} liens simplifiés : mémoire graphique de {mb} MB atteinte",
+  "status.linksSimplifiedTip": "Ces liens sont dessinés par leurs simplifications. Augmentez « Mémoire graphique des liens » dans Réglages pour les voir en détail.",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "status.hint": "Drag: orbit · Right-drag: pan · Scroll: zoom · Handles: section box",
@@ -36,4 +38,6 @@ export const en: Record<keyof typeof fr, string> = {
   "status.langFr": "Français",
   "status.langEn": "English",
   "status.linked": "Linked: {name}",
+  "status.linksSimplified": "{n} links simplified: {mb} MB GPU budget reached",
+  "status.linksSimplifiedTip": "These links are drawn as their simplifications. Raise “Links' GPU memory” in Settings to see them in detail.",
 };

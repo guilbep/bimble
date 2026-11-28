@@ -23,7 +23,8 @@ void cc_measure_free(cc_measure *m) {
 
 void cc_measure_reset(cc_measure *m) { m->n = 0, m->has_first = 0, m->has_hover = 0; }
 
-/* p of `s` in the frame of origin `org` (f32; the same point when the origins are equal). */
+/* p of `s` in the frame of origin `org` (f32; the same point when the origins are equal: MEAS2, two points of one
+ * linked scene are measured in its own frame, exactly as at the origin). */
 static void in_frame(const cc_msnap *s, const double org[3], float out[3]) {
     for (int k = 0; k < 3; k++)
         out[k] = s->org[k] == org[k] ? s->p[k] : (float)((double)s->p[k] + (s->org[k] - org[k]));
@@ -139,9 +140,18 @@ static int inside(const cc_mview *v, const double p0[3], double eps) {
         double sn = cc_sin(-(double)v->clip_yaw), cs = cc_cos(-(double)v->clip_yaw);
         p[0] = cs * p0[0] - sn * p0[1], p[1] = sn * p0[0] + cs * p0[1];
     }
-    for (int k = 0; k < 3; k++)
-        if (!(p[k] >= (double)v->clip_min[k] - eps && p[k] <= (double)v->clip_max[k] + eps)) return 0;
+    for (int k = 0; k < 3; k++) {
+        double b = v->clip_base ? v->clip_base[k] : 0.0; /* MEAS3: the box's frame */
+        if (!(p[k] - b >= (double)v->clip_min[k] - eps && p[k] - b <= (double)v->clip_max[k] + eps)) return 0;
+    }
     return 1;
+}
+
+/* MEAS2: `inside` for a point of a layer's frame (moved by its offset to the shown scene's, in f64). */
+static int inside_off(const cc_mview *v, const double p[3], const double off[3]) {
+    if (!v->clip_min || !v->clip_max) return 1;
+    double q[3] = {p[0] + off[0], p[1] + off[1], p[2] + off[2]};
+    return inside(v, q, BOX_EPS);
 }
 
 typedef struct {
@@ -150,6 +160,24 @@ typedef struct {
     int has_tol;
     double tol_px;
 } Ray;
+
+/* MEAS2: whether a layer can be hit (its offset finite: a hostile placement is not measured). */
+static int layer_ok(const cc_mlayer *L) {
+    for (int k = 0; k < 3; k++)
+        if (!(L->off[k] - L->off[k] == 0.0)) return 0;
+    return 1;
+}
+
+/* MEAS2: the ray in a layer's own frame (its points as stored: small numbers), moved in f64. */
+static void ray_in(const Ray *r, const cc_mlayer *L, Ray *out) {
+    *out = *r;
+    for (int k = 0; k < 3; k++) out->o[k] = r->o[k] - L->off[k], out->o2[k] = r->o2[k] - L->off[k];
+}
+
+/* MEAS2: the world origin of a layer's frame (a snap's `org`): the shown scene's + the layer's offset, f64. */
+static void frame_org(const cc_mview *v, const cc_mlayer *L, double org[3]) {
+    for (int k = 0; k < 3; k++) org[k] = L->off[k] == 0.0 ? v->org[k] : v->org[k] + L->off[k];
+}
 
 /* Pixels between the point `p` (shown scene coordinates) and the ray, at p's depth; INFINITY when
  * it is behind the eye or beyond `max_depth` (measure.rs `visible`). */
@@ -415,6 +443,7 @@ static int pick(const cc_mview *v, const Ray *r, Arena *a, Arena *keep, Hits *h)
         const cc_mlayer *L = &v->layers[li];
         const cc_scene *sc = L->sc;
         const float(*box)[6] = L->box;
+        if (!layer_ok(L)) continue; /* MEAS2: a placement not finite is not hit */
         if (!box && !v->brute && sc->nelements) { /* no kept boxes: made for this call */
             float(*b)[6] = arena_alloc(keep, sc->nelements * sizeof *b, sizeof(float));
             if (!b || boxes_of(sc, b)) return -1;
@@ -487,7 +516,12 @@ int cc_measure_snap(const cc_mview *v, const double ray[6], const double *ray_to
             memset(out, 0, sizeof *out);
             memcpy(out->org, v->org, sizeof out->org);
             out->kind = CC_MSNAP_FACE, out->has_n = 1;
-            for (int k = 0; k < 3; k++) out->p[k] = (float)(r.o[k] + t * r.d[k]), out->n[k] = (float)v->plane[3 + k];
+            double p[3], c[3] = {0, 0, 0};
+            int far = 0;
+            for (int k = 0; k < 3; k++) p[k] = r.o[k] + t * r.d[k], far |= p[k] - p[k] == 0.0 && !(p[k] >= -1e6 && p[k] <= 1e6);
+            for (int k = 0; far && k < 3; k++) /* MEAS2: beyond 1 km of the origin, the frame moved to the point (1 m steps) */
+                c[k] = (double)(int64_t)(p[k] / 1000.0) * 1000.0, out->org[k] = v->org[k] + c[k];
+            for (int k = 0; k < 3; k++) out->p[k] = (float)(p[k] - c[k]), out->n[k] = (float)v->plane[3 + k];
             rc = 1;
         }
         goto end;
@@ -501,10 +535,13 @@ int cc_measure_snap(const cc_mview *v, const double ray[6], const double *ray_to
      * ray meets within the visible depth (Rust: the element hit only; a column standing on a slab
      * meets it at the same depth, either may be "the" hit). */
     double max_depth = reach(h.t);
+    size_t bl = h.layer; /* MEAS2: the layer of the best corner or edge point (bp is in its frame) */
     for (int pass = 0; !free_ && r.has_tol && pass < 2 && kind == CC_MSNAP_FACE; pass++)
         for (size_t c = 0; c < h.nc; c++) {
             if (!(h.c[c].t <= max_depth)) continue;
             const cc_mlayer *L = &v->layers[h.c[c].layer];
+            Ray rl; /* MEAS2: the candidates in the layer's own frame (f32 points, small), the ray moved in f64 */
+            ray_in(&r, L, &rl);
             cc_mesh m;
             if (cc_scene_world_mesh(L->sc, h.c[c].el, &a, &m)) {
                 rc = -1;
@@ -513,26 +550,32 @@ int cc_measure_snap(const cc_mview *v, const double ray[6], const double *ray_to
             if (v->work) v->work->meshes++;
             if (pass == 0)
                 for (uint32_t i = 0; i < m.nv; i++) {
-                    double p[3] = {(double)(m.pos[i][0] + L->off[0]), (double)(m.pos[i][1] + L->off[1]), (double)(m.pos[i][2] + L->off[2])};
-                    double d = screen_dist(&r, p, max_depth);
-                    if (d <= CC_MEASURE_VERTEX_PX && d < best && inside(v, p, BOX_EPS)) best = d, memcpy(bp, p, sizeof bp), kind = CC_MSNAP_VERTEX;
+                    double p[3] = {m.pos[i][0], m.pos[i][1], m.pos[i][2]};
+                    double d = screen_dist(&rl, p, max_depth);
+                    if (d <= CC_MEASURE_VERTEX_PX && d < best && inside_off(v, p, L->off))
+                        best = d, memcpy(bp, p, sizeof bp), kind = CC_MSNAP_VERTEX, bl = h.c[c].layer;
                 }
             else
                 for (uint32_t i = 0; i < m.ne; i++) {
                     double ea[3], eb[3], p[3];
-                    for (int k = 0; k < 3; k++) ea[k] = (double)(m.edges[i][k] + L->off[k]), eb[k] = (double)(m.edges[i][3 + k] + L->off[k]);
-                    closest_on_segment(ea, eb, r.o, r.d, p);
-                    double d = screen_dist(&r, p, max_depth);
-                    if (d <= CC_MEASURE_EDGE_PX && d < best && inside(v, p, BOX_EPS)) best = d, memcpy(bp, p, sizeof bp), kind = CC_MSNAP_EDGE;
+                    for (int k = 0; k < 3; k++) ea[k] = m.edges[i][k], eb[k] = m.edges[i][3 + k];
+                    closest_on_segment(ea, eb, rl.o, rl.d, p);
+                    double d = screen_dist(&rl, p, max_depth);
+                    if (d <= CC_MEASURE_EDGE_PX && d < best && inside_off(v, p, L->off))
+                        best = d, memcpy(bp, p, sizeof bp), kind = CC_MSNAP_EDGE, bl = h.c[c].layer;
                 }
             arena_reset(&a);
         }
     out->kind = kind;
-    if (kind == CC_MSNAP_FACE) {
-        for (int k = 0; k < 3; k++) out->p[k] = (float)(r.o[k] + h.t * r.d[k]), out->n[k] = (float)h.n[k];
+    if (kind == CC_MSNAP_FACE) { /* MEAS2: in the frame of the layer hit (f32 of small numbers), its origin in f64 */
+        const cc_mlayer *L = &v->layers[h.layer];
+        frame_org(v, L, out->org);
+        for (int k = 0; k < 3; k++) out->p[k] = (float)((r.o[k] - L->off[k]) + h.t * r.d[k]), out->n[k] = (float)h.n[k];
         out->has_n = 1;
-    } else
+    } else {
+        frame_org(v, &v->layers[bl], out->org);
         for (int k = 0; k < 3; k++) out->p[k] = (float)bp[k];
+    }
     rc = 1;
 end:
     arena_free(&a), arena_free(&keep);

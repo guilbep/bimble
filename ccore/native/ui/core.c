@@ -156,7 +156,10 @@ int core_action(App *a, const char *name, const char *body) {
 
 /* The selection, through the core (select: a JSON array of GlobalIds; a link's: {"link","ids"}), and the
  * properties (query element, or element {id, link}: bimble.ts selectLinked, linkedElement). */
+static void select_rest(App *a);
 void core_select(App *a, uint32_t elem1) {
+    a->nmsel = 0;
+    select_rest(a);
     a->selected = 0, a->sel_id[0] = 0, a->sel_link[0] = 0;
     Buf out, body;
     buf_init(&out), buf_init(&body);
@@ -186,6 +189,54 @@ void core_select(App *a, uint32_t elem1) {
     a->dirty = 1;
 }
 
+/* NUI2, Ctrl-click: the selection grows (or loses the element clicked again); the core is told the whole set when every
+ * element is the open model's or one link's (its select takes one link's ids), else the last picked only */
+static void select_rest(App *a) { (void)a; }
+void core_select_add(App *a, uint32_t elem1) {
+    if (elem1 <= NV_ELEM0) return;
+    uint32_t keep = a->selected;
+    int was = keep == elem1;
+    for (int i = 0; i < a->nmsel && !was; i++)
+        if (a->msel[i] == elem1) a->msel[i] = a->msel[--a->nmsel], was = 1;
+    if (was && keep == elem1) { /* the last picked clicked again: the previous one leads */
+        uint32_t next = a->nmsel ? a->msel[--a->nmsel] : 0;
+        uint32_t tmp[256];
+        int n = a->nmsel;
+        memcpy(tmp, a->msel, sizeof tmp);
+        core_select(a, next);
+        memcpy(a->msel, tmp, sizeof tmp), a->nmsel = n;
+    } else if (!was) {
+        uint32_t tmp[256];
+        int n = a->nmsel;
+        memcpy(tmp, a->msel, sizeof tmp);
+        if (keep && n < 256) tmp[n++] = keep;
+        core_select(a, elem1);
+        memcpy(a->msel, tmp, sizeof tmp), a->nmsel = n;
+    }
+    /* the core's set: the ids of the open model, or of one link */
+    char id[23], link[256], first_link[256] = "";
+    int same = 1;
+    Buf body, out;
+    buf_init(&body), buf_init(&out);
+    for (int i = -1; i < a->nmsel; i++) {
+        uint32_t e = i < 0 ? a->selected : a->msel[i];
+        if (!e || !scene_elem(a, e - 1, id, link, sizeof link)) continue;
+        if (i < 0) snprintf(first_link, sizeof first_link, "%s", link);
+        else if (strcmp(link, first_link)) same = 0;
+        buf_puts(&body, body.len ? ",\"" : "\""), buf_puts(&body, id), buf_putc(&body, '"');
+    }
+    if (same && a->selected) {
+        Buf b2;
+        buf_init(&b2);
+        if (first_link[0]) buf_puts(&b2, "{\"link\":"), json_str(&b2, first_link), buf_puts(&b2, ",\"ids\":["), buf_append(&b2, body.p, body.len), buf_puts(&b2, "]}");
+        else buf_putc(&b2, '['), buf_append(&b2, body.p, body.len), buf_putc(&b2, ']');
+        core_call(a, "select", NULL, buf_cstr(&b2), &out);
+        buf_free(&b2);
+    }
+    buf_free(&body), buf_free(&out);
+    a->vis_dirty = 1, a->dirty = 1;
+}
+
 /* ---- the shared data (embedded) ---- */
 static JrVal *load_json(App *a, const char *name) {
     const nui_blob *b = nui_blob_get(name);
@@ -211,8 +262,29 @@ static const char *const NATIVE_STRINGS[][3] = {
     {"native.discard", "Le modèle a des modifications non enregistrées. Les abandonner ?", "The model has unsaved changes. Discard them?"},
     {"native.discardGo", "Abandonner les modifications", "Discard the changes"},
     {"native.optimisations", "Optimisations", "Optimisations"},
+    {"native.shellMode", "Extérieur d'abord (les éléments visibles du dehors chargés et dessinés en premier)", "Exterior first (the elements seen from outside fetched and drawn first)"},
+    {"native.shellMode.priority", "extérieur d'abord", "exterior first"},
+    {"native.shellMode.off", "inactif", "off"},
+    {"native.shellMode.filter", "filtre (expérimental : peut cacher des éléments visibles)", "filter (experimental: can hide visible elements)"},
     {"native.edgesScreen", "Arêtes (à l'écran)", "Edges (screen space)"},
     {"native.cullAlways", "Tri des éléments sur la carte graphique : toujours actif (c'est ainsi que l'application native dessine)", "Culling on the graphics card: always on (how the native app draws)"},
+    {"native.saveReport", "Enregistrer le rapport…", "Save report…"},
+    {"native.savedTo", "Enregistré aussi dans", "Also saved to"},
+    {"native.saveFailed", "Rapport non enregistré :", "Report not saved:"},
+    {"native.sessionLog", "Journal de session local", "Local session log"},
+    {"native.sessionLogText", "Chaque session écrit un journal sur cet ordinateur seulement (versions, carte graphique, tailles de fenêtre, fichiers ouverts et leurs temps, erreurs, une ligne de mesures par seconde, le rapport de performance) : rien ne quitte la machine. Les 20 dernières sessions sont gardées.", "Each session writes a log on this computer only (versions, graphics card, window sizes, files opened and their times, errors, one line of measures a second, the performance report): nothing leaves the machine. The last 20 sessions are kept."},
+    {"native.sessionLogOff", "Pas de journal pour cette session (activé : dès la prochaine).", "No log for this session (turned on: from the next one)."},
+    {"native.openFolder", "Ouvrir le dossier", "Open folder"},
+    {"native.opt.tiles", "Dessiner par tuiles (pyramide des liens)", "Draw by tiles (the links' pyramids)"},
+    {"native.opt.occlusion", "Ne dessiner que ce qui peut se voir (occlusion)", "Draw only what can be seen (occlusion)"},
+    {"native.opt.groups", "… jusqu'aux éléments (par groupes de 8)", "… down to the elements (groups of 8)"},
+    {"native.opt.lod", "Niveaux de détail (au loin, simplifié)", "Levels of detail (simplified far away)"},
+    {"native.opt.cullBack", "Faces arrière des solides fermés non dessinées", "Back faces of closed solids not drawn"},
+    {"native.opt.errorPx", "Écart des niveaux (0 : détail partout)", "Levels' error (0: detail everywhere)"},
+    {"native.opt.stillPx", "Éléments plus petits que (0 : tous)", "Elements smaller than (0: all drawn)"},
+    {"native.dropFolder", "Un dossier déposé est lié au projet ouvert : ouvrez d'abord un projet", "A folder dropped is linked into the open project: open a project first"},
+    {"native.palette", "Commande… (Ctrl+K)", "Command… (Ctrl+K)"},
+    {"native.fit", "Tout afficher", "Fit all"},
     {"native.cube.top", "Dessus", "Top"},
     {"native.cube.bottom", "Dessous", "Bottom"},
     {"native.cube.front", "Avant", "Front"},
@@ -322,6 +394,7 @@ void core_visibility(App *a) {
         free(mark);
     }
     if (a->selected > NV_ELEM0) nv_render_set_state(a->r, a->selected - 1, 1);
+    for (int i = 0; i < a->nmsel; i++) if (a->msel[i] > NV_ELEM0 && a->msel[i] - 1 < total) nv_render_set_state(a->r, a->msel[i] - 1, 1);
     if (core_query(a, "visibility", NULL, &b) == 0) {
         const JrVal *sb = jr_get(b.root, "section_box"), *box = sb ? jr_get(sb, "box") : NULL;
         const JrVal *mn = box && box->type == JR_OBJ ? jr_get(box, "min") : NULL, *mx = box && box->type == JR_OBJ ? jr_get(box, "max") : NULL;
@@ -334,6 +407,7 @@ void core_visibility(App *a) {
         const JrVal *o = sb ? jr_get(sb, "origin_mm") : NULL;
         if (o && o->type == JR_ARR && o->n == 3) for (int i = 0; i < 3; i++) org[i] = o->items[i].num;
         for (int i = 0; on && i < 3; i++) lo[i] += org[i] - a->origin0[i], hi[i] += org[i] - a->origin0[i];
+        memcpy(a->box_org, org, sizeof org);
         if (a->view_name[0] && a->view_clip) nv_render_set_clip(a->r, 1, a->view_lo, a->view_hi); /* a plan or section: its own box */
         else nv_render_set_clip(a->r, on, lo, hi);
         a->box_on = on;
@@ -355,7 +429,8 @@ static int key_name_is(const char *name, SDL_Keycode k) {
 int core_key(App *a, SDL_Keycode k, SDL_Keymod mod, int typing) {
     const JrVal *K = a->keys;
     int ctrl = (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0, shift = (mod & SDL_KMOD_SHIFT) != 0;
-    if (ctrl && k == 'o' && !typing) { fs_open(a, NULL, "open"); a->dialog = DLG_OPEN; return 1; } /* the File menu's own keys */
+    if (ctrl && k == 'o' && !typing) { desk_dialog(a, "open"); return 1; } /* the File menu's own keys */
+    if (ctrl && k == 'k' && !typing) { palette_toggle(a); return 1; } /* NUI3: the command palette */
     if (ctrl && k == 's' && !typing && a->screen_kind == SCR_MAIN) { tool_run_action(a, "save"); return 1; }
     for (size_t i = 0; K && K->type == JR_ARR && i < K->n; i++) {
         const JrVal *r = &K->items[i];

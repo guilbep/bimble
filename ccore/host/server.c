@@ -21,6 +21,12 @@
 #include "mesh.h"
 #include "session.h"
 #include "strtod.h" /* TILE1: tiles_frame */
+#include "settings.h" /* VIS2: session_log */
+#ifndef _WIN32
+#include <dirent.h> /* VIS2: the web session log's folders */
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #define MAX_BODY (1u << 20)        /* serve.rs:14 */
 #define MAX_HEADER (16u << 10)     /* serve.rs:15 */
@@ -219,6 +225,7 @@ typedef struct {
     const char *p;
     size_t n;
 } Str;
+static void slog_route(Conn *c, const char *m, Str query, const char *body, size_t n, int keep); /* VIS2 */
 
 typedef struct {
     Str method, target, origin, host;
@@ -521,7 +528,7 @@ static void handle_one(Conn *c, int *again) {
     int is_options = str_eq(h.method, "OPTIONS");
     /* The built lab (host.h `web`): a GET of a path that is not the API needs no token. */
     int is_static = cfg->web && str_eq(h.method, "GET") && !str_eq(path, "/change") && !str_eq(path, "/frame") &&
-                    !str_eq(path, "/mesh");
+                    !str_eq(path, "/mesh") && !str_eq(path, "/session_log"); /* (VIS2: the log asks the token) */
     if (!origin_ok || !host_ok || (!token_ok && !is_options && !is_static)) {
         respond_s(c, 403, "forbidden", 0);
         return;
@@ -624,6 +631,14 @@ static void handle_one(Conn *c, int *again) {
             Buf tb;
             buf_init(&tb);
             if (tiles && percent_decode(tq, &tb) != 1) buf_clear(&tb);
+            Str shq; /* SHELL1: &tile=a,b,c&shell=1 the first fetch (exterior first), 2 the rest, filter the experimental outside walk's */
+            if (tiles && tb.len && tb.p[0] >= '0' && tb.p[0] <= '9' && query_param(query, "shell", &shq) &&
+                (str_eq(shq, "1") || str_eq(shq, "2") || str_eq(shq, "filter"))) {
+                Buf t2;
+                buf_init(&t2);
+                buf_puts(&t2, str_eq(shq, "1") ? "first:" : str_eq(shq, "2") ? "rest:" : "filter:"), buf_append(&t2, tb.p, tb.len);
+                buf_free(&tb), tb = t2;
+            }
             int st = tiles  ? cc_link_tiles(cfg->session, budget, np, nn, has_key, key, tb.p ? tb.p : "", tb.len, &mp, &mn)
                      : rows ? cc_link_rows_answer(cfg->session, budget, np, nn, has_key, key, &mp, &mn)
                             : cc_link_mesh(cfg->session, budget, np, nn, has_key, key, &mp, &mn);
@@ -652,6 +667,12 @@ static void handle_one(Conn *c, int *again) {
                 q.leaf_bytes = query_param(query, "leaf_bytes", &x) && str_eq(x, "1");
                 q.occlusion = query_param(query, "occ", &x) && str_eq(x, "1");
                 q.lod = !(query_param(query, "lod", &x) && str_eq(x, "0"));
+                if (query_param(query, "shell", &x)) q.shell = str_eq(x, "priority") ? 3 : str_eq(x, "filter") ? 2 : 0; /* SHELL1 */
+                else q.shell = 3; /* the renderers' default */
+                q.shell_margin = 2000;
+                if (query_param(query, "margin", &x)) ok &= parse_nums(x, &q.shell_margin, 1);
+                q.truth = query_param(query, "truth", &x) && str_eq(x, "1");
+                q.xshell = !(query_param(query, "xshell", &x) && str_eq(x, "0"));
                 double th = fov * 3.141592653589793 / 360.0; /* tan by its series: no libm here */
                 q.tan_half = th + th * th * th / 3 + 2 * th * th * th * th * th / 15 + 17 * th * th * th * th * th * th * th / 315;
                 Buf fb;
@@ -729,6 +750,8 @@ static void handle_one(Conn *c, int *again) {
         respond(c, st == CC_OK ? 200 : st == CC_ERR ? 400 : 500, TEXT, out.p ? out.p : "", out.len, keep);
         buf_free(&name), buf_free(&out);
         /* ---- end FS1 ---- */
+    } else if ((!strcmp(m, "POST") || !strcmp(m, "GET")) && str_eq(path, "/session_log")) { /* VIS2 */
+        slog_route(c, m, query, body.p ? body.p : "", body.len, keep);
     } else if (!strcmp(m, "POST")) {
         route_post(c, path, body.p ? body.p : "", body.len, keep);
     } else {
@@ -738,6 +761,114 @@ static void handle_one(Conn *c, int *again) {
     buf_free(&tgt);
     *again = 1;
 }
+
+/* ---- VIS2: the web session log (the owner: "so that when I try the app you have observability"). With this host, the
+ * page (web-ui/src/sessionlog.ts) posts its start, errors, a row of frame and input statistics a second, slow inputs and
+ * its Performance report; they are written under $XDG_STATE_HOME/bimble/web-sessions/<UTC>-<pid>/ (else
+ * ~/.local/state/...), the native app's session folder's shape (native/ui/slog.c): session.log, frames.csv, inputs.csv,
+ * report.txt. Local only, the token and Origin rules of every route; the setting session_log (on by default; off: 204,
+ * nothing written); a session's files at most 20 MB together; the last 20 sessions kept. Not on Windows yet. ---- */
+#define SLOG_KEEP 20
+#define SLOG_CAP (20u << 20)
+static char slog_dir[1024];
+static int slog_made; /* 0 not yet, 1 made, -1 could not be made */
+static size_t slog_bytes;
+
+#ifndef _WIN32
+static int slog_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+/* Removes the oldest session folders under `base` until at most `keep` remain (names start with the UTC time). */
+static void slog_prune(const char *base, int keep) {
+    DIR *d = opendir(base);
+    if (!d) return;
+    char *names[256];
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) && n < 256)
+        if (e->d_name[0] >= '0' && e->d_name[0] <= '9' && strlen(e->d_name) >= 16) names[n++] = strdup(e->d_name);
+    closedir(d);
+    qsort(names, (size_t)n, sizeof *names, slog_cmp);
+    for (int i = 0; i < n; i++) {
+        if (names[i] && i < n - keep) {
+            char p[1300], f[1600];
+            snprintf(p, sizeof p, "%s/%s", base, names[i]);
+            DIR *sd = opendir(p);
+            if (sd) {
+                while ((e = readdir(sd)))
+                    if (e->d_name[0] != '.') snprintf(f, sizeof f, "%s/%s", p, e->d_name), unlink(f);
+                closedir(sd);
+            }
+            rmdir(p);
+        }
+        free(names[i]);
+    }
+}
+#endif
+
+/* This host's session folder, made at the first use: 0, or -1 (no HOME, not writable, Windows). */
+static int slog_open(void) {
+    if (slog_made) return slog_made > 0 ? 0 : -1;
+    slog_made = -1;
+#ifndef _WIN32
+    char base[900];
+    const char *x = getenv("XDG_STATE_HOME"), *h = getenv("HOME");
+    if (x && *x) snprintf(base, sizeof base, "%s/bimble/web-sessions", x);
+    else if (h && *h) snprintf(base, sizeof base, "%s/.local/state/bimble/web-sessions", h);
+    else return -1;
+    char d[900];
+    snprintf(d, sizeof d, "%s", base);
+    for (char *q = d + 1; *q; q++)
+        if (*q == '/') *q = 0, mkdir(d, 0700), *q = '/';
+    mkdir(d, 0700);
+    slog_prune(base, SLOG_KEEP - 1);
+    time_t now = time(NULL);
+    struct tm t;
+    if (!gmtime_r(&now, &t)) return -1;
+    snprintf(slog_dir, sizeof slog_dir, "%s/%04d%02d%02dT%02d%02d%02dZ-%ld", base, t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour,
+             t.tm_min, t.tm_sec, (long)getpid());
+    if (mkdir(slog_dir, 0700) && errno != EEXIST) return -1;
+    slog_made = 1;
+    return 0;
+#else
+    return -1;
+#endif
+}
+
+static void slog_route(Conn *c, const char *m, Str query, const char *body, size_t n, int keep) {
+    if (!cc_settings_session_log(cfg->session) || slog_open()) { /* off (or no folder): nothing written */
+        if (!strcmp(m, "GET")) respond(c, 200, "application/json", "{\"on\":false,\"dir\":null}", 23, keep);
+        else respond_s(c, 204, "", keep);
+        return;
+    }
+    if (!strcmp(m, "GET")) {
+        Buf o;
+        buf_init(&o);
+        JsonW w;
+        jw_init(&w, &o, 0);
+        jw_obj_begin(&w), jw_key(&w, "on"), jw_bool(&w, 1), jw_key(&w, "dir"), jw_str(&w, slog_dir), jw_obj_end(&w);
+        if (jw_finish(&w) != JW_OK || o.oom) respond_s(c, 500, "out of memory", keep);
+        else respond(c, 200, "application/json", o.p, o.len, keep);
+        buf_free(&o);
+        return;
+    }
+    static const char *const FILES[] = {"session.log", "frames.csv", "inputs.csv", "report.txt"};
+    Str fv, mv;
+    int k = -1;
+    if (query_param(query, "file", &fv))
+        for (int i = 0; i < 4; i++)
+            if (str_eq(fv, FILES[i])) k = i;
+    if (k < 0) { respond_s(c, 400, "session_log: ?file=session.log|frames.csv|inputs.csv|report.txt", keep); return; }
+    int replace = query_param(query, "mode", &mv) && str_eq(mv, "replace");
+    if (slog_bytes + n > SLOG_CAP) { respond_s(c, 413, "session_log: this session's 20 MB are written", keep); return; }
+    char p[1100];
+    snprintf(p, sizeof p, "%s/%s", slog_dir, FILES[k]);
+    FILE *f = fopen(p, replace ? "wb" : "ab");
+    if (!f) { respond_s(c, 500, "session_log: cannot write", keep); return; }
+    size_t wr = n ? fwrite(body, 1, n, f) : 0;
+    fclose(f);
+    slog_bytes += wr;
+    respond_s(c, wr == n ? 200 : 500, wr == n ? "" : "session_log: short write", keep);
+}
+/* ---- end VIS2 ---- */
 
 /* ---- FS1: the head read is a POST /stage that may send FS_STAGE_MAX bytes: the token, the Host
  * and the Origin as handle_one checks them ---- */

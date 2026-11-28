@@ -16,6 +16,7 @@
 #include "json_w.h"
 #include "mesh.h"
 #include "session.h"
+#include "xshell.h" /* SHELL1 */
 #include "concrete.h" /* CONC1 */
 #include "links.h"
 #include "ifc_psets.h"
@@ -58,6 +59,7 @@ void cc_session_free(cc_session *s) {
     buf_free(&s->mesh);
     cc_mesh_proxies_free(s); /* 3D2 */
     buf_free(&s->view_tiles); /* TILE1 */
+    cc_xshell_free(s);        /* SHELL1 */
     buf_free(&s->link_prx_out); /* LNK3D */
     buf_free(&s->link_mesh_out); /* SIZE2 */
     cc_paper_cache_free(s);

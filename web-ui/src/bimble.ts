@@ -1,5 +1,5 @@
 // The one typed client of the wasm viewer (ADR 0048). Components never touch the wasm directly.
-import { shallowRef } from "vue";
+import { computed, shallowRef } from "vue";
 import { applyLook } from "./shell/theme"; // SET1
 import { warm2d } from "./warm"; // FIRST1
 import { QueryCache, cachedClient } from "./querycache"; // SMALL1
@@ -248,6 +248,10 @@ interface Wasm {
 }
 
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
+/** VIS2: the model's rev alone, as a computed: a component that reads `state.value.rev` re-runs on every state change (a
+ *  click's selection included, which does not move rev) and asked the host again, synchronously, each time; this one
+ *  changes only with rev. */
+export const stateRev = computed(() => state.value.rev);
 /** Set when the viewer could not start. */
 export const startError = shallowRef<string | null>(null);
 // ---- PERF2: the start's open, step by step (ccore.ts OpenSteps), shown over the viewport until its first frame ----
@@ -646,6 +650,8 @@ export async function start(): Promise<void> {
     } else if (native) {
       // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
       w = nativeClient(native.port, native.token);
+      // VIS2: the web session log (sessionlog.ts): with a host only, after the start (nothing in the pure web build)
+      setTimeout(() => { void import("./sessionlog").then((m) => m.startSessionLog(`http://127.0.0.1:${native.port}`, native.token)).catch(() => undefined); }, 0);
       // `&gl=1`: draw the host's /mesh with WebGL2 (the C host, spec §2) instead of /frame.
       viewportDirty = url.searchParams.get("gl") === "1"
         ? (await import("./glviewport")).glViewport(`http://127.0.0.1:${native.port}`, native.token)
@@ -1010,8 +1016,13 @@ export interface SettingsValues {
   link_max_deg?: number;
   /** GPU2: `bimble-ccore open` starts a Chromium-family browser in an app window with the WebGPU flags (native host only). */
   open_app?: boolean;
+  /** SHELL1 (ADR 0078 amendment 8): exterior-first fetch and draw order (not Rust's; absent from an older core: priority);
+   *  "filter" is experimental (can hide visible elements). */
+  shell_mode?: "off" | "priority" | "filter";
   /** VIS1 (ADR 0078 amendment 7): "Draw only what can be seen" (not Rust's; absent from an older core: off). */
   draw_visible?: boolean;
+  /** VIS2: the web session log with the native host (ccore/host/server.c /session_log); true by default. */
+  session_log?: boolean;
   /** VIS1: the 3D view's edges, back faces culled, the still frame's pixel cut, the refill offscreen (not Rust's). */
   edge_mode?: "screen" | "lines" | "none"; cull_back?: boolean; still_px?: number; refill_offscreen?: boolean;
 }

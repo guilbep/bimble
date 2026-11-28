@@ -6,6 +6,7 @@ export const capability = "sheets", editable = true; // FAKE1: the C core keeps 
 </script>
 
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 // D3 Sheets (wireframes v01 SheetLayout.html, `.vp` with the paper). Two sources, the first that answers:
 //  - `sheet_layout` (the C core, ticket SH1): the paper drawn here, white at its proportion, each placed view as a
 //    labelled outline (dashed while its box is an estimate). Drag an outline: `sheet_move`.
@@ -19,13 +20,13 @@ import { actions, query, sheetLayout, sheetMove, state, type PlacedLayout, type 
 import { t } from "../i18n";
 
 const layout = computed<SheetLayout | { error: string } | null>(() => {
-  void state.value.rev;
+  void stateRev.value;
   if (!currentSheet.value) return null;
   try { return sheetLayout(currentSheet.value.id); } catch (e) { return { error: (e as Error).message }; }
 });
 /** The sheet's drawing (Rust's, or the C core's since D5), asked again at each rev. */
 const svg = computed<{ src: string } | { error: string } | null>(() => {
-  void state.value.rev;
+  void stateRev.value;
   void actions.value; // KEY1: a plan annotation toggle (session state, no rev) redraws it; the C core's cache answers the rest
   if (!currentSheet.value) return null;
   try {

@@ -69,6 +69,7 @@ static void open_web_lab(App *a) {
 
 /* An action of the ribbon, a key, the File menu or the right-click menu. */
 void tool_run_action(App *a, const char *action) {
+    slog("action %s", action ? action : "(none)"); /* every action in the session log (the owner's sessions read without asking) */
     if (!action) return;
     Buf o;
     buf_init(&o);
@@ -80,13 +81,13 @@ void tool_run_action(App *a, const char *action) {
         int st = core_call(a, action, NULL, "", &o);
         if (st != CC_OK) snprintf(a->notice, sizeof a->notice, "%.*s", (int)(o.len < 300 ? o.len : 300), o.p ? o.p : ""), a->notice_t = app_now();
     } else if (!strcmp(action, "new")) app_new(a);
-    else if (!strcmp(action, "open")) fs_open(a, NULL, "open"), a->dialog = DLG_OPEN;
-    else if (!strcmp(action, "link_model")) fs_open(a, NULL, "link_model"), a->dialog = DLG_LINK;
-    else if (!strcmp(action, "link_folder")) fs_open(a, NULL, "link_folder"), a->dialog = DLG_LINK;
+    else if (!strcmp(action, "open")) desk_dialog(a, "open"); /* NUI3: the system's dialog (the portal), else the app's */
+    else if (!strcmp(action, "link_model")) desk_dialog(a, "link_model");
+    else if (!strcmp(action, "link_folder")) desk_dialog(a, "link_folder");
     else if (!strcmp(action, "manage_links")) a->links_panel = !a->links_panel;
     else if (!strcmp(action, "settings")) core_query(a, "settings", NULL, &a->settings), a->dialog = DLG_SETTINGS;
     else if (!strcmp(action, "save")) {
-        if (core_action(a, "save", NULL) != CC_OK && strstr(a->notice, "save_as")) fs_open(a, NULL, "save_as"), a->dialog = DLG_SAVEAS, a->notice[0] = 0;
+        if (core_action(a, "save", NULL) != CC_OK && strstr(a->notice, "save_as")) desk_dialog(a, "save_as"), a->notice[0] = 0;
     } else if (!strcmp(action, "orthographic")) {
         core_action(a, action, NULL);
         core_refresh(a);
@@ -187,7 +188,7 @@ static void file_menu(App *a) {
     if (menu_row(a, T(a, "filemenu.open"), "Ctrl O", 1, 1)) tool_run_action(a, "open"), a->file_menu = 0;
     menu_row(a, T(a, "filemenu.importIfc"), NULL, 1, 0);
     if (menu_row(a, T(a, "filemenu.save"), "Ctrl S", loaded && jb(a->state.root, "editable"), 1)) tool_run_action(a, "save"), a->file_menu = 0;
-    if (menu_row(a, T(a, "filemenu.saveAs"), NULL, loaded && jb(a->state.root, "editable"), 1)) fs_open(a, NULL, "save_as"), a->dialog = DLG_SAVEAS, a->file_menu = 0;
+    if (menu_row(a, T(a, "filemenu.saveAs"), NULL, loaded && jb(a->state.root, "editable"), 1)) desk_dialog(a, "save_as"), a->file_menu = 0;
     if (menu_row(a, T(a, "filemenu.close"), NULL, loaded, 1)) app_close(a), a->file_menu = 0;
     igSeparator();
     igTextColored(col4(C_STONE), "%s", T(a, "nav.links"));
@@ -310,6 +311,33 @@ void shell_status(App *a) {
     const char *hint = a->measure_on ? T(a, "action.measure") : a->cam.ortho ? T(a, "status.hintPlan") : T(a, "status.hint");
     if (a->sel_link[0] && a->selected) hint = Tf(a, buf, sizeof buf, "status.linked", "{name}", a->sel_link);
     if (a->notice[0] && app_now() - a->notice_t < 6000) hint = a->notice;
+    { /* NUI2: links held simplified by the GPU budget, said, with one click to raise it (the owner looked at coarse
+       * stand-ins for 7 links and nothing told him) */
+        int held = 0;
+        for (int i = 0; i < a->nlinks; i++) held += a->links_s[i].detail_state == 4;
+        int tfull = nv_render_get_stats(a->r).budget_full;
+        if ((held || tfull) && a->gpu_budget && !(a->notice[0] && app_now() - a->notice_t < 6000)) {
+            static char bm[300];
+            unsigned mb = (unsigned)(a->gpu_budget >> 20), up = mb * 2 > 65535 ? 65535 : mb * 2;
+            if (held) snprintf(bm, sizeof bm, a->lang_en ? "%d links simplified: GPU budget %u MB reached - click to raise it to %u MB" : "%d liens simplifiés : budget graphique de %u Mo atteint - cliquer pour le porter à %u Mo", held, mb, up);
+            else snprintf(bm, sizeof bm, a->lang_en ? "Far parts simplified: GPU budget %u MB reached - click to raise it to %u MB" : "Parties lointaines simplifiées : budget graphique de %u Mo atteint - cliquer pour le porter à %u Mo", mb, up);
+            hint = bm;
+            ImVec2 hs = igCalcTextSize(bm, NULL, false, -1);
+            igSetCursorScreenPos(V2(12 * s, y + 4 * s));
+            if (igInvisibleButton("budget", V2(hs.x * s + 8, 24 * s), 0)) {
+                char q[16];
+                snprintf(q, sizeof q, "%u", up);
+                char b2[64];
+                snprintf(b2, sizeof b2, "{\"link_gpu_mb\":%s}", q);
+                core_action(a, "set_settings", b2);
+                core_query(a, "settings", NULL, &a->settings);
+                nset_set("link_gpu_mb", q, 0);
+                optimisations_apply(a);
+                for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].detail_state == 4) a->links_s[i].detail_state = 0;
+                slog("GPU budget raised to %s MB from the status bar", q);
+            }
+        }
+    }
     ImDrawList_AddText_FontPtr(dl, a->f_text, 13 * s, V2(12 * s, y + 8 * s), C_INK, hint, NULL, 0, NULL);
     /* the counts (StatusBar.vue), and the native frame's own numbers */
     nv_render_stats st = nv_render_get_stats(a->r);

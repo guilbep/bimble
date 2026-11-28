@@ -7,6 +7,30 @@
 </head>
 <body>
   <div id="app"></div>
+  <script>
+    // URL1 (ADR 0074, ADR 0086): a link in the address (#open= or ?open=) shows its opening card while the HTML is parsed,
+    // not after the app's bundle has loaded and run (on a slow machine that was over 200 ms after the navigation's start).
+    // Plain DOM, styled inline (the stylesheet may not be there yet), inside #app: the app's mount replaces it with its own
+    // card (ShellNotice, the same words: openurl.opening) before the next paint. The address is untrusted: text only.
+    (() => {
+      try {
+        const raw = new URLSearchParams(location.hash.slice(1)).get("open") ?? new URLSearchParams(location.search).get("open");
+        if (!raw) return;
+        let host;
+        try { host = new URL(raw.trim(), document.baseURI).host || raw.slice(0, 80); } catch { host = raw.slice(0, 80); }
+        let fr = false;
+        try { const l = localStorage.getItem("bimble.lang"); fr = l ? l === "fr" : navigator.language.toLowerCase().startsWith("fr"); } catch { fr = navigator.language.toLowerCase().startsWith("fr"); }
+        const back = document.createElement("div"), card = document.createElement("div"), p = document.createElement("p");
+        back.style.cssText = "position:fixed;inset:0;z-index:90;display:grid;place-items:center;background:rgba(20,20,20,0.3)";
+        card.style.cssText = "max-width:480px;padding:24px;border-radius:16px;background:#F5F2EB;color:#141414;font:14px 'Source Sans 3',system-ui,sans-serif;overflow-wrap:anywhere";
+        card.setAttribute("role", "status"), card.dataset.bb = "shell-opening", card.dataset.static = "1";
+        p.style.margin = "0";
+        p.textContent = fr ? `Ouverture d'un modèle depuis ${host}…` : `Opening a model from ${host}…`;
+        card.appendChild(p), back.appendChild(card);
+        document.getElementById("app").appendChild(back);
+      } catch { /* the app shows its own card */ }
+    })();
+  </script>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

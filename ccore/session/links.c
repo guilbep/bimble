@@ -1634,6 +1634,8 @@ static int add_refused(cc_session *s, const char *path, const char *why) {
     if (add_missing(s, path, 1)) return -1;
     cc_link *k = &s->links[s->nlinks - 1];
     k->state = CC_LS_REFUSED;
+    k->auto_retried = 1; /* VIS2: refused for its place (outside the roots), not for memory: never queued again by the
+                          * memory retry (SIZE2/SIZE3 F), which converted it 2 s later: the row became "ready" */
     k->msg = dup_z(why);
     return 0;
 }

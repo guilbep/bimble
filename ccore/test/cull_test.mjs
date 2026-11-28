@@ -16,7 +16,18 @@
 //   (GET /mesh?proxies=N: 202 until built, then 200 with BPRX), parsed: every element in one leaf, a
 //   cell's leaves hold its children's; from far away the proxies stand for every leaf, at 0 px for none;
 //   a hidden element keeps every cell above it from standing; stand-ins never cover a leaf twice.
-// Fails on the code before 3D1: web-ui/src/gl/cull.ts did not exist (3D2: gl/proxies.ts, /mesh?proxies).
+// - VIS2: budgetCutFast keeps a batch's size histograms for moving frames and still frames (two keys): alternating them
+//   builds none again (one entry flipped: 46,800 histograms at each motion start, 170 ms on a real project).
+// - VIS2: an item larger than the budget is drawn alone even when its size over its distance, times the distance,
+//   rounds above its size (budgetCut, budgetCutFast: the fill's slices drew 0 triangles forever on a real project).
+// - VIS2 (the render origin, web-ui/src/gl/origin.ts): a link placed 2,600 km from the scene's origin (georeferenced
+//   links in an empty project), a long beam turned 30 degrees and a thin plate 20 mm in front of a wall, seen from 3 m:
+//   the GPU's f32 arithmetic emulated (placement, then u_mvp) puts every vertex within 1 mm of its f64 projection with
+//   relMvp and the render origin (the old arithmetic, f32 matrix and coordinates: hundreds of mm off, checked too so
+//   the case stays one that catches it); element boxes placed into f64 hold the placed vertices (f32: they do not);
+//   the plate is not hidden behind the wall's depth as the GPU draws it (boxHidden, gl/hiz.ts).
+// Fails on the code before 3D1: web-ui/src/gl/cull.ts did not exist (3D2: gl/proxies.ts, /mesh?proxies; VIS2:
+// gl/origin.ts, and xfBox wrote f32 boxes only).
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +38,102 @@ const here = dirname(fileURLToPath(import.meta.url));
 const C = await import(pathToFileURL(join(here, "../../web-ui/src/gl/cull.ts")).href);
 let passed = 0, failed = 0;
 const check = (what, ok, more = "") => { if (ok) passed++; else failed++; console.log(`${ok ? "ok  " : "FAIL"} ${what} ${more}`); };
+
+// ---- VIS2: georeferenced links, f32 on the GPU, f64 on the CPU ----
+{
+  const O = await import(pathToFileURL(join(here, "../../web-ui/src/gl/origin.ts")).href);
+  const H = await import(pathToFileURL(join(here, "../../web-ui/src/gl/hiz.ts")).href);
+  const f = Math.fround;
+  const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const nrm = (a) => { const l = Math.hypot(...a); return a.map((v) => v / l); };
+  const mul4 = (a, b) => { const o = new Float64Array(16); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let x = 0; for (let k = 0; k < 4; k++) x += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = x; } return o; };
+  const look = (e, t) => { const fw = nrm(sub3(t, e)), sd = nrm(cross3(fw, [0, 0, 1])), up = cross3(sd, fw); return new Float64Array([sd[0], up[0], -fw[0], 0, sd[1], up[1], -fw[1], 0, sd[2], up[2], -fw[2], 0, -dot3(sd, e), -dot3(up, e), dot3(fw, e), 1]); };
+  const n = 100, far = 200000, persp = (() => { const t = 1 / Math.tan(Math.PI / 6), nf = 1 / (n - far); return new Float64Array([t / 1.6, 0, 0, 0, 0, t, 0, 0, 0, 0, (far + n) * nf, -1, 0, 0, 2 * far * n * nf, 0]); })();
+  // the link's placement (synthetic: 2,600 km east, 1,200 km north, 450 m up) and the camera 3 m from the wall
+  const t = [2600000123.4, 1200000456.7, 450000], xf = { c: Math.cos(0.3), s: Math.sin(0.3), t };
+  const placed = (p) => [xf.c * p[0] - xf.s * p[1] + t[0], xf.s * p[0] + xf.c * p[1] + t[1], p[2] + t[2]];
+  const target = placed([10000, 0, 1500]), eye = placed([10000, -3000, 1700]);
+  const mvp = mul4(persp, look(eye, target));
+  const ndc = (m, p) => { const c = [0, 1, 2, 3].map((r) => m[r] * p[0] + m[4 + r] * p[1] + m[8 + r] * p[2] + m[12 + r]); return [c[0] / c[3], c[1] / c[3], c[2] / c[3], c[3]]; };
+  const ndc32 = (m, p) => { const c = [0, 1, 2, 3].map((r) => f(f(f(f(m[r] * p[0]) + f(m[4 + r] * p[1])) + f(m[8 + r] * p[2])) + m[12 + r])); return [c[0] / c[3], c[1] / c[3], c[2] / c[3], c[3]]; };
+  // the shader: p = R p_local + (t - ro) in f32 (u_m rows), then u_mvp p (f32); the old one: + t, the f32 matrix of the scene frame
+  const gpuNew = (pl, ro) => { const tr = [f(t[0] - ro[0]), f(t[1] - ro[1]), f(t[2] - ro[2])], c = f(xf.c), s = f(xf.s); return ndc32(O.relMvp(mvp, ro), [f(f(f(c * pl[0]) - f(s * pl[1])) + tr[0]), f(f(f(s * pl[0]) + f(c * pl[1])) + tr[1]), f(pl[2] + tr[2])]); };
+  const gpuOld = (pl) => { const c = f(xf.c), s = f(xf.s); return ndc32(Float32Array.from(mvp), [f(f(f(c * pl[0]) - f(s * pl[1])) + f(t[0])), f(f(f(s * pl[0]) + f(c * pl[1])) + f(t[1])), f(pl[2] + f(t[2]))]); };
+  const depthOf = (zn) => (2 * far * n) / (far + n - zn * (far - n)); // NDC z back to the distance along the view (mm)
+  const ro = O.renderOrigin([(eye[0] + target[0]) / 2, (eye[1] + target[1]) / 2, (eye[2] + target[2]) / 2]);
+  check("VIS2: the render origin of a scene 2,600 km away is near it (1 m grid), 0 for a scene near its origin",
+    Math.abs(ro[0] - target[0]) < 5000 && ro[0] % 1000 === 0 && O.renderOrigin([5e5, -2e5, 1e4]).every((v) => v === 0));
+  // a long beam (12 m, turned 30 degrees about z in the link, 45 degrees up) and points across the wall
+  const pts = [];
+  for (let i = 0; i <= 12; i++) pts.push([9000 + 1000 * i * Math.cos(Math.PI / 6), 1000 * i * Math.sin(Math.PI / 6) * 0.1, 800 + 50 * i]);
+  for (let i = 0; i < 9; i++) pts.push([8000 + 500 * i, 0, 1000 + 120 * i]);
+  let errNew = 0, errOld = 0;
+  for (const pl of pts) {
+    const exact = ndc(mvp, placed(pl)), a = gpuNew(pl, ro), b = gpuOld(pl);
+    const mmPerNdc = exact[3] * Math.tan(Math.PI / 6); // NDC y of 1 spans this many mm at the point's depth
+    const e1 = Math.max(Math.abs(a[0] - exact[0]) * mmPerNdc * 1.6, Math.abs(a[1] - exact[1]) * mmPerNdc, Math.abs(depthOf(a[2]) - depthOf(exact[2])));
+    const e2 = Math.max(Math.abs(b[0] - exact[0]) * mmPerNdc * 1.6, Math.abs(b[1] - exact[1]) * mmPerNdc, Math.abs(depthOf(b[2]) - depthOf(exact[2])));
+    errNew = Math.max(errNew, e1), errOld = Math.max(errOld, e2);
+  }
+  check(`VIS2: vertices 2,600 km from the origin drawn within 1 mm of their f64 projection with the render origin (${errNew.toFixed(3)} mm)`, errNew < 1);
+  check(`VIS2: (the case catches the old arithmetic: f32 matrix and coordinates put them ${errOld.toFixed(0)} mm off)`, errOld > 50);
+  // element boxes: a placed box in f64 holds the placed vertices; rounded to f32 it does not
+  const lb = new Float32Array([9000, -50, 790, 19400, 650, 1460]);
+  const b64 = new Float64Array(6), b32 = new Float32Array(6);
+  C.xfBox(xf, lb, 0, b64, 0), C.xfBox(xf, lb, 0, b32, 0);
+  const corners = [0, 1, 2, 3].map((k) => placed([k & 1 ? lb[3] : lb[0], k & 2 ? lb[4] : lb[1], lb[2]]));
+  const holds = (b) => corners.every((p) => p[0] >= b[0] && p[0] <= b[3] && p[1] >= b[1] && p[1] <= b[4]);
+  check("VIS2: a link's element box placed into f64 holds its placed corners (into f32: it does not)", holds(b64) && !holds(b32));
+  // a thin plate 20 mm in front of a wall, seen through the wall's depth as the GPU draws it: not hidden
+  const wall = [[8000, 0, 600], [14000, 0, 600], [8000, 0, 2600], [14000, 0, 2600]].map((p) => gpuNew(p, ro));
+  const wd = Math.min(...wall.map((q) => (q[2] + 1) / 2));
+  const W = 64, levels = [new Float32Array(W * W).fill(wd)];
+  for (let w = W; w > 1; w /= 2) levels.push(new Float32Array((w / 2) * (w / 2)).fill(wd));
+  const pyr = { key: "", serial: 1, complete: true, w: W, h: W, cw: 4 * W, ch: 4 * W, mvp, levels, lw: levels.map((_, i) => W >> i), lh: levels.map((_, i) => W >> i) };
+  const plate = new Float32Array([10000, -25, 1200, 10400, -20, 1600]), pb = new Float64Array(6);
+  C.xfBox(xf, plate, 0, pb, 0);
+  const behind = new Float32Array([10000, 200, 1200, 10400, 220, 1600]), bb = new Float64Array(6);
+  C.xfBox(xf, behind, 0, bb, 0);
+  check("VIS2: a plate 20 mm in front of the wall is not hidden by the wall's depth; a part 200 mm behind it is", !H.boxHidden(pyr, pb, 0) && H.boxHidden(pyr, bb, 0));
+  // a pyramid of the same camera at another canvas size (a panel shown by a click): what lies beyond its picture may be seen
+  // (axis-aligned here: the camera looks along +y at a wall at y = 0, the picture 3 m wide at its depth)
+  {
+    const e2 = [0, -3000, 0], m2 = mul4(persp, look(e2, [0, 0, 0]));
+    const zw = (ndc(m2, [0, 0, 0])[2] + 1) / 2, lv0 = new Float32Array(W * W).fill(zw), lvs = [lv0];
+    for (let w = W; w > 1; w /= 2) lvs.push(new Float32Array((w / 2) * (w / 2)).fill(zw));
+    const p2 = { key: "", serial: 1, complete: true, w: W, h: W, cw: 4 * W, ch: 4 * W, mvp: m2, levels: lvs, lw: lvs.map((_, i) => W >> i), lh: lvs.map((_, i) => W >> i) };
+    const inside = new Float64Array([-500, 300, -500, 500, 400, 500]), across = new Float64Array([-9000, 300, -500, 9000, 400, 500]);
+    check("VIS2: a pyramid of another canvas size: a box behind the wall reaching beyond that picture is not hidden (`beyond`); one within it, behind the wall, is",
+      H.boxHidden(p2, inside, 0) && H.boxHidden(p2, inside, 0, true) && H.boxHidden(p2, across, 0) && !H.boxHidden(p2, across, 0, true),
+      `${H.boxHidden(p2, inside, 0, true)} ${H.boxHidden(p2, across, 0)} ${H.boxHidden(p2, across, 0, true)}`);
+  }
+}
+
+// ---- VIS2: one item over the budget is drawn alone, even when (size / dist) * dist rounds above its size ----
+{
+  let found = null;
+  for (let i = 0; i < 200000 && !found; i++) { const sz = Math.fround(1000 + ((i * 7919) % 49000) + 0.37 * (i % 11)), d = 1000 + ((i * 104729) % 1000000) + 0.123; if ((sz / d) * d > sz) found = { sz, d }; }
+  const b = { first: 0, n: 2, size: new Float32Array([found.sz, 1]), cum: new Uint32Array([0, 60000, 60010]), ecum: new Uint32Array(3), box: new Float64Array(6), group: -1 };
+  const ex = C.budgetCut([{ b, dist: found.d, k0: 0 }], 50000), fa = C.budgetCutFast([{ b, dist: found.d, k0: 0 }], 50000, "vis2");
+  check(`VIS2: an item over the budget whose size over distance rounds up is drawn alone, never 0 triangles (a fill that never ended): exact ${ex.tris}, bucketed ${fa.tris}`, ex.tris === 60000 && fa.tris === 60000);
+}
+
+// ---- VIS2: the size histograms of budgetCutFast kept for moving frames and still frames alike ----
+{
+  const bs = [];
+  for (let k = 0; k < 2500; k++) {
+    const n = 8, size = new Float32Array(n), cum = new Uint32Array(n + 1), kept = new Uint32Array(n + 1);
+    for (let i = 0; i < n; i++) size[i] = 4000 - 300 * i - k % 7, cum[i + 1] = cum[i] + 500, kept[i + 1] = kept[i] + (i % 2 ? 500 : 0);
+    bs.push({ b: { first: 0, n, size, cum, ecum: new Uint32Array(n + 1), box: new Float64Array(6), group: -1 }, kept, dist: 5000 + 37 * k });
+  }
+  const moving = () => C.budgetCutFast(bs.map((x) => ({ b: x.b, dist: x.dist, k0: 0 })), 200000, "v1|l1|");
+  const still = () => C.budgetCutFast(bs.map((x) => ({ b: x.b, dist: x.dist, k0: 0, cum: x.kept })), 200000, "v1|l1|pyr#1");
+  const h0 = C.cullStats.histBuilds;
+  moving(), still(), moving(), still(), moving();
+  const built = C.cullStats.histBuilds - h0;
+  check(`VIS2: moving and still frames alternating make each batch's two histograms once (${built} for 2,500 batches, 5 frames)`, built === 5000);
+}
 
 // ---- frustum ----
 {

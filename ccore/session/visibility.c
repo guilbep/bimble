@@ -80,6 +80,7 @@ void cc_vis_reset(cc_vis *v) {
     v->drag_face = -1;
     prev_clear(v); /* ISS72: the Show previous stacks belong to the model that was open */
     v->yaw = 0.0f, v->true_north = 0, v->has_alt = 0; /* ISS71 */
+    memset(v->base, 0, sizeof v->base); /* MEAS3 */
 }
 
 int cc_vis_hidden(const cc_vis *v, const cc_gid *g) {
@@ -195,22 +196,101 @@ void cc_vis_grow(const cc_scene *sc, size_t k, const float off[3], float yaw, fl
 int cc_vis_fit_bounds(cc_vis *v, const float lo[3], const float hi[3], float margin) {
     if (!(lo[0] <= hi[0] && lo[1] <= hi[1] && lo[2] <= hi[2])) return -1;
     for (int k = 0; k < 3; k++) v->min[k] = lo[k] - margin, v->max[k] = hi[k] + margin;
+    memset(v->base, 0, sizeof v->base); /* MEAS3 */
     v->has_box = 1;
     return 0;
 }
+
+/* ---- MEAS3 (ADR 0087): the box at national coordinates ---- */
+
+int cc_vis_far(const double p[3]) {
+    for (int k = 0; k < 3; k++)
+        if (p[k] - p[k] == 0.0 && (p[k] > CC_VIS_FAR_MM || p[k] < -CC_VIS_FAR_MM)) return 1;
+    return 0;
+}
+
+void cc_vis_grow_d(const cc_scene *sc, size_t k, const double off[3], float yaw, double lo[3], double hi[3]) {
+    double sn = yaw == 0.0f ? 0.0 : cc_sin((double)yaw), cs = yaw == 0.0f ? 1.0 : cc_cos((double)yaw);
+    const cc_scene_element *e = &sc->elements[k];
+    const cc_mesh *m = cc_scene_local_mesh(sc, k);
+    const cc_placement32 *t = &e->to_scene;
+    float a[3], b[3];
+    if (yaw == 0.0f && !element_bounds(sc, k, a, b)) return;
+    uint32_t n = yaw == 0.0f ? 8 : m->nv; /* unturned: the element's box corners; turned: every vertex */
+    for (uint32_t i = 0; i < n; i++) {
+        double p[3];
+        if (yaw == 0.0f) {
+            p[0] = (i & 1) ? b[0] : a[0], p[1] = (i & 2) ? b[1] : a[1], p[2] = (i & 4) ? b[2] : a[2];
+        } else {
+            const float *c = m->pos[i];
+            for (int q = 0; q < 3; q++) p[q] = e->shape < 0 ? c[q] : t->x[q] * c[0] + t->y[q] * c[1] + t->z[q] * c[2] + t->t[q];
+        }
+        for (int q = 0; q < 3; q++) p[q] += off[q];
+        double f[3] = {cs * p[0] + sn * p[1], -sn * p[0] + cs * p[1], p[2]};
+        for (int q = 0; q < 3; q++) {
+            if (f[q] < lo[q]) lo[q] = f[q];
+            if (f[q] > hi[q]) hi[q] = f[q];
+        }
+    }
+}
+
+int cc_vis_set_box_d(cc_vis *v, const double mn[3], const double mx[3]) {
+    double c[3], b[3] = {0, 0, 0};
+    for (int k = 0; k < 3; k++) {
+        if (!(mn[k] <= mx[k] && mn[k] > -1e15 && mx[k] < 1e15)) return -1; /* untrusted: a box beyond 1e15 mm is refused */
+        c[k] = 0.5 * mn[k] + 0.5 * mx[k];
+    }
+    if (cc_vis_far(c))
+        for (int k = 0; k < 3; k++) b[k] = (double)(int64_t)(c[k] / 1000.0) * 1000.0; /* 1 m steps */
+    for (int k = 0; k < 3; k++) v->min[k] = (float)(mn[k] - b[k]), v->max[k] = (float)(mx[k] - b[k]), v->base[k] = b[k];
+    v->has_box = 1;
+    return 0;
+}
+
+int cc_vis_fit_bounds_d(cc_vis *v, const double lo[3], const double hi[3], double margin) {
+    if (!(lo[0] <= hi[0] && lo[1] <= hi[1] && lo[2] <= hi[2])) return -1;
+    double mn[3], mx[3];
+    for (int k = 0; k < 3; k++) mn[k] = lo[k] - margin, mx[k] = hi[k] + margin;
+    return cc_vis_set_box_d(v, mn, mx);
+}
+
+void cc_vis_box_abs(const cc_vis *v, int drag, double mn[3], double mx[3]) {
+    const float *a = drag ? v->prev_min : v->min, *b = drag ? v->prev_max : v->max;
+    for (int k = 0; k < 3; k++) mn[k] = (double)a[k] + v->base[k], mx[k] = (double)b[k] + v->base[k];
+}
+/* ---- end MEAS3 ---- */
 static int same3(const float *a, const float *b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
 
-void cc_vis_orient(cc_vis *v, float yaw, const float *sel_lo, const float *sel_hi) {
+static int same3d(const double *a, const double *b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
+
+void cc_vis_orient(cc_vis *v, float yaw, const double *sel_lo, const double *sel_hi) {
     v->drag_face = -1;
     if (!v->has_box || yaw == v->yaw) {
         v->yaw = yaw;
         return;
     }
     float mn[3], mx[3];
-    if (v->has_alt && v->alt_yaw == yaw && same3(v->min, v->made_min) && same3(v->max, v->made_max)) {
-        memcpy(mn, v->alt_min, sizeof mn), memcpy(mx, v->alt_max, sizeof mx);
+    double nb[3] = {0, 0, 0}; /* MEAS3: the new box's frame */
+    if (v->has_alt && v->alt_yaw == yaw && same3(v->min, v->made_min) && same3(v->max, v->made_max) && same3d(v->base, v->made_base)) {
+        memcpy(mn, v->alt_min, sizeof mn), memcpy(mx, v->alt_max, sizeof mx), memcpy(nb, v->alt_base, sizeof nb);
     } else if (sel_lo && sel_hi && sel_lo[0] <= sel_hi[0] && sel_lo[1] <= sel_hi[1] && sel_lo[2] <= sel_hi[2]) {
-        for (int k = 0; k < 3; k++) mn[k] = sel_lo[k] - CC_BOX_SELECTION_MARGIN_MM, mx[k] = sel_hi[k] + CC_BOX_SELECTION_MARGIN_MM;
+        cc_vis t; /* MEAS3: the selection's box (base 0 near the origin: the f32 box as before) */
+        memset(&t, 0, sizeof t);
+        if (cc_vis_fit_bounds_d(&t, sel_lo, sel_hi, CC_BOX_SELECTION_MARGIN_MM)) return;
+        memcpy(mn, t.min, sizeof mn), memcpy(mx, t.max, sizeof mx), memcpy(nb, t.base, sizeof nb);
+    } else if (cc_vis_far(v->base)) { /* MEAS3: the corners of a far box, turned in f64 */
+        double lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300}, a[3], b[3];
+        cc_vis_box_abs(v, 0, a, b);
+        double d = (double)v->yaw - (double)yaw, sn = cc_sin(d), cs = cc_cos(d);
+        for (int i = 0; i < 8; i++) {
+            double c[3] = {(i & 1) ? b[0] : a[0], (i & 2) ? b[1] : a[1], (i & 4) ? b[2] : a[2]};
+            double p[3] = {cs * c[0] - sn * c[1], sn * c[0] + cs * c[1], c[2]};
+            for (int k = 0; k < 3; k++) lo[k] = p[k] < lo[k] ? p[k] : lo[k], hi[k] = p[k] > hi[k] ? p[k] : hi[k];
+        }
+        cc_vis t;
+        memset(&t, 0, sizeof t);
+        if (cc_vis_set_box_d(&t, lo, hi)) return;
+        memcpy(mn, t.min, sizeof mn), memcpy(mx, t.max, sizeof mx), memcpy(nb, t.base, sizeof nb);
     } else { /* the corners: from the old frame to the scene, then into the new frame */
         float inf = 1e30f * 1e30f;
         for (int k = 0; k < 3; k++) mn[k] = inf, mx[k] = -inf;
@@ -222,8 +302,9 @@ void cc_vis_orient(cc_vis *v, float yaw, const float *sel_lo, const float *sel_h
         }
     }
     memcpy(v->alt_min, v->min, sizeof mn), memcpy(v->alt_max, v->max, sizeof mx), v->alt_yaw = v->yaw;
-    memcpy(v->min, mn, sizeof mn), memcpy(v->max, mx, sizeof mx), v->yaw = yaw;
-    memcpy(v->made_min, mn, sizeof mn), memcpy(v->made_max, mx, sizeof mx), v->has_alt = 1;
+    memcpy(v->alt_base, v->base, sizeof nb);
+    memcpy(v->min, mn, sizeof mn), memcpy(v->max, mx, sizeof mx), v->yaw = yaw, memcpy(v->base, nb, sizeof nb);
+    memcpy(v->made_min, mn, sizeof mn), memcpy(v->made_max, mx, sizeof mx), v->has_alt = 1, memcpy(v->made_base, nb, sizeof nb);
 }
 /* ---- end ISS71 ---- */
 
@@ -248,6 +329,7 @@ void cc_vis_fit(cc_vis *v, const cc_scene *sc, const cc_gid *primary) {
         float m = 1.0f + d * 1e-5f;
         v->min[k] = lo[k] - m, v->max[k] = hi[k] + m;
     }
+    memset(v->base, 0, sizeof v->base); /* MEAS3: the open scene alone: its own frame */
     v->has_box = 1;
 }
 
@@ -321,10 +403,28 @@ static void vec3_f32(JsonW *w, const float p[3]) {
     jw_arr_end(w);
 }
 
-static void box_json(JsonW *w, const float mn[3], const float mx[3], float yaw) { /* json!({"min","max","yaw"}) */
+/* MEAS3: a far box's corner in scene coordinates, f64 (base + the f32 value). */
+static void vec3_base(JsonW *w, const float p[3], const double base[3]) {
+    jw_arr_begin(w);
+    for (int k = 0; k < 3; k++) jw_f64(w, base[k] + (double)p[k] + 0.0);
+    jw_arr_end(w);
+}
+
+/* json!({"min","max","yaw"}); MEAS3: a box with a base: "base" (its frame) first, min and max in scene
+ * coordinates as before (base + the f32 values, f64); without one: the bytes as before. */
+static void box_json(JsonW *w, const float mn[3], const float mx[3], float yaw, const double base[3]) {
+    int far = base[0] != 0.0 || base[1] != 0.0 || base[2] != 0.0;
     jw_obj_begin(w);
-    jw_key(w, "max"), vec3_f32(w, mx);
-    jw_key(w, "min"), vec3_f32(w, mn);
+    if (far) {
+        jw_key(w, "base"), jw_arr_begin(w);
+        for (int k = 0; k < 3; k++) jw_f64(w, base[k] + 0.0);
+        jw_arr_end(w);
+        jw_key(w, "max"), vec3_base(w, mx, base);
+        jw_key(w, "min"), vec3_base(w, mn, base);
+    } else {
+        jw_key(w, "max"), vec3_f32(w, mx);
+        jw_key(w, "min"), vec3_f32(w, mn);
+    }
     jw_key(w, "yaw"), jw_f64(w, f32_json(yaw)); /* ISS71: the box's turn */
     jw_obj_end(w);
 }
@@ -347,7 +447,7 @@ void cc_vis_json(const cc_vis *v, JsonW *w, const double *origin) {
     jw_key(w, "isolated_now"), capped(w, &v->temp, v->has_temp && v->temp_isolate);
     jw_key(w, "section_box"), jw_obj_begin(w);
     jw_key(w, "box");
-    if (v->has_box) box_json(w, v->min, v->max, v->yaw);
+    if (v->has_box) box_json(w, v->min, v->max, v->yaw, v->base);
     else jw_null(w);
     jw_key(w, "on"), jw_bool(w, v->section_on);
     jw_key(w, "origin_mm");
@@ -430,8 +530,8 @@ static int box_args(const char *body, size_t n, BoxArgs *t, Buf *out) {
         const char *bad = NULL;
         if (jr_key_is(m, "ray")) bad = nums(x, t->ray, 6, 1e12) ? "ray: expected [ox, oy, oz, dx, dy, dz]" : NULL, t->has_ray = 1;
         else if (jr_key_is(m, "ray_tol")) bad = nums(x, t->ray_tol, 6, 1e12) ? "ray_tol: expected [ox, oy, oz, dx, dy, dz]" : NULL, t->has_ray_tol = 1;
-        else if (jr_key_is(m, "min")) bad = nums(x, t->min, 3, 1e7) ? "min: expected [x, y, z] within ±10000000 mm" : NULL, t->has_min = 1;
-        else if (jr_key_is(m, "max")) bad = nums(x, t->max, 3, 1e7) ? "max: expected [x, y, z] within ±10000000 mm" : NULL, t->has_max = 1;
+        else if (jr_key_is(m, "min")) bad = nums(x, t->min, 3, 1e13) ? "min: expected [x, y, z] within ±1e13 mm" : NULL, t->has_min = 1;
+        else if (jr_key_is(m, "max")) bad = nums(x, t->max, 3, 1e13) ? "max: expected [x, y, z] within ±1e13 mm" : NULL, t->has_max = 1;
         else if (jr_key_is(m, "on")) {
             if (x->type != JR_BOOL) bad = "on: expected a boolean";
             else t->has_on = 1, t->on = x->b;
@@ -480,8 +580,8 @@ static void tool_json(const cc_vis *v, Buf *out) {
     jw_obj_begin(&w);
     jw_key(&w, "active"), jw_bool(&w, v->drag_face >= 0);
     jw_key(&w, "box");
-    if (v->drag_face >= 0) box_json(&w, v->prev_min, v->prev_max, v->yaw);
-    else if (v->has_box) box_json(&w, v->min, v->max, v->yaw);
+    if (v->drag_face >= 0) box_json(&w, v->prev_min, v->prev_max, v->yaw, v->base);
+    else if (v->has_box) box_json(&w, v->min, v->max, v->yaw, v->base);
     else jw_null(&w);
     jw_key(&w, "face");
     if (v->drag_face >= 0) jw_u64(&w, (uint64_t)v->drag_face);
@@ -525,20 +625,22 @@ int cc_vis_tool(cc_vis *v, const char *name, const char *body, size_t n, Buf *ou
         if (a.has_ray) ray_to_frame(v->yaw, a.ray);
         if (a.has_ray_tol) ray_to_frame(v->yaw, a.ray_tol);
     }
+    for (int k = 0; k < 3; k++) /* MEAS3: and in its frame (base: 0 near the origin) */
+        a.ray[k] -= v->base[k], a.ray_tol[k] -= v->base[k];
     if (!strcmp(name, "box_set")) {
         if (!a.has_min || !a.has_max) {
             buf_puts(out, "box_set needs \"min\" and \"max\" ([x, y, z], mm relative to the scene origin)");
             return 400;
         }
-        float mn[3], mx[3];
-        for (int k = 0; k < 3; k++) {
-            mn[k] = (float)a.min[k], mx[k] = (float)a.max[k];
-            if (!(mx[k] - mn[k] >= MIN_SIZE)) {
+        cc_vis t; /* MEAS3: a box far from the origin gets its frame (base); near it, (float) min, max as before */
+        memset(&t, 0, sizeof t);
+        cc_vis_set_box_d(&t, a.min, a.max);
+        for (int k = 0; k < 3; k++)
+            if (!(t.max[k] - t.min[k] >= MIN_SIZE)) {
                 buf_puts(out, "the box is at least 10 mm on each axis (max - min)");
                 return 400;
             }
-        }
-        memcpy(v->min, mn, sizeof mn), memcpy(v->max, mx, sizeof mx);
+        memcpy(v->min, t.min, sizeof t.min), memcpy(v->max, t.max, sizeof t.max), memcpy(v->base, t.base, sizeof t.base);
         v->has_box = 1;
         if (a.has_on) v->section_on = a.on;
         v->drag_face = -1;

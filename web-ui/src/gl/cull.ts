@@ -17,7 +17,10 @@ export const MIN_MOVING_TRIS = 20000;
 
 /** A batch as a frame sees it: its distance from the eye (mm; 1 for an orthographic view) and the
  *  items already drawn (k0: a progressive fill continues from there). */
-export interface Cut { b: Batch; dist: number; k0: number }
+export interface Cut { b: Batch; dist: number; k0: number;
+  /** VIS2: the triangles of the first i items this frame may draw (shown and not hidden behind the last picture: the masked
+   *  ones count 0), when the visibility test applies; unset: `b.vcum ?? b.cum`. The budget then buys what is drawn. */
+  cum?: Uint32Array }
 
 /** The items of `c` this frame draws for a screen threshold t: those at least t * dist big (a prefix:
  *  largest first), from k0. */
@@ -30,7 +33,7 @@ export function cutEnd(c: Cut, t: number): number {
  *  that one is over the budget, so a frame is never empty while anything is left. t = 0: everything. */
 export function budgetCut(cs: Cut[], budget: number): { t: number; tris: number } {
   // LNK3D: the triangles of the items shown (vcum, when set): a hidden element costs no budget
-  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
+  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.cum ?? c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
   const all = at(0);
   if (all <= budget) return { t: 0, tris: all };
   let hi = 0;
@@ -44,13 +47,15 @@ export function budgetCut(cs: Cut[], budget: number): { t: number; tris: number 
     else lo = mid;
   }
   let tris = at(hi);
-  if (tris === 0) hi = top, tris = at(top); // one item over the budget: the largest one(s) on screen alone
+  // one item over the budget: the largest one(s) on screen alone (VIS2: a hair under its size over distance: (s / d) * d can
+  // round above s, and the item was then left out: a fill of slices drawing 0 triangles forever, seen on a real project)
+  if (tris === 0) hi = top * (1 - 1e-9), tris = at(hi);
   return { t: hi, tris };
 }
 
 /** The six planes (a, b, c, d: inside when a x + b y + c z + d >= 0) of a column-major view-projection
  *  matrix (Gribb and Hartmann): left, right, bottom, top, near, far. */
-export function frustumPlanes(m: Float32Array): Float64Array {
+export function frustumPlanes(m: ArrayLike<number>): Float64Array {
   const r = (i: number) => [m[i]!, m[4 + i]!, m[8 + i]!, m[12 + i]!];
   const x = r(0), y = r(1), z = r(2), w = r(3);
   const out = new Float64Array(24);
@@ -61,7 +66,7 @@ export function frustumPlanes(m: Float32Array): Float64Array {
 }
 
 /** False when the box (min xyz, max xyz at `o`) lies wholly outside one plane: not on screen. */
-export function boxInFrustum(p: Float64Array, b: Float32Array, o: number): boolean {
+export function boxInFrustum(p: Float64Array, b: ArrayLike<number>, o: number): boolean {
   for (let k = 0; k < 24; k += 4) {
     const a = p[k]!, bb = p[k + 1]!, c = p[k + 2]!, d = p[k + 3]!;
     // the box corner farthest along the plane's normal
@@ -84,7 +89,7 @@ function spread(v: number): number {
 /** A batch: items [first, first + n) of its list (elements or instances), largest first; `size` their
  *  sizes (mm, descending), `cum[i]` the triangles (or instances' indices) of the first i items, the
  *  same for edge segments in `ecum`; `box` the items' box. */
-export interface Batch { first: number; n: number; size: Float32Array; cum: Uint32Array; ecum: Uint32Array; box: Float32Array;
+export interface Batch { first: number; n: number; size: Float32Array; cum: Uint32Array; ecum: Uint32Array; box: Float64Array;
   /** 3D2: the HLOD leaf its items are in (-1: none); a batch never spans two leaves. */
   group: number;
   /** LNK3D: `vcum[i]` the triangles of the first i items that are shown (hidden ones count 0; unset:
@@ -97,7 +102,7 @@ export interface Batch { first: number; n: number; size: Float32Array; cum: Uint
  *  inside each. 3D2: with `group` (an item's HLOD leaf), the items go by group first (leaves in
  *  their depth-first order, so a cell's batches lie side by side) and a batch never spans two groups.
  *  Returns the items in their new order and the batches. */
-export function makeBatches(items: number[], boxes: Float32Array, cost: (e: number) => number, edges: (e: number) => number,
+export function makeBatches(items: number[], boxes: ArrayLike<number>, cost: (e: number) => number, edges: (e: number) => number,
   cap: number, group: (e: number) => number = () => -1): { order: number[]; batches: Batch[] } {
   if (!items.length) return { order: [], batches: [] };
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -120,7 +125,7 @@ export function makeBatches(items: number[], boxes: Float32Array, cost: (e: numb
     const g = group(sorted[i]!);
     while (j < sorted.length && (j === i || (c + cost(sorted[j]!) <= cap && group(sorted[j]!) === g))) c += cost(sorted[j]!), j++;
     const part = sorted.slice(i, j).sort((a, b) => sizeOf(b) - sizeOf(a) || a - b);
-    const n = part.length, size = new Float32Array(n), cum = new Uint32Array(n + 1), ecum = new Uint32Array(n + 1), box = new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+    const n = part.length, size = new Float32Array(n), cum = new Uint32Array(n + 1), ecum = new Uint32Array(n + 1), box = new Float64Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
     part.forEach((e, k) => {
       size[k] = sizeOf(e);
       cum[k + 1] = cum[k]! + cost(e);
@@ -165,9 +170,9 @@ export function xfRows(x: ModelXf, out = new Float32Array(12), o = 0): Float32Ar
 
 /** The box `src[so .. so + 6]` (min xyz, max xyz, the model's frame) placed by x, as the axis-aligned
  *  box around it at `dst[d0 ..]` (exact for no turn; a turned box's 4 corners in plan otherwise). */
-export function xfBox(x: ModelXf, src: Float32Array, so: number, dst: Float32Array, d0: number): void {
+export function xfBox(x: ModelXf, src: ArrayLike<number>, so: number, dst: Float32Array | Float64Array, d0: number): void {
   const x0 = src[so]!, y0 = src[so + 1]!, x1 = src[so + 3]!, y1 = src[so + 4]!;
-  if (!(x0 <= x1)) { dst.set(src.subarray(so, so + 6), d0); return; } // an empty box stays empty
+  if (!(x0 <= x1)) { for (let k = 0; k < 6; k++) dst[d0 + k] = src[so + k]!; return; } // an empty box stays empty
   let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
   for (const [px, py] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) {
     const qx = x.c * px - x.s * py, qy = x.s * px + x.c * py;
@@ -218,11 +223,16 @@ export function batchShown(b: Batch, items: ArrayLike<number>, shown: Uint8Array
 // exactly (one search a batch) and raised a bucket at a time while over the budget. The same answer's kind: everything at least t big, at most `budget` triangles, never empty. ----
 const BPO = 16, B0 = -512, NB = 1536; // buckets per octave (a 4.4 % step); log2(size / dist) from -32 octaves, over 96 octaves
 interface SizeHist { key: string; bucket: Int16Array; tris: Float64Array }
-const hists = new WeakMap<Batch, SizeHist>();
+// (VIS2: two per batch: moving frames count every shown item, still frames and slices what the visibility test lets
+// through (Cut.cum, another key): one entry flipped between them and the first moving frame after a still picture made
+// 46,800 histograms again: 170 ms of script on the owner's project)
+const hists = new WeakMap<Batch, SizeHist[]>();
+/** VIS2: the size histograms made so far (a test reads it: moving and still frames alternating make none again). */
+export const cullStats = { histBuilds: 0 };
 function histOf(c: Cut, key: string): SizeHist {
-  const b = c.b, h = hists.get(b);
-  if (h && h.key === key) return h;
-  const k = b.vcum ?? b.cum, idx: number[] = [], tr: number[] = [];
+  const b = c.b, hs = hists.get(b), h = hs ? hs.find((x) => x.key === key) : undefined;
+  if (h) return h;
+  const k = c.cum ?? b.vcum ?? b.cum, idx: number[] = [], tr: number[] = [];
   for (let i = 0; i < b.n; i++) {
     const t = k[i + 1]! - k[i]!;
     if (!t) continue;
@@ -231,18 +241,22 @@ function histOf(c: Cut, key: string): SizeHist {
     else idx.push(q), tr.push(t);
   }
   const out = { key, bucket: Int16Array.from(idx), tris: Float64Array.from(tr) };
-  hists.set(b, out);
+  cullStats.histBuilds++;
+  if (hs) { hs.unshift(out); if (hs.length > 2) hs.length = 2; } else hists.set(b, [out]);
   return out;
 }
+/** VIS2: batch b's size histogram for `key` made now (what a moving frame's budgetCutFast would make at its first use):
+ *  the viewport makes them while idle, so the first moving frame of a gesture does not (170 ms on 46,800 batches). */
+export function warmHist(b: Batch, key: string): void { histOf({ b, dist: 1, k0: 0 }, key); }
 /** budgetCut's answer through size buckets (for many batches); `key` changes when what is shown changes. */
 export function budgetCutFast(cs: Cut[], budget: number, key: string): { t: number; tris: number } {
-  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
+  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.cum ?? c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
   const H = new Float64Array(NB);
   let all = 0;
   for (const c of cs) {
     const shift = Math.floor(BPO * Math.log2(Math.max(c.dist, 1e-9)));
     if (c.k0 > 0) { // a slice of the fill: its items from k0 on (the smaller ones), counted one by one
-      const b = c.b, k = b.vcum ?? b.cum;
+      const b = c.b, k = c.cum ?? b.vcum ?? b.cum;
       for (let i = c.k0; i < b.n; i++) {
         const t = k[i + 1]! - k[i]!;
         if (!t) continue;
@@ -265,7 +279,7 @@ export function budgetCutFast(cs: Cut[], budget: number, key: string): { t: numb
   if (tris === 0) { // one item over the budget: the largest on screen alone (budgetCut's rule)
     let hi = 0;
     for (const c of cs) if (c.k0 < c.b.n) hi = Math.max(hi, c.b.size[c.k0]! / Math.max(c.dist, 1e-9));
-    t = hi, tris = at(hi);
+    t = hi * (1 - 1e-9), tris = at(t); // (VIS2: a hair under, as budgetCut)
   }
   return { t, tris };
 }

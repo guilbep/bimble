@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 import { computed } from "vue";
 import { state, visibility, actions, runAction, pointer, status, placing, openViews, links } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
@@ -6,13 +7,16 @@ import { page } from "../pages";
 import { dialog } from "../dialogs";
 import { panel, currentPanel } from "../panels";
 import { gpuSide, howToWebgpu, renderer, toggleRenderer, warmRenderer } from "../perf"; // GPU2: the renderer chip
+import { linkDetail, linkGpu } from "../gl/linkmem"; // VIS2: links held at their proxies by the GPU budget
+/** VIS2: the links drawn simplified while the links' GPU budget is reached (0: none, or the budget not reached). */
+const simplified = computed(() => { const g = linkGpu.value; if (!g || g.used < g.budget) return 0; const d = linkDetail.value; return links().filter((k) => k.visible && d[k.name] === false).length; });
 /** GPU2: the chip's title: the renderer, and what to do when WebGPU was asked and has no adapter. */
 const chipTitle = (): string => { const h = renderer.asked === "webgpu" && renderer.using !== "WebGPU" ? howToWebgpu(renderer.reason) : null; return `${t("perf.chipTitle", { what: renderer.using })}${h ? ` \u2014 ${t(h)}` : ""}`; };
 
 const langs: Lang[] = ["fr", "en"];
 const preview = import.meta.env.VITE_CCORE === "1" ? `Preview, C core ${import.meta.env.VITE_CCORE_REV ?? "dev"} · openings drawn uncut (no boolean kernel in wasm)` : ""; // ticket PG1
 // Linked models and reference plans shown now; re-read when the model or the views change.
-const shownLinks = computed(() => { void state.value.rev; void openViews.value; return links().filter((k) => k.visible); });
+const shownLinks = computed(() => { void stateRev.value; void openViews.value; return links().filter((k) => k.visible); });
 // Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, enabled as `query("actions")` says.
 type Chip = { key: Parameters<typeof t>[0]; n: number; undo: string };
 const enabled = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
@@ -83,6 +87,7 @@ const chips = (): Chip[] => {
         @click="runAction(c.undo)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
     <!-- Reference (B1): `.chip.c-s.nx` "Lié : Architecture", slate = linked models (ADR 0049); one per shown link. -->
     <span v-for="k in shownLinks" :key="k.id" data-bb="status-chip" class="chip c-s nx">{{ t("status.linked", { name: k.name.replace(/\.[^.]+$/, "") }) }}</span>
+    <span v-if="simplified" class="chip c-n" data-bb="status-links-simplified" :title="t('status.linksSimplifiedTip')">{{ t("status.linksSimplified", { n: simplified, mb: Math.round((linkGpu?.budget ?? 0) / 1048576) }) }}</span>
     <span v-if="preview" class="mono q" style="font-size:12px" data-bb="status-preview">{{ preview }}</span>
     <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ counts() }}</span>
     <!-- SIZE2: the end group never shrinks: what is before it (hint, coordinates, chips, counts) gives way first -->

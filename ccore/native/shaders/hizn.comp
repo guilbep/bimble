@@ -1,0 +1,16 @@
+#version 450
+// NUI2: a level of the depth pyramid from the one below (the farthest of 2 x 2), levels side by side in one texture.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 1, binding = 0, r32f) uniform image2D hiz;
+layout(set = 2, binding = 0) uniform U { ivec4 s; ivec4 d; }; // s: the level below's x offset, w, h; d: this level's
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    if (t.x >= d.y || t.y >= d.z) return;
+    float m = 3.0e38;
+    for (int y = 0; y < 2; y++)
+        for (int x = 0; x < 2; x++) {
+            ivec2 c = t * 2 + ivec2(x, y);
+            if (c.x < s.y && c.y < s.z) m = min(m, imageLoad(hiz, ivec2(s.x + c.x, c.y)).r);
+        }
+    imageStore(hiz, ivec2(d.x + t.x, t.y), vec4(m));
+}

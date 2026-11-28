@@ -397,7 +397,7 @@ static void measure(void) {
                 double rr[6] = {from[0], from[1], from[2], to[0] - from[0], to[1] - from[1], to[2] - from[2]};
                 double rt[6] = {from[0] + 30, from[1] - 30, from[2], rr[3], rr[4], rr[5]};
                 cc_mwork wt = {0, 0, 0}, wb = {0, 0, 0};
-                cc_mview v = {L, (size_t)nl, NULL, NULL, o, 0.0f, &wt, 0, NULL}; /* WAVE1B: no work plane */
+                cc_mview v = {L, (size_t)nl, NULL, NULL, o, 0.0f, &wt, 0, NULL, NULL}; /* WAVE1B: no work plane */
                 cc_msnap s1, s2, s3;
                 memset(&s1, 0, sizeof s1), memset(&s2, 0, sizeof s2), memset(&s3, 0, sizeof s3);
                 int r1 = cc_measure_snap(&v, rr, rt, 12.0, 0, &s1);

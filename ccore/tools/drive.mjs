@@ -8,7 +8,8 @@
 //                         the project's folder) with BIMBLE_LINK_CACHE_BESIDE=0: nothing is written beside your files
 //   --links N             N synthetic buildings (bench/buildings_synth.mjs) linked as a folder into a new project,
 //                         placed in rows; --storeys S (2). Kept in ~/.cache/bimble-drive/synth-N-S between runs
-//                         (--clean deletes it at the end)
+//                         (--clean deletes it at the end); --georef: the buildings' files placed 2,600 km east, 1,200 km
+//                         north and 450 m up (georeferenced links in an empty project: GEOREF below)
 // options:
 //   --name NAME           the run's folder: ccore/out/drive/NAME (default: the preset and the time)
 //   --size 1492x790       the window in CSS px (default 1280x800); --dpr 2 its device pixel ratio (default 1)
@@ -38,6 +39,9 @@
 //   click X Y | click element GLOBALID | click centre     a left click (an element: at its box's centre on screen)
 //   key KEY               a key press (KeyboardEvent.key, e.g. "Escape", "f")
 //   fit                   the home camera fitted (the page's bench hook)
+//   camera far|close|inside|look X Y Z D   the home camera fitted; 5 times nearer; 0.03 of it (the eye near the scene's
+//                         centre: inside a building); at a world point (mm) from D mm
+//   truth LABEL [ref]     a still frame against the ground truth (every shown element's faces as ids): seen, drawn, missing
 //   action NAME [JSON]    a host action (POST /action/NAME), e.g. "action hide {}" after a click selected something
 //   open panel performance | close panel   the performance panel
 //   screenshot NAME       a PNG (device px) and a copy at most 1280 px wide
@@ -76,6 +80,10 @@ const med = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b)
 const q95 = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(0.95 * s.length))]; };
 const f1 = (v, d = 1) => (v === null || v === undefined || !Number.isFinite(v) ? "–" : Number(v).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d }));
 const f0 = (v) => f1(v, 0);
+
+/** VIS2: where --georef places the synthetic links (mm from the project's origin): as far as Swiss coordinates put a
+ *  real project's links from an empty project's origin (f32 steps of 256 mm there). Synthetic numbers. */
+export const GEOREF = [2600000000, 1200000000, 450000];
 
 export const PRESETS = {
   // what the owner did: orbit 3 s, zoom in 5 steps, zoom out, stop, click an element, orbit again
@@ -214,7 +222,7 @@ export class Drive {
     this.port = port(`drive_host_${process.pid}`), this.vite = vitePort(`drive_${process.pid}`), this.token = `drive-${process.pid}`;
     let what = null, bytes = 0, synthDir = null;
     if (o.links) {
-      synthDir = join(root, `synth-${o.links}-${o.storeys}`);
+      synthDir = join(root, `synth-${o.links}-${o.storeys}-v2${o.georef ? "-geo" : ""}`); // (VIS2: v2, the buildings with turned long members)
       mkdirSync(join(synthDir, "links"), { recursive: true });
     } else if (o.project) {
       // a scratch folder of symbolic links to every file beside the project: what the host writes (a cache, a
@@ -248,7 +256,7 @@ export class Drive {
     const bin = o.hostBin ?? process.env.HOST_BIN ?? join(CCORE, "out/native/bimble-ccore"); // (a lab test: the tcc build the gate makes)
     if (!existsSync(bin)) throw new Error(`no ${bin}: ccore/build.sh native`);
     const hostHome = o.links ? synthDir : home;
-    this.host = this.start("host", bin, [String(this.port), ...(what ? [what] : [])], { cwd: tmp, env: { ...process.env, BIMBLE_TOKEN: this.token, HOME: hostHome, BIMBLE_CONFIG_DIR: config,
+    this.host = this.start("host", bin, [String(this.port), ...(what ? [what] : [])], { cwd: tmp, env: { ...process.env, BIMBLE_TOKEN: this.token, HOME: hostHome, BIMBLE_CONFIG_DIR: config, XDG_STATE_HOME: join(tmp, "state"), /* VIS2: the web session log in the run's folder */
       BIMBLE_CACHE_DIR: o.links ? join(synthDir, "cache") : this.cacheDir ?? cache, BIMBLE_LINK_CACHE_BESIDE: "0", BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_ORIGINS: `http://localhost:${this.vite},http://127.0.0.1:${this.vite}` } });
     await this.waitFor("the host", 600000, () => this.host.out.includes("listening") || (this.host.exitCode !== null && Promise.reject(new Error(this.host.out.slice(-600)))), 50);
     if (o.links) {
@@ -257,7 +265,7 @@ export class Drive {
       if (have !== Number(o.links)) {
         const { makeBuildingFolder } = await import("../bench/buildings_synth.mjs");
         const t0 = Date.now();
-        const made = await makeBuildingFolder({ hcall: this.hcall, dir, work: synthDir, n: Number(o.links), storeys: Number(o.storeys) });
+        const made = await makeBuildingFolder({ hcall: this.hcall, dir, work: synthDir, n: Number(o.links), storeys: Number(o.storeys), offset: o.georef ? GEOREF : [0, 0, 0] });
         this.log(`made ${o.links} buildings: ${made.elements} elements, ${made.tris} triangles, ${Date.now() - t0} ms`);
       }
       if ((await this.hcall("action", "new")).status !== 200) throw new Error("new");
@@ -266,7 +274,8 @@ export class Drive {
       await this.waitFor("the links converted", 3600000, async () => { const r = (await this.q("links_panel")).models; return r.length === Number(o.links) && r.every((m) => m.state === "ready"); }, 300);
       for (let k = 0; k < Number(o.links); k++) {
         await this.hcall("action", "manage_links", { op: "unpin", name: `building_${k}.ifc` });
-        await this.hcall("action", "manage_links", { op: "place", name: `building_${k}.ifc`, move_mm: [(W + 14000) * (k % 6), (D + 16000) * Math.floor(k / 6), 0] });
+        const r = await this.hcall("action", "manage_links", { op: "place", name: `building_${k}.ifc`, move_mm: [(W + 14000) * (k % 6), (D + 16000) * Math.floor(k / 6), 0] });
+        if (r.status !== 200) throw new Error(`place building_${k}.ifc: ${r.text.slice(0, 200)}`);
       }
     }
     if (o.project) await this.waitFor("the links ready", 3600000, async () => { const r = (await this.q("links_panel")).models; return r.every((m) => m.state === "ready"); }, 500);
@@ -453,6 +462,7 @@ export class Drive {
         case "camera": { // far: the home camera fitted; close: then 5 times nearer; look X Y Z D: at a world point from D mm (home angles)
           if (a[1] === "far") await this.ev("(window.__bbGl.bench.snap(0, 0), 0)");
           else if (a[1] === "close") await this.ev("(window.__bbGl.bench.snap(0, 0), window.__bbGl.bench.zoom(0.2), window.__bbGl.bench.frame(0, false), 0)");
+          else if (a[1] === "inside") await this.ev("(window.__bbGl.bench.snap(0, 0), window.__bbGl.bench.zoom(0.03), window.__bbGl.bench.frame(0, false), 0)"); // VIS2: the eye near the scene's centre
           else if (a[1] === "look") await this.ev(`(window.__bbGl.bench.look([${a[2]}, ${a[3]}, ${a[4]}], ${a[5]}), window.__bbGl.bench.frame(0, false), 0)`);
           break;
         }
@@ -611,7 +621,7 @@ export class Drive {
     }
     for (const t of this.temps) rmSync(t, { recursive: true, force: true });
     this.temps = [];
-    if (this.o.clean && this.o.links) rmSync(join(this.o.scratchRoot ?? SCRATCH_ROOT, `synth-${this.o.links}-${this.o.storeys}`), { recursive: true, force: true });
+    if (this.o.clean && this.o.links) rmSync(join(this.o.scratchRoot ?? SCRATCH_ROOT, `synth-${this.o.links}-${this.o.storeys}-v2${this.o.georef ? "-geo" : ""}`), { recursive: true, force: true });
   }
 }
 
@@ -693,7 +703,7 @@ function args(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) continue;
     const k = a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["panel", "mcp", "clean", "noProfile", "quiet", "lock"].includes(k)) o[k] = true;
+    if (["panel", "mcp", "clean", "noProfile", "quiet", "lock", "georef"].includes(k)) o[k] = true;
     else o[k] = argv[++i];
   }
   if (o.noProfile) o.profile = false;

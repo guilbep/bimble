@@ -346,15 +346,16 @@ release() {
             ${harden_link[@]+"${harden_link[@]}"} -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
     fi
     # NUI1 (ADR 0084): the native app `bimble` beside bimble-ccore, on Linux. NATIVE_APP=1: required (the
-    # release job); auto (default): built when SDL3 >= 3.4, FreeType and glslc are there, else said and left
+    # release job); auto (default): built when SDL3 >= 3.4 and FreeType are there (NUI3: the shaders' SPIR-V is
+    # committed, no glslc), else said and left
     # out; 0: left out.
     local native=${NATIVE_APP:-auto}
     if [[ $CC_OS == Linux && $native != 0 ]]; then
-        if [[ $native == 1 ]] || { command -v glslc > /dev/null && pkg-config --exists 'sdl3 >= 3.4.0' freetype2 2> /dev/null; }; then
+        if [[ $native == 1 ]] || pkg-config --exists 'sdl3 >= 3.4.0' freetype2 2> /dev/null; then
             step "native app bimble" native/build.sh app
             cp out/app/bimble "$stage/bimble"
         else
-            printf '  %-28s %s\n' "native app bimble" "left out: SDL3 >= 3.4, FreeType or glslc not found (NATIVE_APP=1 requires it)"
+            printf '  %-28s %s\n' "native app bimble" "left out: SDL3 >= 3.4 or FreeType not found (NATIVE_APP=1 requires it)"
         fi
     fi
     local web
@@ -378,6 +379,10 @@ release() {
         cp out/native/deps/imgui/LICENSE.txt "$stage/licences/DearImGui-LICENSE.txt"
         cp out/native/deps/cimgui/LICENSE "$stage/licences/cimgui-LICENSE.txt"
         cp out/native/deps/nanosvg/LICENSE.txt "$stage/licences/nanosvg-LICENSE.txt"
+        # NUI3: the desktop's parts (desktop/install.sh: the menu entry, the icon, .bimble/.bimbleview/.ifc for this user)
+        mkdir -p "$stage/desktop"
+        cp native/linux/ch.bimble.bimble.desktop native/linux/ch.bimble.bimble.xml native/linux/install.sh "$stage/desktop/"
+        for lf in 32 128 256 512; do cp "../packaging/icon-$lf.png" "$stage/desktop/icon-$lf.png"; done
     fi
     local needs="Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed."
     local last=""
@@ -414,7 +419,7 @@ Files:  bimble-ccore, web/ (the lab: keep it next to the program), THIRD-PARTY.t
 Needs:  $needs
 EOF
     if [[ -f $stage/bimble ]]; then # NUI1: one line (the README stays within ten)
-        echo "Native: ./bimble model.bimble   (the native Linux app, preview: needs SDL 3.4+ and a Vulkan driver)" >> "$stage/README.txt"
+        echo "Native: ./bimble model.bimble   (preview: SDL 3.4+, Vulkan); desktop/install.sh: in the menu, opens .bimble .ifc" >> "$stage/README.txt"
     fi
     [[ -z $last ]] || echo "$last" >> "$stage/README.txt"
     # GNU tar: sorted, owner 0. BSD tar (macOS) has neither option; COPYFILE_DISABLE keeps

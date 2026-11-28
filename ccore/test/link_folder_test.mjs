@@ -162,6 +162,13 @@ const rowOf = (n) => rows.find((m) => m.name === n);
 check("the two new ones ready, the outside one a refused row with its reason", rows.length === before4 + 3 && rowOf("e_frame.ifc")?.state === "ready" &&
   rowOf("f_tri.ifc")?.state === "ready" && rowOf("frame2.ifc")?.state === "refused" && /outside/.test(rowOf("frame2.ifc")?.message ?? ""),
   JSON.stringify(rows.map((m) => [m.name, m.state, m.message])));
+// VIS2: the refused row stays refused: the retry of links refused for memory (every 2 s) took it for one and converted it,
+// so the row read "ready" on a slow runner (deterministic now: read after that retry would have run)
+await sleep(2600);
+await a.call("query", "links_panel", "{}"); // (a tick of the host's loop)
+rows = await settle(a);
+check("the row refused for its place stays refused after the memory retry's 2 s (never converted)", rowOf("frame2.ifc")?.state === "refused",
+  JSON.stringify(rows.map((m) => [m.name, m.state])));
 r = await a.call("undo");
 rows = await a.models();
 check("one undo removes what the call added (three rows)", r.status === 200 && rows.length === before4 && !rowOf("e_frame.ifc"), JSON.stringify(rows.map((m) => m.name)));

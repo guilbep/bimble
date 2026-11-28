@@ -132,7 +132,7 @@ export function hizBuilder(gl: WebGL2RenderingContext) {
  *  nearest depth farther than the farthest depth over the blocks its projection covers, or wholly outside the
  *  picture (an element of a batch in view may lie out of it: behind the eye, beside, past the far plane). A box
  *  across the plane of the eye is not hidden. */
-export function boxHidden(p: Pyramid, b: ArrayLike<number>, o: number): boolean {
+export function boxHidden(p: Pyramid, b: ArrayLike<number>, o: number, beyond = false): boolean {
   const m = p.mvp;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity, behind = 0;
   for (let k = 0; k < 8; k++) {
@@ -149,7 +149,11 @@ export function boxHidden(p: Pyramid, b: ArrayLike<number>, o: number): boolean 
   }
   if (behind === 8) return true; // wholly behind the eye
   if (behind > 0 || z0 < -1) return false; // across the eye's plane or the near plane: not decided here
-  if (x1 < -1 || x0 > 1 || y1 < -1 || y0 > 1 || z0 > 1) return true; // wholly beside the picture or past the far plane
+  if (z0 > 1) return true; // past the far plane
+  // VIS2 (`beyond`: the pyramid of a picture of the same camera at another canvas size): what lies beyond that picture may be
+  // in this one: never hidden; what lies within it is tested against it (the same eye and direction: the same rays)
+  if (beyond && (x0 < -1 || x1 > 1 || y0 < -1 || y1 > 1)) return false;
+  if (x1 < -1 || x0 > 1 || y1 < -1 || y0 > 1) return true; // wholly beside the picture
   const zn = (z0 + 1) / 2; // the window depth of the nearest corner (the box's nearest depth is at least this)
   // pixels covered (clamped to the picture), then blocks of the finest level, then the level where they are few
   const px0 = Math.max(0, Math.floor(((x0 + 1) / 2) * p.cw)), px1 = Math.min(p.cw - 1, Math.floor(((x1 + 1) / 2) * p.cw));

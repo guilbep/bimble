@@ -127,6 +127,176 @@ offscreen shot written: 188–258 ms.
 - **Generating the native shell from the Vue components**: no tool reads `.vue` into ImGui; the shared
   data covers what is declarative today.
 
+## Amendment (27 Nov 2026, ticket NUI2): the 3D by tiles, occlusion exact to groups of elements, what the window needs
+
+Decided by Claude on ticket NUI2 under the owner's delegation ("performance is everything"; "every optimisation a
+setting with a good default and an off value"; "60fps is fine"), on measured facts only. Code: `ccore/native/tiles_gpu.c`
+(tile sets, pages, the frame's commands, the passes), `shaders/{face_proxy.vert, hiz0, hizn, ttest, gate, seen}.comp`,
+`loader.c` (a tile's bytes from the mapped cache, the open model's pyramid), `ui/view3d.c` (tile sets per link and for
+the open model), `ui/slog.c` (the session log), `ui/nset.c` (the app's own settings), `ui/compare.c` (`--compare`).
+
+10. **The first window, made robust by construction** (the owner's first launch: Wayland, display scale 2, a tiling
+    compositor; SDL's assertions on the viewport and scissor, one abort). Every size of a frame comes from the swapchain
+    texture acquired at the frame's start (the composed picture, ImGui's display size and framebuffer scale, the 3D
+    targets); a minimised or lost swapchain skips the frame; resize events only log. SDL's assertion handler logs and
+    continues. `--resize-script` reproduces a compositor's sizes offscreen (the window first, the target a frame later,
+    smaller than the last); with the old sizing it raises SDL's own assertions, with this none. `--selftest-window`
+    checks a hidden window (claimed by the GPU, its scale, sizes, present modes) without showing anything.
+11. **A local session log** (`slog.c`, on in a window, off: Settings): versions and build id, GPU, sizes, settings,
+    files and their times, actions, SDL's errors and assertions, a crash's raw stack; `frames.csv` a row a second,
+    `inputs.csv` over 100 ms, `report.txt` every 10 s; the last 20 sessions; `bimble --last-log`; `native/symbolize.sh`
+    with the debug file kept by build id. Nothing leaves the machine. **Copy** writes the report to a file too.
+12. **Tiles are the unit** (`renderer_path=tiles`). A link whose cache holds a section `TILE` is a tile set (its table of
+    contents copied at open); the open model too (its pyramid built by the session after the open, in steps on a
+    loader thread; a view file opened as it is, which the parts path could not draw, now draws). Per frame, per set,
+    one call of the walker (`nv_tiles_walk`: SHELL1's parameter is a one-line change) with `error_px` (1), the moving
+    budget's triangles, the levels of detail (`lod`) and `descend` marks under hidden or selected elements. A tile not
+    loaded is covered by its nearest loaded ancestor's proxy (drawn in pass 2 only: it deviates from the detail by its
+    error and must not hide the tiles it stands for). Tiles are loaded on the loader threads (a proxy's `TPX1` as stored,
+    its u16 positions decoded by the vertex shader; a leaf's `TLF1` merged and instanced as the parts were, mirrored
+    placements' triangles reversed), the visible first, within `link_gpu_mb` (tiles on their way counted; full: the
+    least recently used released; the status bar says when the budget holds parts simplified, one click raises it).
+13. **Pages and buckets, not a draw per tile.** Tiles live in shared pages (merged vertices, indices, shapes' vertices,
+    placements, proxies' positions and their table), one multi-draw per (pass, page, pipeline). Measured on the owner's
+    project: recording thousands of per-tile draws cost 5-45 ms of CPU a frame; with pages, 0.3-1.5 ms (37 draws). Every
+    indirect command still costs about 1 us on this driver (Mesa's multi-draw is emulated): pass 1's runs are joined.
+    Leaves keep f32 positions (16 bytes a vertex) and u32 indices: the 21-bit lattice (8 bytes) is left (decision 36 of
+    ADR 0078): GPU bytes are not the bound on the owner's project with occlusion (the visible tiles only are loaded).
+14. **Occlusion, exact, in two passes on this frame's depth** (`draw_visible`, on): pass 1 draws what was seen last
+    frame; a depth pyramid (the farthest of 4 x 4 pixels, then of 2 x 2, levels side by side) is built from it; every
+    other candidate's box is tested on the GPU (hidden when its nearest point is behind the farthest depth over the
+    texels it covers) and the commands are gated on the GPU, the visible drawn in pass 2 of the same frame; no depth
+    pre-pass, no sorting. **Down to groups of elements** (`occlusion_groups`, on; `occlusion_group`, elements a group):
+    the id buffer gives the elements seen (`seen.comp`, read back); a loaded leaf's elements in groups are drawn in pass 1
+    when one was seen, else tested on the group's box (its elements' boxes; the leaf's elements kept in space order,
+    Morton order of their centres, so that a group is compact). Tiles not loaded and proxies keep the tile's box. Tiles
+    are loaded only when their box is found visible. **Measured where the triangles go** (`BIMBLE_TILES_SURPLUS`):
+    every surplus triangle is in a pass 2 group whose box passed while none of its elements shows, or in a pass 1 group
+    hidden since; smaller groups draw near the need (18 buildings, outside: need 0.68 M, group 1 1.26 M, group 8 3.92 M,
+    group 32 5.15 M) but each group is a command, and a command costs about 1 us of CPU here: group 2 by default (the
+    owner's project's A/B). What is left of the surplus is boxes passing the test while their element is hidden
+    (elements touching a visible facade, slabs spanning a floor): a finer depth pyramid (`hiz_block` 1 or 2 pixels a
+    texel instead of 4) changed nothing (3.91 against 3.92 M); a tighter test (a few points of the element, an oriented
+    box) is the next step, not a finer pyramid.
+15. **The truth test** (`--truth`): each 3D frame drawn without occlusion (and without back-face culling) then as set,
+    the id and depth buffers compared; an element is missing when one of its pixels shows something farther as set.
+    Another element at the same depth winning a pixel is a coplanar tie (the order of the passes decides), counted apart.
+    Synthetic sets and the owner's project: 0 missing with occlusion (tables below and in the report).
+16. **Back faces** (`cull_back`): closed outward elements drawn with back faces culled. The truth test finds elements
+    lost with it (17 synthetic links: 312,010 element-frames over 2,233 frames; the fixture: 35 frames of 1): the flag or
+    its orientation is wrong for some elements. **Off** by default until that is found.
+17. **The section box by clip distances** on the tile path (`section_clip_planes`, on): six clip planes in the vertex
+    stage, the fragment stage without `discard` (what a tile-based GPU prefers); `discard` kept for the A/B.
+18. **Settings, the owner's rule.** The web lab's keys where they exist (`moving_fps`, `moving_proxies`,
+    `link_gpu_mb`; VIS1's `draw_visible`, `still_px`, `cull_back` read from the session when it knows them); the native
+    ones (`renderer_path`, `error_px`, `lod`, `occlusion_groups`, `occlusion_group`, `section_clip_planes`,
+    `session_log`, `bench_skip`) in `<config>/native.json` (the session's settings refuse an unknown key). Each in
+    Settings › Optimisations and the report's `optimisations:` line; `--set key=value` for a run; `--compare` runs a
+    script under several sets.
+
+### Defaults, from the tables (NUI2)
+
+Synthetic tables in `ccore/results/native/nui2.md`; the owner's project's in the ticket's report (private data).
+`renderer_path=tiles`: on the owner's project the tile path's moving and still frames beat the parts path's at p95;
+the parts path draws nothing of a view file opened as it is. `draw_visible` (occlusion) on: it removes about half of
+the triangles there, and the truth test finds 0 element missing on his data (inside and outside cameras) and on
+the synthetic sets. `occlusion_groups` on, `occlusion_group` 2: on the owner's project groups of 2 / 8 / 32 give moving
+p95 17.5 / 17.9 / 18.4 ms and still medians 12.8 / 16.5 / 15.2 ms (the 18 buildings: 14.1 / 13.1 / 13.3 ms moving p95,
+1.1 / 2.5 / 3.7 M triangles). `hiz_block` 4 (1 and 2 measured equal). `still_px` 1: on the owner's project the still
+frame's triangles fall by about a third with it. `error_px` 1: 2 changed the triangles by under 5 % there (the cost is
+the leaves, not the proxies). `moving_fps` 60 (the owner's target) when the settings file does not hold it.
+`cull_back` off (decision 16). `section_clip_planes` on. `frames_in_flight` 2: on the owner's project moving
+16.6/22.4 to 12.0/17.9 ms (median/p95), still 19.0/27.9 to 16.5/25.5 ms; 18 buildings, moving p95 13.4 to 12.4 ms.
+**The owner's 60 fps line** (p95 16.7 ms moving and still, input to frame under 33 ms, 0 missing): with the defaults
+input to frame max 23-27 ms and 0 missing (356 frames, inside and outside) are met; moving p95 17.5 ms and still p95
+24 ms (frames while tiles arrive included) are not yet. A key the user set in his settings file wins (one key, shared with the web lab).
+
+### What is left (NUI2)
+
+The element-level pass entirely on the GPU (a command list built by a compute pass needs an indirect count SDL does
+not offer; today pass 2's groups are one command each). Back-face culling's loss with occlusion (decision 16). The
+21-bit lattice for leaves (8 bytes a vertex instead of 16). The baked occluders after a camera jump (pass 1 is empty
+then: the first frame tests against nothing, exact but slower). The web lab's session log. `moving_fps` 60 and
+`draw_visible` for the native renderer as the core's own defaults (settings.c). The open model's pyramid is rebuilt
+at each open of a view file (4-6 s for the 18 buildings): kept in its cache later.
+
+## Amendment (27 Nov 2026, ticket NUI3): tighter visibility, the scene origin, desktop Linux, CI on lavapipe
+
+Decided by Claude on ticket NUI3 under the owner's delegation ("performance is everything"; decisions on facts measured on
+his data; every optimisation a setting with a good default and an off value). Synthetic tables:
+`ccore/results/native/nui3.md`;
+the owner's project's numbers: the ticket's report (private data). Code: `ccore/native/tiles_gpu.c`, `shaders/ttest.comp`,
+`ui/desktop.c`, `ui/view3d.c`, `ui/app.c`, `ui/drive.c`, `native/build.sh`, `native/linux/`.
+
+19. **What the surplus was.** `BIMBLE_TILES_SURPLUS=2` lists the largest elements drawn but not shown: on the owner's project
+    a few single meshes of hundreds of thousands of triangles whose boxes wrap the building (no box test can hide
+    them), then long or diagonal members (their world boxes loose). **Clusters** (`cluster_tris`, 512; 0 off): a merged
+    element of more triangles
+    is cut at load into clusters of 512 in space order (Morton order of the triangles' centres), each with its own box, test
+    and draw range; the element's sphere still decides `still_px`. **Each element tested by its own box**
+    (`occlusion_test` 2; 0 NUI2's group box, 1 each element's world box): pass 1 draws exactly the elements (clusters) seen
+    last frame; the others are drawn in groups of `occlusion_group` (2), each element tested by its own box, the group's gate
+    shared (a gate is only ever set to 1); mode 2 takes the element's placed box (an oriented box) when its volume is under
+    0.9 of its world box's. Tests are boxes by centre and half axes. **Pieces** (`occlusion_split`, `occlusion_span`,
+    `occlusion_split_px`; 1: off): a box passed and large on screen tested again in up to N^3 pieces: exact (their union is
+    the box), the surplus fell further, but the GPU paid more than it saved on the owner's project: off.
+    **Leaves under their box** (`occlusion_tiles`, on): a loaded leaf whose box was hidden last frame is drawn under that
+    box's test alone (one gate, a few commands, no test an element). The truth test: 0 missing on the owner's project inside
+    and outside and on the synthetic sets with these defaults.
+20. **The scene origin where the triangles are.** A project of links alone took its origin from the first link ready: a small
+    link in a local frame beside links at national coordinates (2,600 km) put every other link at f32 steps of
+    distance / 2^24 (155 mm). The origin is now the ready link's placed origin with the most triangles (else elements) of
+    ready links within 1 km; a heavier group ready later moves it (links re-placed, the camera shifted). `native_geo_test`:
+    the same building at 0 and at 2,600 km beside a local link draws the same picture (0.13 % of pixels differ; 1.7 % with
+    the old origin); Measure 18,300 mm there (MEAS2).
+21. **Desktop Linux.** The system's file dialogs (SDL: the portal, else zenity; failed: the app's own for the session,
+    `system_dialog`); a file dropped opens (Shift: an IFC linked), a folder is linked; the title is the file's name, the app
+    id `ch.bimble.bimble` (Wayland's app_id: a compositor's rules); a mouse's wheel and Ctrl + wheel zoom, a touchpad's two
+    fingers pan (`touchpad_pan`), a pinch zooms; the section box by numbers (`box_panel`); a command palette (Ctrl+K); the
+    UI's clipboard calls logged; `desktop/` in the release archive (the .desktop file, MIME types for .bimble, .bimbleview,
+    .ifc, icons, `install.sh` for the user only). Offscreen checks: `native_app_test` 3f.
+22. **Loading.** Four loader threads (`loaders`; 2 before): on the owner's project complete and the first correct picture
+    after a reset sooner, frame times unchanged within the noise. Exterior first
+    (`shell_mode` priority, the cross-link shell attached to the tiles) orders the fetch; measured no sooner there (the
+    loaders' throughput is the bound), kept (it never removes anything).
+23. **Back faces stay drawn** (`cull_back` off). Not a convention bug (an inverted winding or an unflipped mirror would lose
+    whole elements without occlusion too). Two causes measured: the rasterizer's tie rule on silhouettes (a pixel centre on
+    the edge between a front and a back triangle of a closed mesh belongs to one of them: when it is the back one, culling
+    drops it; an element seen only through such pixels, 8 px or fewer, vanishes: the fixture without occlusion loses 19
+    elements in 7,373 frames, all of 8 px or fewer), and an interaction with the element-level occlusion not yet explained:
+    on the 17 synthetic links culling loses about 100,000 element-frames with it, about 140 (all of 8 px or fewer) with
+    occlusion by tile only or none, about 15,000 when only one of the two passes culls; frames in flight and group sizes
+    change nothing. It did not pay either (the same frame times on the owner's project).
+24. **Still frames** (`occlusion_cold` 1): each test's own answer is read back; in a still frame the elements a leaf's tests
+    found hidden last frame wait under one gate (their own tests or-ed: exact), one command a run instead of one a group,
+    so the CPU's recording and the GPU's indirect commands fall where most elements are hidden; moving frames keep their
+    small groups (the gate shared by everything hidden made moving frames slower). Two levels of the depth pyramid a
+    dispatch (`hiz_pair`, on). Measured and kept off: `seen_step` 2, `still_ramp`, `pace_tiles`, `page_grow` 1.
+25. **CI on lavapipe.** The job's glob missed Mesa 25's `lvp_icd.json` (no driver: "No supported SDL_GPU backend"); with it,
+    lavapipe 25.2 crashed in `ttest.comp` reading the pyramid as a read-only storage image (a null function in its JIT code,
+    found by `BIMBLE_SKIP_CS`); read by a sampler it runs (an ubuntu:24.04 container: `native_app_test` passes). The SPIR-V
+    is committed (`native/shaders/gen`, checked by `native/build.sh shaders --check`): the release job on Ubuntu 22.04 needs
+    no glslc.
+
+### The 60 fps line (NUI3)
+
+On the owner's project (numbers in the ticket's report): input to frame under 33 ms and 0 missing are met; moving p95 is at
+the line, within the noise of a shared machine; **still p95 is not met**. The slow still frames are the full-detail frames
+after a zoom while tiles keep arriving (millions of triangles: several ms of CPU recording, tens of thousands of indirect
+commands, and the GPU's drawing) and a GPU spike when a 202 MB page is made. Where an empty frame's GPU time goes, by
+leaving passes out (`bench_skip`, `BIMBLE_SKIP_CS`): the depth pyramid, the tests and gates, the elements seen and the
+edges, each between a quarter and one third of it. Measured and not kept: pacing frames for tiles to the GPU
+(`pace_tiles`, worse), one frame in flight (worse), groups of 4 or 8 (the same), 51 MB pages (`page_grow`, the same),
+the elements seen from one pixel in four (`seen_step` 2, the same), a still frame ramping from the moving budget
+(`still_ramp`, the same). Kept: the cold elements of a still frame under one gate (decision 24): still p95 lower by
+several ms there, still above the line.
+
+### What is left (NUI3)
+
+The still frame: fewer commands (an element-level list built on the GPU needs an indirect count), the whole depth pyramid
+in one dispatch. Back-face culling with the element-level occlusion (decision 23: a loss not yet explained). Baked
+occluders after a camera jump (not built). The section box at national coordinates (MEAS3's `base`). A session in a real window on the owner's machine (Wayland, Hyprland): the portal dialog, the clipboard, pinch events.
+
 ## Revisit when
 
 - The tile pyramid (TILE1) lands: the parts become tiles (Decision 4).

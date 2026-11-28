@@ -282,7 +282,10 @@ async function main() {
   const showV = await eyeClick(true);
   check(`show the link again (its eye clicked): ${showV.line}`, showV.ok);
   const showMs = showV.pageOk ? 0 : -1;
-  await calm();
+  // (VIS2, a requirement made explicit: the FINAL picture after showing the link again equals the one before the hide. Since
+  // the complete picture after an input's feedback frame arrives as slices, the page is waited for until idle (no frame for
+  // 500 ms, at most 10 s), not only three quick animation frames)
+  await evalJs(`new Promise((res) => { const g = window.__bbGl, t0 = performance.now(); let n = g.frames, since = performance.now(); const f = () => { if (g.frames !== n) n = g.frames, since = performance.now(); if (performance.now() - since >= 500 || performance.now() - t0 > 10000) res(0); else requestAnimationFrame(f); }; requestAnimationFrame(f); })`);
   const after = await evalJs("Array.from(window.__bbGl.bench.read().rgba)");
   let diff = 0;
   for (let i = 0; i < before.length; i += 4) if (Math.max(Math.abs(before[i] - after[i]), Math.abs(before[i + 1] - after[i + 1]), Math.abs(before[i + 2] - after[i + 2])) > 40) diff++;

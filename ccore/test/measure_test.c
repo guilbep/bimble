@@ -214,7 +214,7 @@ static void heavy(const char *dir) {
     arena_free(&a);
     check_true("MEAS1: every placed point and edge end lies in its element's box", in);
     cc_mlayer L = {&sc, {0, 0, 0}, NULL, (const float(*)[6])bx.box, &bx}; /* 3D2: through the box tree */
-    cc_mview v = {&L, 1, NULL, NULL, sc.origin, 0.0f, NULL, 0, NULL}; /* WAVE1B: no work plane */
+    cc_mview v = {&L, 1, NULL, NULL, sc.origin, 0.0f, NULL, 0, NULL, NULL}; /* WAVE1B: no work plane */
     /* One pointer ray along a row of 27 spheres (y 7500, z 400, from x -5000), the ray_tol 24 mm
      * beside: the first sphere's face. */
     const double *o = sc.origin;
@@ -309,6 +309,32 @@ int main(int argc, char **argv) {
     check_true("scene built", sc != NULL);
     double org[3];
     memcpy(org, sc->origin, sizeof org);
+    { /* MEAS2: the frame as a layer moved 2,600 km (a link at national coordinates): P1.00's foot corner, its edge
+       * and face, each the one at 0 moved by the offset within 0.001 mm (before MEAS2: the offset and the snap in
+       * f32 in the shown scene's frame, 256 mm steps there: the corner missed) */
+        static const double FAR3[3] = {2600000000.0, 1200000000.0, 500000.0};
+        static const double AIM[3][3] = {{-10150, -149, 1}, {-10150, -148, 1000}, {-10150, 0, 1000}};
+        double worst = 0;
+        int kinds = 1;
+        for (int i = 0; i < 3; i++) {
+            cc_msnap at[2];
+            for (int f = 0; f < 2; f++) {
+                cc_mlayer L = {sc, {f ? FAR3[0] : 0, f ? FAR3[1] : 0, f ? FAR3[2] : 0}, NULL, NULL, NULL};
+                cc_mview v = {&L, 1, NULL, NULL, sc->origin, 0.0f, NULL, 0, NULL, NULL};
+                double o[3] = {AIM[i][0] - org[0] + L.off[0], AIM[i][1] - org[1] + L.off[1], AIM[i][2] - org[2] + L.off[2]};
+                double ray[6] = {o[0], o[1], o[2], 1, 0, 0}, tol[6] = {o[0], o[1] + 24, o[2], 1, 0, 0};
+                memset(&at[f], 0, sizeof at[f]);
+                kinds &= cc_measure_snap(&v, ray, tol, 12.0, 0, &at[f]) == 1;
+            }
+            kinds &= at[0].kind == (i == 0 ? CC_MSNAP_VERTEX : i == 1 ? CC_MSNAP_EDGE : CC_MSNAP_FACE) && at[1].kind == at[0].kind;
+            for (int k = 0; k < 3; k++) {
+                double d = ((double)at[1].p[k] + at[1].org[k] - FAR3[k]) - ((double)at[0].p[k] + at[0].org[k]);
+                if (!(d <= worst && -d <= worst)) worst = d < 0 ? -d : d;
+            }
+        }
+        if (!kinds || worst > 0.001) printf("  a layer 2,600 km away: kinds %d, %.6g mm from the one at 0\n", kinds, worst);
+        check_true("MEAS2: a layer 2,600 km away: corner, edge, face as at 0 within 0.001 mm", kinds && worst <= 0.001);
+    }
     uint64_t rev0 = s->rev;
     size_t undo0 = s->hist.nundo;
 

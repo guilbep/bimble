@@ -158,8 +158,15 @@ export function perfFrame(moving: boolean, t0: number, sync: WebGL2RenderingCont
   else done();
 }
 
+// VIS2: the web session log (sessionlog.ts) hears every frame and every input answered
+const frameListeners = new Set<(f: { at: number; ms: number; moving: boolean; tris: number; draws: number }) => void>();
+const inputListeners = new Set<(i: PerfInput) => void>();
+export const onPerfFrame = (f: (fr: { at: number; ms: number; moving: boolean; tris: number; draws: number }) => void): void => { frameListeners.add(f); };
+export const onPerfInput = (f: (i: PerfInput) => void): void => { inputListeners.add(f); };
+
 function push(f: PerfFrame): void {
   frames.push(f);
+  for (const l of frameListeners) l(f);
   compareRec?.push(f); // GPU2
   if (frames.length > RING) frames.splice(0, frames.length - RING);
   if (recording) recording.frames.push(f), endRecord();
@@ -177,6 +184,7 @@ function push(f: PerfFrame): void {
       inputs.sort((a, b) => b.ms - a.ms);
       if (inputs.length > 10) inputs.length = 10;
       recording?.inputs.push(i);
+      for (const l of inputListeners) l(i);
     }
   }
 }

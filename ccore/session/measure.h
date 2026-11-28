@@ -42,8 +42,11 @@ enum { CC_MSNAP_VERTEX, CC_MSNAP_EDGE, CC_MSNAP_FACE }; /* measure.rs SnapKind *
 #define CC_MEASURE_MAX 10000      /* measurements kept: a budget (a click past it answers 400) */
 
 typedef struct { /* measure.rs Snap */
-    float p[3];    /* scene coordinates: mm relative to `org` (f32, as Rust) */
-    double org[3]; /* the shown scene's origin when it was taken (world mm) */
+    float p[3];    /* mm relative to `org` (f32, as Rust, but in a local frame: small numbers) */
+    double org[3]; /* MEAS2: world mm of the frame `p` is in: the origin of the scene it was taken on (the shown
+                    * scene's, or a linked one's: its origin, f64), so that p stays small at national
+                    * coordinates; p + org (f64) is the world point. A point on no scene (the work plane) far
+                    * from the shown scene's origin: the origin moved to it (1 m steps). */
     int kind;      /* CC_MSNAP_* */
     int has_n;
     float n[3]; /* the face normal (unit), for a point on a face */
@@ -94,7 +97,9 @@ typedef struct {
 /* A scene the pointer can hit: the shown one, or a linked model's. */
 typedef struct {
     const cc_scene *sc;
-    float off[3];       /* added to its points (a link: its origin - the shown scene's, f32 as Rust) */
+    double off[3];      /* added to its points (a link: its origin - the shown scene's). MEAS2: f64 (Rust: f32,
+                         * 256 mm steps at 2,600 km); its points are measured in its own frame, the ray moved
+                         * into it in f64. Not finite: the layer is not hit. */
     const cc_vis *vis;  /* its hidden elements (visibility.h; reveal shows them); NULL: none */
     const float (*box)[6]; /* MEAS1: its elements' boxes (cc_mboxes of sc); NULL: made for the call */
     const cc_mboxes *index; /* 3D2: the cc_mboxes `box` belongs to (its tree); NULL: every box tested */
@@ -112,6 +117,7 @@ typedef struct {
     int brute;      /* MEAS1, tests: every visible element meshed and tested in order (the old way) */
     const double *plane; /* WAVE1B: the work plane (origin, unit normal; scene coordinates): a ray that
                           * meets no element ends on it (a face point); NULL: none */
+    const double *clip_base; /* MEAS3: the box's frame (visibility.h cc_vis.base): min, max are relative to it; NULL: 0 */
 } cc_mview;
 
 void cc_measure_free(cc_measure *m);  /* the measurements; the state is zeroed */

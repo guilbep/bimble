@@ -504,7 +504,11 @@ jobs:
       - name: ccore/ci/run.sh native (lavapipe)
         run: |
           export PKG_CONFIG_PATH=$HOME/.local/sdl3/lib/pkgconfig LD_LIBRARY_PATH=$HOME/.local/sdl3/lib
-          export VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json | head -n 1)
+          # NUI3: Mesa 25 names it lvp_icd.json (no architecture): the old glob found none, VK_DRIVER_FILES was empty and
+          # the loader had no driver ("No supported SDL_GPU backend found!", native_app failing in 0.1 s)
+          export VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          [[ -n $VK_DRIVER_FILES ]] || { echo "::error::no lavapipe ICD in /usr/share/vulkan/icd.d"; ls /usr/share/vulkan/icd.d; exit 1; }
+          echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           ccore/ci/run.sh native
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
@@ -561,9 +565,11 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match ccore/VERSION $v: the tag must be ccore-v$v"
             exit 1
           fi
-      # NUI1: the Linux archives hold the native app (glslc, FreeType and SDL 3 from source: ci/sdl3.sh)
+      # NUI1: the Linux archives hold the native app (FreeType, SDL 3 from source: ci/sdl3.sh). NUI3: no glslc here
+      # (Ubuntu 22.04 has no package for it): the shaders' SPIR-V is committed (native/shaders/gen, checked by
+      # `native/build.sh shaders --check` in ccore-native, where glslc is)
       - if: runner.os == 'Linux'
-        run: scripts/apt-install.sh clang cmake glslc libfreetype-dev pkg-config libvulkan-dev libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libegl1-mesa-dev libdrm-dev libgbm-dev
+        run: scripts/apt-install.sh clang cmake libfreetype-dev pkg-config libvulkan-dev libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libegl1-mesa-dev libdrm-dev libgbm-dev
         timeout-minutes: 12
       - name: SDL 3 (cache, Linux)
         if: runner.os == 'Linux'

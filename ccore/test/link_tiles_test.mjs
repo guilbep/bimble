@@ -19,7 +19,7 @@
 //   - tiles.ts on damaged bytes: 2,000 damaged tables and answers throw or read, never hang.
 // Fails on the code before TILE1: no section TILE, no tiles route (404 / the link's mesh).
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -151,6 +151,86 @@ check("levels of detail off (lod=0, a setting's off value): every leaf even from
 check("the walker's frame: far, the coarsest tile alone; close, every leaf", g.status === 200 && far.tiles === 1 && far.links[0].proxies + far.links[0].leaves === 1 &&
   close.triangles === close.detail && close.leaf_bytes > 0, `bounds ${bounds.map(Math.round)}; far ${far.triangles} tris ${far.bytes} B; close ${close.triangles} tris ${close.bytes} B`);
 
+// ---- SHELL1 (ADR 0078 amendment 8): the exterior shell baked after the pyramid ----
+{
+  check("SHELL1: the shell baked (header flag 1), its elements flagged 4, its tiles 16", toc && (toc.bake & 1) === 1 && [...toc.elFlags].some((f) => f & 4) &&
+    [...toc.flags].some((f) => f & 16), `bake ${toc?.bake}`);
+  g = await A.get("link=0&name=a.ifc&tiles=shell");
+  const dv = new DataView(g.bytes.buffer, g.bytes.byteOffset, g.bytes.byteLength);
+  const extEl = toc ? [...toc.elFlags].filter((f) => f & 4).length : -1;
+  const okTab = g.status === 200 && text(g.bytes.subarray(0, 4)) === "TSH1" && dv.getUint32(8, true) === toc.ntiles && g.bytes.length === 32 + 32 * toc.ntiles &&
+    dv.getUint32(12, true) === 64 && dv.getUint32(16, true) === 1024 && dv.getUint32(24, true) === extEl;
+  check("SHELL1: the shell table (tiles=shell): a record a tile, 64 views at 1024, its exterior elements counted", okTab, `${g.status} ${g.bytes.length} bytes, ${extEl} exterior`);
+  const ids = [...Array(toc.ntiles).keys()].join(",");
+  const rs = await A.get(`link=0&name=a.ifc&tile=${ids}&shell=1`), rr = await A.get(`link=0&name=a.ifc&tile=${ids}&shell=2`), rf = await A.get(`link=0&name=a.ifc&tile=${ids}`);
+  let okLeaves = rs.status === 200 && rr.status === 200 && rf.status === 200, nExt = 0;
+  const extRows = new Set();
+  for (let i = 0; i < toc.nlist; i++) if (toc.elFlags[i] & 4) extRows.add(toc.list[i]);
+  const whole = new Map(), parts = new Map();
+  for (const a of T.parseTils(rf.bytes)) if (a.kind === 1) whole.set(a.id, [...T.decodeLeaf(a.bytes).rows].sort().join());
+  for (const a of T.parseTils(rs.bytes)) {
+    if (a.kind === 1) for (const row of T.decodeLeaf(a.bytes).rows) extRows.has(row) ? nExt++ : (okLeaves = false), parts.set(a.id, [...(parts.get(a.id) ?? []), row]);
+    if ((toc.flags[a.id] & 2) && a.kind !== 2) okLeaves = false; // a proxy comes whole first (the tile's own)
+  }
+  for (const a of T.parseTils(rr.bytes)) {
+    if (a.kind === 2) okLeaves = false;
+    if (a.kind === 1) for (const row of T.decodeLeaf(a.bytes).rows) parts.set(a.id, [...(parts.get(a.id) ?? []), row]);
+  }
+  for (const [id, rows] of whole) if ([...(parts.get(id) ?? [])].sort().join() !== rows) okLeaves = false;
+  check("SHELL1: priority's first fetch (&shell=1) holds the leaves' exterior elements and the proxies whole; what follows (&shell=2) the rest: together each leaf",
+    okLeaves && nExt === extRows.size, `${nExt} of ${extRows.size}`);
+  const at = (d) => `eye=${c[0] - d * size},${c[1] - d * size},${c[2] + d * size / 2}&at=${c.join(",")}&fov=60&w=1600&h=1000&err=1`;
+  const fr = async (q) => JSON.parse(text((await A.get(`tiles_frame=1&${q}`)).bytes));
+  const ins = `eye=${c.join(",")}&at=${c[0] + 1000},${c[1]},${c[2]}&fov=60&w=1600&h=1000&err=1`; // inside the link's box
+  const off = await fr(`${at(0.7)}&shell=off`), prio = await fr(`${at(0.7)}`), on = await fr(`${at(0.7)}&shell=filter`), inside = await fr(`${ins}&shell=filter`);
+  check("SHELL1: the walker's modes: priority (the default) the same triangles as off; the experimental filter outside the box the outside walk, inside the full walk",
+    !off.links[0].shell && !prio.links[0].shell && prio.triangles === off.triangles && prio.tiles === off.tiles && on.links[0].shell && on.triangles <= off.triangles &&
+    !inside.links[0].shell && inside.triangles > 0 && inside.triangles === (await fr(`${ins}&shell=off`)).triangles,
+    `off ${off.triangles}, priority ${prio.triangles}, filter ${on.triangles}, inside ${inside.triangles}`);
+  const truth = await fr(`${at(0.7)}&shell=priority&truth=1`);
+  check("SHELL1: the truth render in priority: elements seen, none missing; the first picture's triangles, priority no more than plain for an all-exterior link",
+    truth.seen > 0 && truth.missing === 0 && truth.first_picture.elements > 0 && truth.first_picture.priority <= truth.first_picture.plain,
+    `${truth.seen} seen, ${truth.missing} missing, first picture ${JSON.stringify(truth.first_picture)}`);
+  // invalidation: a section box cutting the link, a hidden exterior element
+  await A.call("tool", "box_set", JSON.stringify({ min: [bounds[0], bounds[1], bounds[2]], max: [c[0], c[1], bounds[5]], on: true }));
+  const cut = await fr(`${at(0.7)}&shell=filter`);
+  await A.call("tool", "box_set", JSON.stringify({ min: [bounds[0], bounds[1], bounds[2]], max: [c[0], c[1], bounds[5]], on: false }));
+  const uncut = await fr(`${at(0.7)}&shell=filter`);
+  check("SHELL1: a section box through the link makes its shell invalid (the full walk); switched off, the shell again", !cut.links[0].shell && cut.links[0].shell_invalid && uncut.links[0].shell,
+    `cut ${cut.triangles}, uncut ${uncut.triangles}`);
+  // the frame's columns stand at its edges: exterior; hiding the class (a view rule) hides exterior elements
+  await A.call("action", "view_rule", JSON.stringify({ op: "hide", class: "IfcColumn" }));
+  const hid = await fr(`${at(0.7)}&shell=filter`);
+  await A.call("action", "show_all");
+  const shown = await fr(`${at(0.7)}&shell=filter`);
+  check("SHELL1: hiding exterior elements (the columns) makes the shell invalid; shown again, valid", !hid.links[0].shell && hid.links[0].shell_invalid && shown.links[0].shell,
+    `hidden: ${hid.triangles}, shown: ${shown.triangles}`);
+  // the cross-link pass: a second link (the same frame, moved 3 m up: the first's slabs and columns hide some of it)
+  copyFileSync(join(CCORE, "golden/ifc/frame.ifc"), join(tmp, "b2.ifc"));
+  await A.call("action", "link_model", JSON.stringify({ path: join(tmp, "b2.ifc") }));
+  await until(async () => { const m = await A.row("b2.ifc"); return m?.state === "ready" && !m.indexing; }, 60000);
+  await A.call("action", "manage_links", JSON.stringify({ op: "unpin", name: "b2.ifc" }));
+  await A.call("action", "manage_links", JSON.stringify({ op: "place", name: "b2.ifc", move_mm: [0, 0, 3000] }));
+  let xg = await A.get("link=0&name=a.ifc&tiles=xshell");
+  const first = xg.status;
+  for (let i = 0; i < 400 && xg.status === 202; i++) await sleep(50), xg = await A.get("link=0&name=a.ifc&tiles=xshell");
+  const xb = await A.get("link=1&name=b2.ifc&tiles=xshell");
+  const files = (() => { try { return readdirSync(join(tmp, "cache", "links")).filter((f) => f.startsWith("xshell-")); } catch { return []; } })();
+  check("SHELL1: the cross-link pass (two links): 202 computing, then a mark a list entry per link, kept in the cache folder",
+    (first === 202 || first === 200) && xg.status === 200 && xg.bytes.length === 72 && xb.status === 200 && xb.bytes.length === 72 && [...xg.bytes, ...xb.bytes].every((v) => v <= 1) && files.length === 1,
+    `${first} -> ${xg.status}, ${xg.bytes.length} + ${xb.bytes.length} bytes, ${[...xg.bytes, ...xb.bytes].filter((v) => v).length} exterior, files ${files.length}`);
+  const xf = await fr(`${at(0.7)}&shell=filter`), xo = await fr(`${at(0.7)}&shell=filter&xshell=0`);
+  check("SHELL1: the frame walks with the cross-link marks (xshell=0: the links' own shells)", xf.links.every((l) => l.xshell) && xo.links.every((l) => !l.xshell) &&
+    xf.triangles <= xo.triangles && xf.xshell.state === 2, `cross ${xf.triangles}, own ${xo.triangles}`);
+  await A.call("action", "manage_links", JSON.stringify({ op: "place", name: "b2.ifc", move_mm: [0, 0, 6000] }));
+  const moved = (await A.get("link=0&name=a.ifc&tiles=xshell")).status;
+  const own = await fr(`${at(0.7)}&shell=filter`);
+  check("SHELL1: a link moved: the pass again (its marks not served meanwhile; the frame on the links' own shells)", (moved === 202 || moved === 200) && own.xshell.state >= 1, `${moved} ${own.xshell.state}`);
+  await A.call("action", "manage_links", JSON.stringify({ op: "remove", name: "b2.ifc" }));
+  const rep = readFileSync(join(tmp, "a.ifc.log.txt"), "utf8");
+  check("SHELL1: the report says the shell", /exterior shell \(in TILE, for views from outside\): \d+ of 72 elements/.test(rep), rep.match(/exterior shell[^\n]*/)?.[0]);
+}
+
 // ---- a format 6 cache: re-indexed, not read again ----
 A.h.kill("SIGKILL");
 const c6 = Buffer.from(readFileSync(cacheOf("a.ifc")));
@@ -168,9 +248,9 @@ g = await B.get("link=0&tiles=toc");
 check("then re-indexed: format 8, complete, its TILE served", c7.includes("bimble-link-cache 8") && /"complete":true/.test(c7) && g.status === 200);
 
 // ---- the bake settings (BIMBLE_TILES): recorded in SRCE; a cache baked otherwise is indexed again, not converted ----
-check("its source record names the bake settings", /"tiles":"leaf=40000 proxy=16384 root=512 res=64 occ=64"/.test(c7), c7.match(/"tiles":"[^"]*"/)?.[0] ?? "none");
+check("its source record names the bake settings", /"tiles":"leaf=40000 proxy=16384 root=512 res=64 occ=64 shell=64x1024 shell_d=100"/.test(c7), c7.match(/"tiles":"[^"]*"/)?.[0] ?? "none");
 B.h.kill("SIGKILL");
-const D = await startHost("link_tiles_test_4", { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_TILES: "leaf=20000 occ=0" });
+const D = await startHost("link_tiles_test_4", { BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_TILES: "leaf=20000 occ=0 shell=0" });
 await D.call("action", "new");
 await D.call("action", "link_model", JSON.stringify({ path: join(tmp, "a.ifc") }));
 r = await until(async () => { const m = await D.row("a.ifc"); return m?.state === "ready" ? m : null; });
@@ -181,7 +261,8 @@ let dt = null;
 try { dt = T.parseToc(g.bytes, 72); } catch { /* below */ }
 const c8 = text(readFileSync(cacheOf("a.ifc")));
 check("other bake settings: the cache indexed again from itself (not converted), occluders off, recorded", reidx && dt && dt.nocc === 0 && dt.leafTarget === 20000 &&
-  /"tiles":"leaf=20000 proxy=16384 root=512 res=64 occ=0"/.test(c8), `${dt?.nocc} occluders, leaf target ${dt?.leafTarget}`);
+  /"tiles":"leaf=20000 proxy=16384 root=512 res=64 occ=0 shell=0"/.test(c8), `${dt?.nocc} occluders, leaf target ${dt?.leafTarget}`);
+check("SHELL1: shell=0 (the setting's off value): no shell baked (bake flag 0, no table: 204)", dt && dt.bake === 0 && (await D.get("link=0&tiles=shell")).status === 204);
 D.h.kill("SIGKILL");
 
 // ---- a small link read as it is (no cache): its pyramid built at once ----

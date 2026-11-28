@@ -9,6 +9,7 @@
 #include "guid.h"
 #include "json_r.h"
 #include "links.h"
+#include "visibility.h" /* MEAS3: cc_vis_far */
 #include "m1links.h"
 #include "session.h"
 #include "view_effective.h"
@@ -369,6 +370,18 @@ int cc_paper_src_get(cc_session *s, const cc_scene *sc, const cc_view *view, cc_
         arena_init(&o->arena, 0);
         src->made_scene = 1;
         memcpy(o->origin, sc->origin, sizeof o->origin);
+        if (!sc->nelements) /* MEAS3 (ADR 0087): links alone, the first drawn one far away: the drawing in its frame */
+            for (size_t i = 0; i < s->nlinks; i++) {
+                cc_link *k = &s->links[i];
+                if (!link_drawn(k, view)) continue;
+                const cc_scene *ls = cc_link_rows(k);
+                double O[3];
+                memcpy(O, ls->origin, sizeof O);
+                if (k->pwant || k->placed) O[0] = k->pc * ls->origin[0] - k->ps * ls->origin[1] + k->pt[0], O[1] = k->ps * ls->origin[0] + k->pc * ls->origin[1] + k->pt[1], O[2] = ls->origin[2] + k->pt[2];
+                double d[3] = {O[0] - sc->origin[0], O[1] - sc->origin[1], O[2] - sc->origin[2]};
+                if (cc_vis_far(d)) memcpy(o->origin, O, sizeof O);
+                break;
+            }
         o->shapes = sc->shapes, o->nshapes = sc->nshapes; /* borrowed: the host elements' shared shapes */
         size_t cap = 0;
         if (grow(&o->arena, (void **)&o->elements, &cap, sc->nelements + 1, sizeof *o->elements)) goto oom;
@@ -393,7 +406,7 @@ int cc_paper_src_get(cc_session *s, const cc_scene *sc, const cc_view *view, cc_
             memcpy(O, ls->origin, sizeof O);
             if (boxes && k->pwant) O[0] = k->pc * ls->origin[0] - k->ps * ls->origin[1] + k->pt[0], O[1] = k->ps * ls->origin[0] + k->pc * ls->origin[1] + k->pt[1], O[2] = ls->origin[2] + k->pt[2];
             float d[3];
-            for (int j = 0; j < 3; j++) d[j] = (float)(O[j] - sc->origin[j]); /* lib.rs:1499 offset */
+            for (int j = 0; j < 3; j++) d[j] = (float)(O[j] - o->origin[j]); /* lib.rs:1499 offset; MEAS3: the drawing's frame */
             size_t base = m->nelements;
             if (elements_of(&b, k->kind, k->ifc, k->vf, k->model, ls)) goto oom;
             if (boxes ? scene_add_link_boxes(o, &cap, k, view, d, base) : scene_add_link(o, &cap, k, view, ls, d, base)) goto oom;

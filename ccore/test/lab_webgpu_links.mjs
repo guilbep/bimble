@@ -247,8 +247,11 @@ async function main() {
     if (st.name === "plain") {
       const far = s.linkProxies?.find((x) => x.name === `link_${N - 1}.ifc`);
       check("plain, WebGPU: the far link drawn from its proxies", far && far.drawnTris > 0, JSON.stringify(far));
-      check("WebGPU holds every loaded link, WebGL2's buffers for them emptied", s.gpuSplit && s.gpuSplit.taken === s.gpuSplit.models && s.gpuSplit.models === N + 1,
-        `${JSON.stringify(s.gpuSplit)} (WebGPU ${(s.gpuSplit?.webgpu / 1e6).toFixed(2)} MB, WebGL2 left ${(s.gpuSplit?.webgl / 1e6).toFixed(2)} MB)`);
+      // (VIS2: at least the open model and the N - 1 near links: the far link, drawn from its proxies, gives its detail back
+      // when its proxies arrive after the open (ADR 0078 decision 30), which SHELL1's longer bake made the usual order;
+      // the check wanted all N + 1 loaded and failed from SHELL1's merge on, the page right)
+      check("WebGPU holds every loaded link (the open model and the near links at least), WebGL2's buffers for them emptied", s.gpuSplit && s.gpuSplit.taken === s.gpuSplit.models && s.gpuSplit.models >= N && s.gpuSplit.webgl < 65536,
+        `${JSON.stringify(s.gpuSplit)} (WebGPU ${(s.gpuSplit?.webgpu / 1e6).toFixed(2)} MB, WebGL2 left ${(s.gpuSplit?.webgl / 1e6).toFixed(2)} MB); proxies arrived late for ${s.linkProxiesLate ?? 0} links`);
     }
     if (st.off) { await B(st.off); await sleep(900); }
   }

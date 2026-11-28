@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { stateRev } from "../bimble"; // VIS2
 import { computed, ref, watch } from "vue";
 import { groupDigits } from "../format"; // QTY1
 import { t } from "../i18n";
@@ -18,7 +19,8 @@ import { linksOpen } from "./links";
 // ---- M1LINKS ---- the linked models' tree and notes (shell/LinksTree.vue); the plans from links marked
 import LinksTree from "./LinksTree.vue";
 import { linkLevels } from "../bimble";
-const fromLinks = computed(() => { void state.value.rev; void state.value.links; return new Set(linkLevels().map((l) => l.view)); });
+const levelsKey = computed(() => `${state.value.rev}|${state.value.links ?? 0}`); // (VIS2: not every state change: a selection asked again)
+const fromLinks = computed(() => { void levelsKey.value; return new Set(linkLevels().map((l) => l.view)); });
 // ---- end M1LINKS ----
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
@@ -32,7 +34,7 @@ const open = ref(true);
 // ---- SEC1 ---- Rust's "New view…" menu (viewing.rs:806-840): a plan and a ceiling plan per level,
 // a section looking each way, a 3D view; a view's menu: Duplicate, Delete (Reset to default for a
 // changed default view). Each is one verb, one undo step; the new view opens.
-const canNewView = computed(() => { void state.value.rev; return has("views") && editableModel(); });
+const canNewView = computed(() => { void stateRev.value; return has("views") && editableModel(); });
 const menuOpen = ref(false);
 const viewMenu = ref<string | null>(null);
 const navError = ref<string | null>(null);
@@ -53,17 +55,17 @@ const isDefault = (v: ViewSummary) => v.auto_name != null;
 // ---- end SEC1 ----
 // Model-derived counts: re-read when the model changes (rev) or once open_views arrives.
 const sheetCount = computed(() => {
-  void state.value.rev; void openViews.value;
+  void stateRev.value; void openViews.value;
   try { return sheets().length; } catch { return null; }
 });
-const scheduleCount = computed(() => { void state.value.rev; void openViews.value; return scheduleList().length; });
+const scheduleCount = computed(() => { void stateRev.value; void openViews.value; return scheduleList().length; });
 // ---- QTY1: the saved quantity lists, each opens the Quantities page on it (control navigator-page) ----
 const schedOpen = ref(false);
-const scheduleNames = computed(() => { void state.value.rev; void openViews.value; return (scheduleList() as { name: string }[]).map((d) => d.name); });
+const scheduleNames = computed(() => { void stateRev.value; void openViews.value; return (scheduleList() as { name: string }[]).map((d) => d.name); });
 function openSchedule(name: string): void { pickedSchedule.value = name; send({ do: "showPage", page: "quantities" }); }
 // ---- end QTY1 ----
-const linkCount = computed(() => { void state.value.rev; void openViews.value; return links().length; });
-const measureCount = computed(() => { void state.value.rev; void openViews.value; return measurements().length; });
+const linkCount = computed(() => { void stateRev.value; void openViews.value; return links().length; });
+const measureCount = computed(() => { void stateRev.value; void openViews.value; return measurements().length; });
 // Measurements: a read-only list from Rust, shown when its group opens.
 // ---- LNK1 ---- the Links group: shell/LinksPanel.vue (Manage links… opens it: shell/links.ts)
 const linkOpen = linksOpen;
@@ -73,12 +75,12 @@ const measureOpen = ref(false);
 const rpOpen = ref(false);
 const rpRows = computed(() => refPlanes.value?.planes ?? []);
 // ---- end WAVE1B ----
-const measureRows = computed(() => { void state.value.rev; return measureOpen.value ? measurements() : []; });
+const measureRows = computed(() => { void stateRev.value; return measureOpen.value ? measurements() : []; });
 // ---- FIXUI ---- a file open read only (an IFC, a .bimbleview) has no model storeys: its tree comes
 // from the scene the reader drew (query scene_tree / scene_elements, ccore/session/links.h).
 type SceneTree = { storeys: { name: string; count: number; classes: { class: string; count: number }[] }[]; total: number };
 const sceneTree = computed<SceneTree | null>(() => {
-  void state.value.rev;
+  void stateRev.value;
   if (state.value.file === null || state.value.editable !== false) return null;
   try { return query<SceneTree>("scene_tree"); } catch { return null; }
 });

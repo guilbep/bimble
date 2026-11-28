@@ -273,6 +273,20 @@ static void settings_dialog(App *a) {
         igDummy(V2(1, 6 * s));
         optimisations_ui(a);
         igDummy(V2(1, 6 * s));
+        { /* the local session log (native.json session_log; on by default, off: nothing written) */
+            bool on = nset_num("session_log", 1) != 0;
+            if (igCheckbox(T(a, "native.sessionLog"), &on)) nset_set("session_log", on ? "true" : "false", 0);
+            igTextWrapped("%s", T(a, "native.sessionLogText"));
+            if (slog_dir()[0]) {
+                igPushFont(a->f_mono, 12), igTextWrapped("%s", slog_dir()), igPopFont();
+                if (text_button(a, "logdir", T(a, "native.openFolder"), 0, 0)) {
+                    char u[1200];
+                    snprintf(u, sizeof u, "file://%s", slog_dir());
+                    if (!SDL_OpenURL(u)) snprintf(a->notice, sizeof a->notice, "%s", SDL_GetError()), a->notice_t = app_now();
+                }
+            } else igTextColored(col4(C_STONE), "%s", T(a, "native.sessionLogOff"));
+        }
+        igDummy(V2(1, 6 * s));
         igTextColored(col4(C_STONE), "%s", T(a, "settings.you"));
         static char name[CC_SETTINGS_LINE_BYTES], email[CC_SETTINGS_LINE_BYTES];
         static int loaded;
@@ -298,21 +312,103 @@ static void settings_dialog(App *a) {
  *                   every link's detail cell drawn)
  *   link_gpu_mb     the links' detail on the GPU (default 768 MB; 65536: off, no limit): past it the other
  *                   links keep their proxies
+ *   shell_mode      SHELL1: priority (default): the tiles seen from outside fetched and drawn first (tiles.h
+ *                   CC_TILES_SEL_PRIORITY); off: plain order; filter: experimental, can hide visible elements (NUI2)
  *   edges           (the View tab's Edges, the session's `edges` action, not a setting) screen-space edges
  *                   (default on; off: faces only)
  * The cull pass (frustum and screen-size cut of every element on the GPU) is how this renderer draws: no
  * setting, always on (the lab's gpu_cull is WebGPU's culling of copies, not this). ---- */
 #define LINK_GPU_OFF 65536
+/* NUI2: an optimisation's value: the session's settings when they know the key (the web lab's: VIS1 adds draw_visible,
+ * still_px, cull_back), else the app's own (native.json, a run's --set), else the default */
+/* the user's settings file as written (a key VIS1 shares is in it only once set: its absence means the core's default,
+ * which may be the page's, not this renderer's; then the native default holds) */
+static Json raw_settings;
+static void raw_settings_load(App *a) {
+    json_free(&raw_settings);
+    const char *f = a->settings.root ? js(a->settings.root, "file") : "";
+    FILE *fp = *f ? fopen(f, "rb") : NULL;
+    if (!fp) return;
+    char buf[65536];
+    size_t n = fread(buf, 1, sizeof buf - 1, fp);
+    fclose(fp);
+    json_parse(&raw_settings, buf, n);
+}
+static double opt_num(App *a, const char *key, double dflt) {
+    const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL, *x = v ? jr_get(v, key) : NULL;
+    if (x && raw_settings.root && raw_settings.root->type == JR_OBJ && !jr_get(raw_settings.root, key) &&
+        (!strcmp(key, "draw_visible") || !strcmp(key, "still_px") || !strcmp(key, "cull_back") || !strcmp(key, "moving_fps")))
+        x = NULL; /* never set by the user: the native default (the A/B tables), not the page's */
+    double run = nset_num(key, NAN);
+    const char *nv = nset_get(key);
+    if (!isnan(run) && nv) return run; /* a run's --set or the app's own file first: the A/B runs set any key */
+    if (x && x->type == JR_NUM) return x->num;
+    if (x && x->type == JR_BOOL) return x->b;
+    return dflt;
+}
+static int opt_str_is(const char *key, const char *val, int dflt) {
+    const char *v = nset_get(key);
+    if (!v) return dflt;
+    size_t n = strlen(val);
+    return v[0] == '"' && !strncmp(v + 1, val, n) && v[n + 1] == '"';
+}
+/* the defaults (ADR 0084 amendment, NUI2: from the A/B tables) */
+#define D_ERROR_PX 1.0
+#define D_STILL_PX 1.0
+#define D_CULL_BACK 0
+#define D_OCCLUSION 1
+#define D_TILES 1
 void optimisations_apply(App *a) {
     const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL;
-    a->moving_fps = (int)jnum(v, "moving_fps", 30);
+    raw_settings_load(a);
+    a->moving_fps = (int)opt_num(a, "moving_fps", 60); /* NUI2: the owner's target (60 fps) when he never set it */
     a->adaptive = a->moving_fps > 0;
     a->hlod = !v || !jr_get(v, "moving_proxies") || jb(v, "moving_proxies");
+    if (nset_get("moving_proxies")) a->hlod = nset_num("moving_proxies", 1) != 0;
     nv_render_set_hlod(a->r, a->hlod, 0);
     const char *g = getenv("BIMBLE_LINK_GPU_MB"); /* a run's own */
-    double mb = g && *g ? atof(g) : jnum(v, "link_gpu_mb", 768);
+    double mb = g && *g ? atof(g) : opt_num(a, "link_gpu_mb", 768);
     a->gpu_budget = mb >= LINK_GPU_OFF ? 0 : (uint64_t)(mb * 1048576.0);
+    int tiles = opt_str_is("renderer_path", "tiles", D_TILES); /* parts until the tiles win everywhere (the ticket's rule) */
+    if (tiles != a->use_tiles) a->use_tiles = tiles, a->links_synced = -1;
+    a->topts.occlusion = opt_num(a, "draw_visible", D_OCCLUSION) != 0;
+    a->topts.error_px = opt_num(a, "error_px", D_ERROR_PX);
+    a->topts.lod = opt_num(a, "lod", 1) != 0 && a->topts.error_px > 0;
+    a->topts.cull_back = opt_num(a, "cull_back", D_CULL_BACK) != 0;
+    { /* NUI3: SHELL1's shell_mode (the core's key): priority (default) and filter order the walk exterior first (the native
+       * renderer has no filter: occlusion decides what is seen), off the plain order */
+        const JrVal *sm = v ? jr_get(v, "shell_mode") : NULL;
+        a->topts.priority = !(sm && sm->type == JR_STR && !strcmp(sm->s, "off"));
+        if (nset_get("shell_mode")) a->topts.priority = !opt_str_is("shell_mode", "off", 0);
+    }
+    a->topts.groups = opt_num(a, "occlusion_groups", 1) != 0;
+    nv_tiles_group_size((uint32_t)opt_num(a, "occlusion_group", 2));
+    nv_tiles_cluster_tris((uint32_t)opt_num(a, "cluster_tris", 512));
+    nv_tiles_tile_gate(opt_num(a, "occlusion_tiles", 1) != 0);
+    nv_tiles_cold((int)opt_num(a, "occlusion_cold", 1));
+    nv_tiles_hiz_pair(opt_num(a, "hiz_pair", 1) != 0);
+    nv_tiles_seen_step((uint32_t)opt_num(a, "seen_step", 1));
+    nv_tiles_page_grow((uint32_t)opt_num(a, "page_grow", 3));
+    nv_tiles_test_mode((int)opt_num(a, "occlusion_test", 2), (int)opt_num(a, "occlusion_split", 1), (int)opt_num(a, "occlusion_span", 4), (int)opt_num(a, "occlusion_split_px", 64));
+    if (a->r) nv_tiles_hiz_block(a->r, (uint32_t)opt_num(a, "hiz_block", 4));
+    a->topts.clip_planes = opt_num(a, "section_clip_planes", 1) != 0;
+    a->topts.budget = a->gpu_budget;
+    a->still_cut = (float)opt_num(a, "still_px", D_STILL_PX);
+    if (a->still_cut < 0) a->still_cut = 0;
     a->dirty = 1;
+}
+
+/* a setting changed from the panel: the session's when it knows the key, else the app's own */
+static void set_opt(App *a, const char *key, const char *json) {
+    char b[200];
+    snprintf(b, sizeof b, "{\"%s\":%s}", key, json);
+    Buf o;
+    buf_init(&o);
+    int st = core_call(a, "action", "set_settings", b, &o);
+    buf_free(&o);
+    if (st == CC_OK) core_query(a, "settings", NULL, &a->settings);
+    nset_set(key, json, 0);
+    optimisations_apply(a);
 }
 
 void optimisations_ui(App *a) {
@@ -321,14 +417,14 @@ void optimisations_ui(App *a) {
     const JrVal *v = a->settings.root ? jr_get(a->settings.root, "values") : NULL;
     igPushFont(a->f_semi, 14), igTextUnformatted(T(a, "native.optimisations"), NULL), igPopFont();
     igTextColored(col4(C_STONE), "%s", T(a, "settings.moving"));
-    int fps = (int)jnum(v, "moving_fps", 30);
+    int fps = a->moving_fps;
     static const int FPS[] = {0, 15, 30, 60};
     char lab[64], nb[16];
     for (int k = 0; k < 4; k++) {
         snprintf(nb, sizeof nb, "%d", FPS[k]);
         const char *l = FPS[k] ? Tf(a, lab, sizeof lab, "settings.moving.fps", "{fps}", nb) : T(a, "settings.moving.0");
         if (k) igSameLine(0, 10 * s);
-        if (igRadioButton_Bool(l, fps == FPS[k])) set_setting(a, "moving_fps", nb), optimisations_apply(a);
+        if (igRadioButton_Bool(l, fps == FPS[k])) set_setting(a, "moving_fps", nb), nset_set("moving_fps", nb, 0), optimisations_apply(a);
     }
     bool px = !v || !jr_get(v, "moving_proxies") || jb(v, "moving_proxies");
     if (igCheckbox(T(a, "settings.proxies"), &px)) set_setting(a, "moving_proxies", px ? "true" : "false"), optimisations_apply(a);
@@ -349,18 +445,57 @@ void optimisations_ui(App *a) {
             for (int i = 0; i < a->nlinks; i++) if (a->links_s[i].detail_state == 4) a->links_s[i].detail_state = 0;
         }
     }
+    { /* SHELL1: the exterior shell's walk */
+        const JrVal *sm = v ? jr_get(v, "shell_mode") : NULL;
+        const char *cur = sm && sm->type == JR_STR ? sm->s : "priority";
+        static const char *const SM[] = {"priority", "off", "filter"}, *const SMK[] = {"native.shellMode.priority", "native.shellMode.off", "native.shellMode.filter"};
+        igTextColored(col4(C_STONE), "%s", T(a, "native.shellMode"));
+        for (int k = 0; k < 3; k++) {
+            char q[16];
+            snprintf(q, sizeof q, "\"%s\"", SM[k]);
+            if (k) igSameLine(0, 10 * s);
+            if (igRadioButton_Bool(T(a, SMK[k]), !strcmp(cur, SM[k]))) set_setting(a, "shell_mode", q), optimisations_apply(a);
+        }
+    }
     bool ed = nv_render_edges(a->r) != NV_EDGES_NONE;
     if (igCheckbox(T(a, "native.edgesScreen"), &ed)) tool_run_action(a, "edges");
+    /* NUI2: the tile path's */
+    bool tl = a->use_tiles;
+    if (igCheckbox(T(a, "native.opt.tiles"), &tl)) set_opt(a, "renderer_path", tl ? "\"tiles\"" : "\"parts\"");
+    if (a->use_tiles) {
+        bool oc = a->topts.occlusion, lod = a->topts.lod, cb = a->topts.cull_back;
+        if (igCheckbox(T(a, "native.opt.occlusion"), &oc)) set_opt(a, "draw_visible", oc ? "true" : "false");
+        bool gr = a->topts.groups;
+        if (oc && igCheckbox(T(a, "native.opt.groups"), &gr)) set_opt(a, "occlusion_groups", gr ? "true" : "false");
+        if (igCheckbox(T(a, "native.opt.lod"), &lod)) set_opt(a, "lod", lod ? "true" : "false");
+        if (igCheckbox(T(a, "native.opt.cullBack"), &cb)) set_opt(a, "cull_back", cb ? "true" : "false");
+        float e = (float)a->topts.error_px, m = a->still_cut;
+        igSetNextItemWidth(200 * s);
+        igSliderFloat(T(a, "native.opt.errorPx"), &e, 0, 8, "%.1f px", 0);
+        if (igIsItemDeactivatedAfterEdit()) { char q[32]; snprintf(q, sizeof q, "%.2f", e); set_opt(a, "error_px", q); }
+        igSetNextItemWidth(200 * s);
+        igSliderFloat(T(a, "native.opt.stillPx"), &m, 0, 8, "%.1f px", 0);
+        if (igIsItemDeactivatedAfterEdit()) { char q[32]; snprintf(q, sizeof q, "%.2f", m); set_opt(a, "still_px", q); }
+    }
     igTextColored(col4(C_STONE), "%s", T(a, "native.cullAlways"));
 }
 
 static void optimisations_report(App *a, Buf *b) {
-    char t[400];
-    snprintf(t, sizeof t, "optimisations: moving budget (moving_fps) %s; far parts as proxies (moving_proxies) %s; links' GPU budget (link_gpu_mb) %s; edges (action edges) %s; cull pass on the GPU (no setting) on\n",
+    char t[900];
+    const JrVal *sv = a->settings.root ? jr_get(a->settings.root, "values") : NULL, *sm = sv ? jr_get(sv, "shell_mode") : NULL;
+    buf_puts(b, "optimisations: exterior shell (shell_mode) "), buf_puts(b, sm && sm->type == JR_STR ? sm->s : "priority"), buf_puts(b, "; "); /* SHELL1 */
+    snprintf(t, sizeof t, "moving budget (moving_fps) %s; far parts as proxies (moving_proxies) %s; links' GPU budget (link_gpu_mb) %s; edges (action edges) %s; cull pass on the GPU (no setting) on\n",
              a->moving_fps > 0 ? (snprintf(t + 300, 40, "%d fps", a->moving_fps), t + 300) : "off", a->hlod ? "on" : "off",
              a->gpu_budget ? (snprintf(t + 340, 40, "%llu MB", (unsigned long long)(a->gpu_budget >> 20)), t + 340) : "off (no limit)",
              nv_render_edges(a->r) == NV_EDGES_SCREEN ? "screen" : nv_render_edges(a->r) == NV_EDGES_LINES ? "lines" : "off");
+    t[strcspn(t, "\n")] = 0;
+    size_t k = strlen(t);
+    if (a->use_tiles)
+        snprintf(t + k, sizeof t - k, "; tiles (renderer_path) on: occlusion (draw_visible) %s%s, error (error_px) %.2g px, levels of detail (lod) %s, small elements (still_px) %.2g px, back faces (cull_back) %s\n",
+                 a->topts.occlusion ? "on" : "off", a->topts.occlusion ? (a->topts.groups ? " to groups of 8 elements (occlusion_groups)" : " by tile (occlusion_groups off)") : "", a->topts.error_px, a->topts.lod ? "on" : "off", a->still_cut, a->topts.cull_back ? "culled" : "drawn");
+    else snprintf(t + k, sizeof t - k, "; tiles (renderer_path) off: parts\n");
     buf_puts(b, t);
+    snprintf(a->settings_line, sizeof a->settings_line, "%.*s", (int)strcspn(t + 15, "\n"), t + 15);
 }
 
 /* ---- Performance (perf.ts perfReport's shape) ---- */
@@ -421,6 +556,10 @@ void perf_report(App *a, Buf *b) {
         snprintf(t, sizeof t, "links (%d):\n", a->nlinks), buf_puts(b, t);
         for (int k = 0; k < a->nlinks; k++) {
             const SLink *L = &a->links_s[k];
+            if (L->ts && nv_tileset_toc(L->ts)->ntiles)
+                snprintf(t, sizeof t, "  link %d: %u elements, %llu triangles, %s, detail loaded by tiles (%u of %u tiles on the GPU, %.1f MB)\n", k + 1, L->nelem,
+                         (unsigned long long)L->tris, L->visible ? "shown" : "hidden", nv_tileset_resident(L->ts), nv_tileset_toc(L->ts)->ntiles, nv_tileset_gpu_bytes(L->ts) / 1048576.0);
+            else
             snprintf(t, sizeof t, "  link %d: %u elements, %llu triangles, %s%s (%.1f MB)\n", k + 1, L->nelem, (unsigned long long)L->tris, L->visible ? "shown" : "hidden",
                      L->detail ? ", detail loaded" : L->proxy ? ", proxies only" : "", (L->detail ? nv_part_gpu_bytes(L->detail) : L->proxy ? nv_part_gpu_bytes(L->proxy) : 0) / 1048576.0);
             buf_puts(b, t);
@@ -438,26 +577,90 @@ void perf_report(App *a, Buf *b) {
     }
 }
 
+/* Copy: the report to the clipboard, checked by reading it back, and ALWAYS to a file too (the session log's folder),
+ * its path in the notice; a failure says why (SDL's error). */
+void perf_copy(App *a) {
+    Buf b;
+    buf_init(&b);
+    perf_report(a, &b);
+    int lines = 0;
+    for (size_t k = 0; k < b.len; k++) lines += b.p[k] == '\n';
+    char n[16], t[256], path[1200] = "";
+    snprintf(n, sizeof n, "%d", lines);
+    int saved = slog_save_report(a, path, sizeof path) == 0;
+    int ok = SDL_SetClipboardText(buf_cstr(&b));
+    char why[256] = "";
+    if (!ok) snprintf(why, sizeof why, "%s", SDL_GetError());
+    else {
+        char *back = SDL_GetClipboardText(); /* what the clipboard holds now (this process serves it) */
+        if (!back || strcmp(back, buf_cstr(&b))) ok = 0, snprintf(why, sizeof why, "the clipboard did not keep it (%s)", SDL_GetError());
+        SDL_free(back);
+    }
+    if (ok) snprintf(a->notice, sizeof a->notice, "%s", Tf(a, t, sizeof t, "perf.copied", "{n}", n));
+    else snprintf(a->notice, sizeof a->notice, "%s: %s", T(a, "perf.copyFailed"), why[0] ? why : "?");
+    if (saved) {
+        size_t k = strlen(a->notice);
+        snprintf(a->notice + k, sizeof a->notice - k, " %s %s", T(a, "native.savedTo"), path);
+        snprintf(a->notice_path, sizeof a->notice_path, "%s", path);
+    }
+    slog("Copy report: clipboard %s%s%s; file %s", ok ? "ok" : "failed: ", ok ? "" : why, "", saved ? path : "not written");
+    a->notice_t = app_now();
+    buf_free(&b);
+}
+
+/* Save report…: the system's save dialog (a portal on Wayland; its answer arrives on another thread) */
+static char save_text_path[1200];
+static SDL_AtomicInt save_done;
+static char *save_text;
+static void SDLCALL save_cb(void *ud, const char *const *files, int filter) {
+    (void)ud, (void)filter;
+    if (files && files[0] && save_text) {
+        FILE *f = fopen(files[0], "w");
+        int ok = f && fputs(save_text, f) >= 0;
+        if (f) ok = fclose(f) == 0 && ok;
+        snprintf(save_text_path, sizeof save_text_path, "%s%s", ok ? "" : "!", files[0]);
+    } else snprintf(save_text_path, sizeof save_text_path, "%s", files ? "" : "!");
+    SDL_SetAtomicInt(&save_done, 1);
+}
+void perf_save_as(App *a) {
+    Buf b;
+    buf_init(&b);
+    perf_report(a, &b);
+    free(save_text);
+    save_text = strdup(buf_cstr(&b));
+    buf_free(&b);
+    const char *docs = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS), *home = getenv("HOME"); /* the session's folder, else Documents, never the home's root */
+    char def[1300];
+    if (slog_dir()[0]) snprintf(def, sizeof def, "%s/bimble-performance-report.txt", slog_dir());
+    else if (docs) snprintf(def, sizeof def, "%sbimble-performance-report.txt", docs);
+    else snprintf(def, sizeof def, "%s/bimble-performance-report.txt", home ? home : ".");
+    static const SDL_DialogFileFilter flt[] = {{"Text", "txt"}};
+    SDL_SetAtomicInt(&save_done, 0);
+    SDL_ShowSaveFileDialog(save_cb, NULL, a->win, flt, 1, def);
+}
+static void perf_save_poll(App *a) {
+    if (!SDL_GetAtomicInt(&save_done)) return;
+    SDL_SetAtomicInt(&save_done, 0);
+    if (!save_text_path[0]) return; /* cancelled */
+    if (save_text_path[0] == '!') snprintf(a->notice, sizeof a->notice, "%s %s", T(a, "native.saveFailed"), save_text_path[1] ? save_text_path + 1 : SDL_GetError());
+    else snprintf(a->notice, sizeof a->notice, "%s %s", T(a, "native.savedTo"), save_text_path);
+    slog("Save report: %s", a->notice);
+    a->notice_t = app_now();
+}
+
 static void perf_dialog(App *a) {
+    perf_save_poll(a);
     bool open = true;
     float s = a->scale;
     modal_begin(a, T(a, "perf.title"), 620, 560, &open);
     static char shown[8192];
     if (a->rec_until && app_now() >= a->rec_until) a->rec_until = 0, a->rec_done = 1;
-    if (text_button(a, "copy", T(a, "perf.copy"), 1, 0)) {
-        Buf b;
-        buf_init(&b);
-        perf_report(a, &b);
-        int lines = 0;
-        for (size_t k = 0; k < b.len; k++) lines += b.p[k] == '\n';
-        char n[16], t[128];
-        snprintf(n, sizeof n, "%d", lines);
-        snprintf(shown, sizeof shown, "%s", buf_cstr(&b));
-        if (SDL_SetClipboardText(buf_cstr(&b))) snprintf(a->notice, sizeof a->notice, "%s", Tf(a, t, sizeof t, "perf.copied", "{n}", n));
-        else snprintf(a->notice, sizeof a->notice, "%s", T(a, "perf.copyFailed"));
-        a->notice_t = app_now();
-        buf_free(&b);
+    if (text_button(a, "copy", T(a, "perf.copy"), 1, 0)) { /* on the click itself, the main thread (Wayland wants the input's serial) */
+        perf_copy(a);
+        snprintf(shown, sizeof shown, "%s", a->notice);
     }
+    igSameLine(0, 8 * s);
+    if (text_button(a, "save", T(a, "native.saveReport"), 0, 0)) perf_save_as(a);
     igSameLine(0, 8 * s);
     if (text_button(a, "rec", a->rec_until ? T(a, "perf.recording") : T(a, "perf.record"), 0, a->rec_until != 0) && !a->rec_until) {
         a->rec_until = app_now() + 10000, a->rec_done = 0, a->rec_seconds = 10;
