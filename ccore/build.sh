@@ -288,7 +288,7 @@ release() {
     [[ $CC_OS == Windows ]] && os=windows osname=Windows # WIN2: MSYS2 CLANG64, a .zip
     local name="bimble-ccore-$CC_VER-$arch-$os"
     local stage="$R/stage/$name" obj="$R/obj"
-    rm -rf "$R/stage" "$obj" "$R/$name.tar.gz" "$R/$name.zip"
+    rm -rf "$R/stage" "$obj" "$R/$name.tar.gz" "$R/$name.zip" "$R"/bimble-*-macos-*.dmg "$R"/bimble-*-macos-*.dSYM.zip
     mkdir -p "$stage" "$obj"
     local flags=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function -pthread
         "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"} ${archf[@]+"${archf[@]}"}
@@ -357,6 +357,15 @@ release() {
         else
             printf '  %-28s %s\n' "native app bimble" "left out: SDL3 >= 3.4 or FreeType not found (NATIVE_APP=1 requires it)"
         fi
+    fi
+    # MACAPP (ADR 0088): on macOS the native app is its own disk image beside the archive, bimble-<v>-macos-<arch>.dmg
+    # (bimble.app, signed ad hoc), and its .dSYM.zip. NATIVE_APP=1 only (the release job): SDL 3 and FreeType static
+    # from native/macos/deps.sh's prefix (PKG_CONFIG_PATH); a Homebrew SDL would put a dylib outside the bundle.
+    if [[ $CC_OS == Darwin && $native == 1 ]]; then
+        step "native app bimble (macOS)" native/build.sh app
+        step "bimble.app, .dmg" native/macos/bundle.sh
+        cp "out/macapp/bimble-$CC_VER-macos-$arch.dmg" "out/macapp/bimble-$CC_VER-macos-$arch.dSYM.zip" "$R/"
+        printf '  %-28s %s, %d bytes\n' "disk image" "$R/bimble-$CC_VER-macos-$arch.dmg" "$(wc -c < "$R/bimble-$CC_VER-macos-$arch.dmg")"
     fi
     local web
     web=$(cd "$stage" && pwd)/web

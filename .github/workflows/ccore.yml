@@ -461,8 +461,8 @@ jobs:
   # NUI1 (ADR 0084): the native app `bimble`, built and driven offscreen (ccore/ci/run.sh native) on a
   # software Vulkan device (Mesa's lavapipe): correct, not fast; the input -> frame rule of
   # test/lib/input_time.mjs (the app's own time strict, the GPU's reported). NOT a required check yet
-  # (main's branch protection does not name it). macOS and Windows are not built: each needs the shaders
-  # as MSL / DXIL (SDL_shadercross from the SPIR-V) and SDL 3 there; macOS also a signed .app.
+  # (main's branch protection does not name it). macOS: its own workflow, macapp.yml (MACAPP, ADR 0088: the MSL is
+  # committed beside the SPIR-V), and the release's macOS rows make its .dmg. Windows is not built yet (DXIL).
   ccore-native:
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -607,6 +607,54 @@ jobs:
           CXX: clang++
           CMAKE_GENERATOR: Ninja
         run: JOBS=4 ccore/deps.sh
+      # MACAPP (ADR 0088): the macOS rows also make the native app's disk image, bimble-<v>-macos-<arch>.dmg (ccore/build.sh
+      # release with NATIVE_APP=1): SDL 3, brotli and FreeType static from native/macos/deps.sh (cached as in macapp.yml)
+      - name: SDL 3, brotli, FreeType static (cache, macOS)
+        if: runner.os == 'macOS'
+        id: macdeps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
+        with:
+          path: ~/.local/macdeps
+          key: macdeps-${{ matrix.os }}-${{ matrix.mac_arch }}-${{ hashFiles('ccore/ci/sdl3.sh', 'ccore/native/macos/deps.sh') }}
+      - if: runner.os == 'macOS'
+        run: |
+          command -v pkg-config > /dev/null || brew install pkgconf
+          [[ "${{ steps.macdeps.outputs.cache-hit }}" == true ]] || ccore/native/macos/deps.sh ~/.local/macdeps
+          echo "PKG_CONFIG_PATH=$HOME/.local/macdeps/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "NATIVE_APP=1" >> "$GITHUB_ENV"
+      # Developer ID and notarisation, later (unsigned to start: Pierre, 28 Nov 2026). Skipped while the secrets do not
+      # exist: MACOS_CERT_P12 (the Developer ID Application certificate and key, .p12 in base64), MACOS_CERT_PASSWORD,
+      # MACOS_SIGN_IDENTITY ("Developer ID Application: <name> (<team id>)"), and for notarytool an App Store Connect API
+      # key: NOTARY_KEY_P8 (the .p8 text), NOTARY_KEY_ID, NOTARY_ISSUER. With them, native/macos/bundle.sh signs with the
+      # hardened runtime and staples the notarisation ticket (SIGN_IDENTITY, NOTARIZE=1).
+      - name: Developer ID (skipped without the secrets)
+        if: runner.os == 'macOS'
+        id: devid
+        env:
+          P12: ${{ secrets.MACOS_CERT_P12 }}
+        run: |
+          if [[ -n "$P12" ]]; then echo "have=1" >> "$GITHUB_OUTPUT"; else echo "skipped: no MACOS_CERT_P12 secret: the image is signed ad hoc"; fi
+      - name: Developer ID keychain and notarisation key
+        if: steps.devid.outputs.have == '1'
+        env:
+          P12: ${{ secrets.MACOS_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: |
+          kc=$RUNNER_TEMP/sign.keychain-db kp=$(uuidgen)
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kp" "$kc" && security set-keychain-settings -lut 3600 "$kc" && security unlock-keychain -p "$kp" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign && rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kp" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          if [[ -n "$NOTARY_KEY_P8" ]]; then
+            printf '%s\n' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary.p8"
+            { echo "NOTARIZE=1"; echo "NOTARY_KEY=$RUNNER_TEMP/notary.p8"; echo "NOTARY_KEY_ID=$NOTARY_KEY_ID"; echo "NOTARY_ISSUER=$NOTARY_ISSUER"; } >> "$GITHUB_ENV"
+          fi
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -624,12 +672,19 @@ jobs:
             export RELEASE_ARCH=x86_64
           fi
           node ccore/test/release_test.mjs
+      - name: test/macapp_test.mjs (the disk image)
+        if: runner.os == 'macOS'
+        env:
+          MACAPP_ARCH: ${{ matrix.mac_arch }}
+        run: node ccore/test/macapp_test.mjs ccore/out/release/bimble-$(cat ccore/VERSION)-macos-${{ matrix.mac_arch }}.dmg
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-release-${{ matrix.name }}
           path: |
             ccore/out/release/*.tar.gz
             ccore/out/release/*.zip
+            ccore/out/release/*.dmg
+            ccore/out/release/*.dSYM.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -653,7 +708,8 @@ jobs:
       - name: SHA256SUMS and the Homebrew formula
         run: |
           # WIN2: the Windows .zip when its build passed (formula.sh reads only the .tar.gz lines)
-          (cd dist && sha256sum *.tar.gz $(ls *.zip 2> /dev/null) > SHA256SUMS && cat SHA256SUMS)
+          # MACAPP: the native app's disk images (and their .dSYM.zip) beside the archives
+          (cd dist && sha256sum *.tar.gz $(ls *.zip *.dmg 2> /dev/null) > SHA256SUMS && cat SHA256SUMS)
           ccore/ci/formula.sh "${GITHUB_REF_NAME#ccore-v}" dist/SHA256SUMS > bimble-ccore.rb
           cat bimble-ccore.rb
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
@@ -670,8 +726,8 @@ jobs:
           v=${GITHUB_REF_NAME#ccore-v}
           if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease --title "bimble-ccore $v (preview)" \
-              --notes "The C core of Bimble with its lab, for Linux (x86_64, aarch64) and macOS (arm64, x86_64; 11 or newer, signed ad hoc). Unpack, then run \`./bimble-ccore open model.ifc\`: the lab opens in your browser. See README.txt in the archive."
+              --notes "The C core of Bimble with its lab, for Linux (x86_64, aarch64) and macOS (arm64, x86_64; 11 or newer, signed ad hoc). Unpack, then run \`./bimble-ccore open model.ifc\`: the lab opens in your browser. See README.txt in the archive. The native app for macOS: bimble-$v-macos-arm64.dmg (Apple Silicon) or -x86_64.dmg (Intel; checked on CI only), drag bimble.app to Applications. It is signed ad hoc, not notarised: on macOS 15 and newer open it once, then System Settings > Privacy & Security > Open Anyway (Apple: https://support.apple.com/en-us/102445); on 11 to 14 right-click > Open; or once in Terminal: xattr -dr com.apple.quarantine /Applications/bimble.app. README.txt in the image."
           fi
           # No --clobber (FIXDOC): an asset already there fails the job; a published archive is never
           # replaced in place. To redo a release, delete its assets (or the release) by hand first.
-          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz $(ls dist/*.zip 2> /dev/null) dist/SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz $(ls dist/*.zip dist/*.dmg 2> /dev/null) dist/SHA256SUMS
