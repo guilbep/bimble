@@ -44,9 +44,9 @@ the conditions of each number are listed under the list.
   (Ctrl N: the browser keeps it). The Rust answers were dumped from a development build that
   reports `bimble 0.18.1`, not from v0.19.0.
   6 controls still shown are not served by the C core; the report lists them.
-- **Size** [3]: 89,936 lines of C; the viewer wasm 643,158 bytes (300,060 gzip, 64.3 % of
+- **Size** [3]: 89,938 lines of C; the viewer wasm 643,158 bytes (300,060 gzip, 64.3 % of
   its 1,000,000-byte limit), the editor wasm 1,406,120 bytes (576,427 gzip), the native program
-  3,608,016 bytes (stripped), the Linux aarch64 release archive 5,892,605 bytes.
+  3,608,016 bytes (stripped), the Linux aarch64 release archive 5,892,227 bytes.
   That archive was built on the dev machine with a stale `web/ccore/` copy inside (2,098,769 bytes
   before compression) that the CI archive does not have.
 - **Speed** [4]: Lighthouse performance (desktop / mobile, median of 3 runs): 80 / 75 for the
