@@ -4811,7 +4811,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     let fillStep = false;
     pollFence(); // VIS1 (P0-a)
     if (wholeNext && !dirty && performance.now() >= wholeAt) wholeNext = false, lastCamChangeAt = -Infinity, stillDue = 0, fill = null, fillEdges = false, dirty = true; // VIS1: after a feedback frame
-    hiz?.poll(); // VIS1: the last picture's pyramid, when the GPU has it
+    // VIS1: the last picture's pyramid, when the GPU has it. VIS2: not while a later frame is in flight (its fence pending): the
+    // read-back's getBufferSubData waited for the GPU behind that frame (170 to 300 ms after a whole frame on the owner's project)
+    if (!frameFence) hiz?.poll();
     if (!dirty && fill === null && !fillEdges && !drag && performance.now() - lastInputAt > 300) warmHists(); // VIS2
     if (!dirty && stillDue && !drag && performance.now() >= stillDue && performance.now() - lastInputAt >= motionWin()) {
       stillDue = 0;
