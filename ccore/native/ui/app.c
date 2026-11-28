@@ -27,7 +27,15 @@
 #include "host.h"
 #include "links.h"
 #include "settings_file.h"
+#ifdef __APPLE__
+#include "mac.h"
+#endif
 
+#ifdef __APPLE__
+#define NV_KMOD_ADD (SDL_KMOD_CTRL | SDL_KMOD_GUI) /* MACAPP: Cmd-click adds to the selection, as Ctrl-click */
+#else
+#define NV_KMOD_ADD SDL_KMOD_CTRL
+#endif
 #define BIMBLE_SDL_MIN_MAJOR 3
 #define BIMBLE_SDL_MIN_MINOR 4 /* the GPU API (3.2) and SDL_SavePNG (3.4) */
 
@@ -35,6 +43,9 @@ double app_now(void) { return nv_now_ms(); }
 static double sdl_base; /* app_now() - SDL ticks: an event's own time on our clock */
 
 uint64_t app_rss(uint64_t *peak) {
+#ifdef __APPLE__
+    return mac_rss(peak); /* MACAPP: no /proc on macOS */
+#endif
     FILE *f = fopen("/proc/self/status", "r");
     char line[256];
     uint64_t rss = 0;
@@ -108,7 +119,7 @@ static void view_input(App *a, const SDL_Event *ev, int ui_wants_mouse) {
         if (a->drag == 1 && !a->drag_moved) {
             input_start(a, ev, a->measure_on ? "measure click" : "pick");
             if (a->measure_on) tool_measure_input(a, ev->button.x, ev->button.y, 1);
-            else app_pick_at(a, ev->button.x, ev->button.y), a->pick_add = (SDL_GetModState() & SDL_KMOD_CTRL) != 0 || a->drive_ctrl, a->drive_ctrl = 0;
+            else app_pick_at(a, ev->button.x, ev->button.y), a->pick_add = (SDL_GetModState() & NV_KMOD_ADD) != 0 || a->drive_ctrl, a->drive_ctrl = 0;
             a->dirty = 1;
         } else if (a->drag == 3 && !a->drag_moved) { /* a right click: the context menu (the element under it picked first) */
             input_start(a, ev, "context menu");
@@ -679,6 +690,9 @@ static int config_dir(char *buf, size_t n, const char *given) {
     if (given && *given) return snprintf(buf, n, "%s", given) > 0;
     const char *e = getenv("BIMBLE_CONFIG_DIR");
     if (e && *e) return snprintf(buf, n, "%s", e) > 0;
+#ifdef __APPLE__
+    return mac_library(buf, n, "Application Support/Bimble"); /* MACAPP: bimble-ccore's own (host/main.c cc_host_config_dir) */
+#endif
     const char *x = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
     if (x && *x) return snprintf(buf, n, "%s/bimble", x) > 0;
     if (home && *home) return snprintf(buf, n, "%s/.config/bimble", home) > 0;
@@ -732,7 +746,11 @@ static void usage(void) {
 static void no_gpu(const char *what, const char *file) {
     fprintf(stderr,
             "bimble: %s: %s\n"
+#ifdef __APPLE__
+            "bimble: the native app needs SDL %d.%d or newer with a Metal device (macOS 11 or newer).\n"
+#else
             "bimble: the native app needs SDL %d.%d or newer with a Vulkan device (Mesa, or the GPU's own driver).\n"
+#endif
             "bimble: the web lab runs without it: bimble-ccore open%s%s\n",
             what, SDL_GetError(), BIMBLE_SDL_MIN_MAJOR, BIMBLE_SDL_MIN_MINOR, file ? " " : "", file ? file : "");
 }
@@ -777,6 +795,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(x, "--script") && v) a->script = v, i++;
         else if (!strcmp(x, "--preset") && v) a->preset = v, i++;
         else if (!strcmp(x, "--out") && v) a->out_dir = v, i++;
+#ifdef __APPLE__
+        else if (!strncmp(x, "-psn_", 5)) continue; /* MACAPP: the process serial number an older Finder passes */
+#endif
         else if (x[0] == '-') usage();
         else model = x;
     }
@@ -789,6 +810,14 @@ int main(int argc, char **argv) {
     { /* French by default, as the lab; LANG=en_* gives English */
         const char *l = getenv("LANG");
         a->lang_en = lang >= 0 ? lang : (l && !strncmp(l, "en", 2));
+#ifdef __APPLE__
+        if (lang < 0 && !(l && *l)) { /* MACAPP: Finder passes no LANG: the system's first preferred language */
+            int nl = 0;
+            SDL_Locale **loc = SDL_GetPreferredLocales(&nl);
+            if (loc && nl > 0 && loc[0]->language) a->lang_en = !strcmp(loc[0]->language, "en");
+            SDL_free(loc);
+        }
+#endif
     }
     int sv = SDL_GetVersion();
     if (SDL_VERSIONNUM_MAJOR(sv) < BIMBLE_SDL_MIN_MAJOR || (SDL_VERSIONNUM_MAJOR(sv) == BIMBLE_SDL_MIN_MAJOR && SDL_VERSIONNUM_MINOR(sv) < BIMBLE_SDL_MIN_MINOR)) {
@@ -848,7 +877,16 @@ int main(int argc, char **argv) {
     if (model) slog("asked to open %s", model);
 
     /* the window and the GPU */
+#ifdef __APPLE__
+    /* MACAPP: SDL's Metal backend needs a video driver with Metal views (Cocoa): SDL's offscreen driver has none ("No
+     * supported SDL_GPU backend found!", measured on GitHub's runners). Offscreen on macOS is Cocoa with a hidden window
+     * never claimed (the frames go to the app's own textures, as everywhere offscreen), no Dock icon, density 1. */
+    if (a->offscreen) SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
+    SDL_WindowFlags wflags = a->offscreen ? SDL_WINDOW_HIDDEN : SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#else
     if (a->offscreen) SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+    SDL_WindowFlags wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
     /* NUI3: the app id (Wayland's app_id, X11's class: a compositor's window rules; the .desktop file's name) */
     SDL_SetHint(SDL_HINT_APP_ID, "ch.bimble.bimble");
     SDL_SetAppMetadata("Bimble", CC_RELEASE_VERSION, "ch.bimble.bimble");
@@ -857,8 +895,14 @@ int main(int argc, char **argv) {
     a->dev = nv_gpu_device(&a->gpu_name, &a->gpu_driver);
     if (!a->dev) { no_gpu("no GPU device", model); slog("no GPU device: %s", SDL_GetError()); slog_close(a); return 3; }
     slog("GPU %s, driver %s; video driver %s; %s", a->gpu_name, a->gpu_driver, SDL_GetCurrentVideoDriver(), a->offscreen ? "offscreen" : "a window");
-    a->win = SDL_CreateWindow("Bimble", (int)a->lw, (int)a->lh, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if (!a->win || !SDL_ClaimWindowForGPUDevice(a->dev, a->win)) { no_gpu("no window", model); return 3; }
+    a->win = SDL_CreateWindow("Bimble", (int)a->lw, (int)a->lh, wflags);
+#ifdef __APPLE__
+    /* MACAPP: offscreen's hidden window is not claimed: no swapchain, the frames go to the app's own textures */
+    int claim = !a->offscreen;
+#else
+    int claim = 1;
+#endif
+    if (!a->win || (claim && !SDL_ClaimWindowForGPUDevice(a->dev, a->win))) { no_gpu("no window", model); return 3; }
     if (!a->offscreen) {
         int pw, ph, lw, lh;
         SDL_GetWindowSizeInPixels(a->win, &pw, &ph);
@@ -972,7 +1016,7 @@ int main(int argc, char **argv) {
     nv_render_free(a->r);
     if (a->icon_tex) SDL_ReleaseGPUTexture(a->dev, a->icon_tex);
     if (a->screen) SDL_ReleaseGPUTexture(a->dev, a->screen);
-    SDL_ReleaseWindowFromGPUDevice(a->dev, a->win);
+    if (claim) SDL_ReleaseWindowFromGPUDevice(a->dev, a->win);
     SDL_DestroyWindow(a->win);
     SDL_DestroyGPUDevice(a->dev);
     SDL_Quit();

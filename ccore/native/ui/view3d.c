@@ -3,7 +3,12 @@
  * link per thread at a time, the largest on screen first), placed as the session places it. Every
  * read of the session holds its lock (loader.h). */
 #define _GNU_SOURCE
+#ifdef __APPLE__
+#include "mac.h" /* MACAPP: mac_trim, malloc_trim's counterpart */
+#define malloc_trim(x) mac_trim()
+#else
 #include <malloc.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

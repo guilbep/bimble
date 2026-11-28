@@ -242,6 +242,9 @@ static int np_cache_dir(void *ctx, char *out, size_t n) {
     int w;
     if (e && *e) w = snprintf(out, n, "%s", e);
     else if (x && *x == '/') w = snprintf(out, n, "%s/bimble", x);
+#if defined(__APPLE__)
+    else if (h && *h) w = snprintf(out, n, "%s/Library/Caches/bimble", h); /* MACAPP (ADR 0088): macOS's place, both products' */
+#endif
     else if (h && *h) {
         char c[4096];
         if ((size_t)snprintf(c, sizeof c, "%s/.cache", h) < sizeof c) np_make_dir(ctx, c);

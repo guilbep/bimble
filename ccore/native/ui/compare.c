@@ -13,6 +13,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "ui.h"
+#ifdef __APPLE__
+#include "mac.h"
+#endif
 
 extern char **environ;
 
@@ -78,7 +81,13 @@ int compare_main(int argc, char **argv) {
         fprintf(stderr, "compare: run %d of %d: %s\n", s + 1, nsets, sets[s]);
         pid_t pid;
         int st = 0;
-        if (posix_spawn(&pid, "/proc/self/exe", NULL, NULL, av, environ) == 0) waitpid(pid, &st, 0);
+#ifdef __APPLE__
+        char self[1024];
+        if (mac_exe_path(self, sizeof self)) snprintf(self, sizeof self, "%s", argv[0]);
+#else
+        const char *self = "/proc/self/exe";
+#endif
+        if (posix_spawn(&pid, self, NULL, NULL, av, environ) == 0) waitpid(pid, &st, 0);
         else fprintf(stderr, "compare: cannot run %s\n", argv[0]);
         free(copy), free(av);
     }

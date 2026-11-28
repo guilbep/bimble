@@ -534,8 +534,13 @@ void perf_report(App *a, Buf *b) {
     gmtime_r(&now, &g);
     strftime(m1, sizeof m1, "%Y-%m-%dT%H:%M:%SZ", &g);
     buf_puts(b, "Bimble performance report\n");
-    snprintf(t, sizeof t, "date: %s; page: native app (bimble %s); system: Linux\n", m1, CC_RELEASE_VERSION), buf_puts(b, t);
-    buf_puts(b, "renderer: native (SDL GPU / Vulkan)\n");
+#ifdef __APPLE__
+    const char *sys = "macOS", *api = "Metal"; /* MACAPP: SDL's Metal backend */
+#else
+    const char *sys = "Linux", *api = "Vulkan";
+#endif
+    snprintf(t, sizeof t, "date: %s; page: native app (bimble %s); system: %s\n", m1, CC_RELEASE_VERSION, sys), buf_puts(b, t);
+    snprintf(t, sizeof t, "renderer: native (SDL GPU / %s)\n", api), buf_puts(b, t);
     optimisations_report(a, b);
     snprintf(t, sizeof t, "adapter: %s (%s)\n", a->gpu_name ? a->gpu_name : "unknown", a->gpu_driver ? a->gpu_driver : "?"), buf_puts(b, t);
     snprintf(t, sizeof t, "canvas: %u x %u px, device pixel ratio %.2g\n", a->vpw, a->vph, a->offscreen ? 1.0 : SDL_GetWindowPixelDensity(a->win)), buf_puts(b, t);
@@ -689,7 +694,12 @@ static void keys_dialog(App *a) {
         for (size_t i = 0; K && K->type == JR_ARR && i < K->n; i++) {
             const JrVal *r = &K->items[i];
             char k[64];
-            snprintf(k, sizeof k, "%s%s%s", jb(r, "ctrl") ? "Ctrl " : "", jb(r, "shift") ? "Shift " : "", js(r, "key"));
+#ifdef __APPLE__
+            const char *mod = "Cmd "; /* MACAPP: the key table's ctrl is Ctrl or Cmd (keys.ts rowOf, core.c core_key): Cmd shown */
+#else
+            const char *mod = "Ctrl ";
+#endif
+            snprintf(k, sizeof k, "%s%s%s", jb(r, "ctrl") ? mod : "", jb(r, "shift") ? "Shift " : "", js(r, "key"));
             igTableNextRow(0, 0);
             igTableNextColumn();
             igPushFont(a->f_mono, 13), igTextUnformatted(k, NULL), igPopFont();

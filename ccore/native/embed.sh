@@ -12,7 +12,8 @@ tmp=$out.tmp.$$
     i=0
     for f in "$@"; do
         echo "static const unsigned char B$i[] = {"
-        od -An -v -tu1 "$f" | sed -e 's/^ *//' -e 's/  */,/g' -e 's/$/,/' -e '/^,$/d'
+        # MACAPP: awk, not sed: BSD od pads its last line with spaces (a ",," on macOS)
+        od -An -v -tu1 "$f" | awk '{ for (i = 1; i <= NF; i++) printf "%s,", $i; if (NF) printf "\n" }'
         echo "0};"
         i=$((i + 1))
     done

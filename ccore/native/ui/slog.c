@@ -3,6 +3,7 @@
  * when BIMBLE_LOG_DIR is set. Local only: nothing leaves the machine.
  *
  *   $BIMBLE_LOG_DIR | $XDG_STATE_HOME/bimble/sessions | ~/.local/state/bimble/sessions / <UTC time>-<pid>/
+ *   (macOS, MACAPP: $BIMBLE_LOG_DIR | ~/Library/Logs/bimble/sessions / <UTC time>-<pid>/; crash addresses: atos)
  *     session.log   the app's version, SDL, GPU, display scale, window and swapchain sizes at each change, the settings
  *                   in force, every file and link opened with its times, SDL's errors and assertions, warnings
  *     frames.csv    one row a second: frames, frame ms median / p95 / max, input -> frame median / max, triangles, draws,
@@ -17,7 +18,11 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
+#ifdef __APPLE__
+#include "mac.h" /* MACAPP: the load address and LC_UUID, ~/Library/Logs */
+#else
 #include <link.h>
+#endif
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -46,6 +51,9 @@ const char *slog_dir(void) { return dir; }
 static int base_dir(char *out, size_t n) {
     const char *e = getenv("BIMBLE_LOG_DIR");
     if (e && *e) return snprintf(out, n, "%s", e) > 0;
+#ifdef __APPLE__
+    return mac_library(out, n, "Logs/bimble/sessions");
+#endif
     const char *x = getenv("XDG_STATE_HOME"), *h = getenv("HOME");
     if (x && *x) return snprintf(out, n, "%s/bimble/sessions", x) > 0;
     if (h && *h) return snprintf(out, n, "%s/.local/state/bimble/sessions", h) > 0;
@@ -203,6 +211,7 @@ static void on_signal(int sig) {
 }
 
 static char build_id[48];
+#ifndef __APPLE__
 static int exe_base(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size;
     if (!info->dlpi_name || !info->dlpi_name[0]) { /* the executable: its base and its GNU build id (native/symbolize.sh) */
@@ -225,6 +234,7 @@ static int exe_base(struct dl_phdr_info *info, size_t size, void *data) {
     }
     return 0;
 }
+#endif
 
 int slog_open(App *a) {
     if (!a->session_log) return 0;
@@ -262,7 +272,11 @@ int slog_open(App *a) {
     if (f_frames) out(f_frames, FH, sizeof FH - 1); /* the header's newline (it was cut: the first row glued to it) */
     if (f_inputs) out(f_inputs, IH, sizeof IH - 1);
     uintptr_t eb = 0;
+#ifdef __APPLE__
+    eb = mac_exe_base(build_id, sizeof build_id); /* the Mach-O header's address; the build id is the LC_UUID (the .dSYM's) */
+#else
     dl_iterate_phdr(exe_base, &eb);
+#endif
     int sv = SDL_GetVersion();
     slog("bimble %s (native), build id %s, pid %d, executable base 0x%lx (crash addresses are relative to it: native/symbolize.sh); SDL %d.%d.%d (%s)",
          CC_RELEASE_VERSION, build_id[0] ? build_id : "none", (int)getpid(), (unsigned long)eb, SDL_VERSIONNUM_MAJOR(sv), SDL_VERSIONNUM_MINOR(sv), SDL_VERSIONNUM_MICRO(sv), SDL_GetRevision());

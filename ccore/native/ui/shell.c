@@ -11,6 +11,9 @@
 #include <unistd.h>
 #include "ui.h"
 #include "calls.h"
+#ifdef __APPLE__
+#include "mac.h"
+#endif
 
 int text_button(App *a, const char *id, const char *label, int primary, int on) {
     ImVec2 sz = igCalcTextSize(label, NULL, false, -1);
@@ -47,10 +50,25 @@ static int tool_native_not_yet(const RTool *t) {
 /* The web lab on the same file, beside this app (bimble-ccore open <file>: the browser opens it). */
 static void open_web_lab(App *a) {
     char exe[1024], cmd[4096];
+#ifdef __APPLE__
+    if (mac_exe_path(exe, sizeof exe)) exe[0] = 0;
+#else
     ssize_t k = readlink("/proc/self/exe", exe, sizeof exe - 1);
     exe[k > 0 ? k : 0] = 0;
+#endif
     char *sl = strrchr(exe, '/');
     if (sl) sl[1] = 0;
+#ifdef __APPLE__
+    { /* MACAPP: bimble.app holds the native app only; the lab is the bimble-ccore archive's */
+        char c[1100];
+        snprintf(c, sizeof c, "%sbimble-ccore", exe);
+        if (access(c, X_OK)) {
+            snprintf(a->notice, sizeof a->notice, "%s: not yet on macOS from bimble.app (the bimble-ccore archive opens the lab)", T(a, "native.openInLab"));
+            a->notice_t = app_now();
+            return;
+        }
+    }
+#endif
     const char *file = jb(a->state.root, "editable") || *js(a->state.root, "file") ? a->ses->path : NULL;
     Buf q;
     buf_init(&q);

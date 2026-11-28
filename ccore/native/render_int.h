@@ -5,6 +5,30 @@
 #define NEAR_MM 10.0
 #define MAX_PARTS 1024
 
+/* MACAPP (ADR 0088): a shader's code in each format the build carries: SPIR-V (Vulkan) always; on macOS also the MSL
+ * translated from that SPIR-V (shaders/gen/<name>.msl.h, SDL_shadercross). The device's own format is taken: MSL when
+ * it takes MSL (Metal), else SPIR-V. NV_SHADER(X) names SPV_X and, on macOS, MSL_X. */
+typedef struct {
+    const uint32_t *spv;
+    size_t spv_bytes;
+    const char *msl; /* NULL: none in this build */
+    size_t msl_bytes;
+} nv_shader_code;
+#ifdef __APPLE__
+#define NV_SHADER(X) ((nv_shader_code){SPV_##X, sizeof SPV_##X, MSL_##X, sizeof MSL_##X - 1})
+#else
+#define NV_SHADER(X) ((nv_shader_code){SPV_##X, sizeof SPV_##X, NULL, 0})
+#endif
+/* the code, its size, its format and its entry point for this device (SPIRV-Cross names MSL's `main` main0) */
+static inline SDL_GPUShaderFormat nv_shader_pick(SDL_GPUDevice *d, nv_shader_code c, const Uint8 **code, size_t *bytes, const char **entry) {
+    if (c.msl && (SDL_GetGPUShaderFormats(d) & SDL_GPU_SHADERFORMAT_MSL)) {
+        *code = (const Uint8 *)c.msl, *bytes = c.msl_bytes, *entry = "main0";
+        return SDL_GPU_SHADERFORMAT_MSL;
+    }
+    *code = (const Uint8 *)c.spv, *bytes = c.spv_bytes, *entry = "main";
+    return SDL_GPU_SHADERFORMAT_SPIRV;
+}
+
 /* NUI2: the tile path's state in the renderer (tiles_gpu.c) */
 typedef struct {
     SDL_GPUGraphicsPipeline *face_w_back, *face_i_back, *proxy;

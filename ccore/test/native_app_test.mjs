@@ -13,7 +13,7 @@
 //      reported and failing only above 1 s on a software rasteriser, lavapipe or llvmpipe);
 //   4. malformed files (a truncated JSON, a garbage .bimbleview, a truncated IFC; a truncated IFC as a
 //      link) end in the core's error, never a crash (an exit code, no signal).
-// Without the binary, SDL3 or a Vulkan device: "skipped: <why>" (ci/run.sh full says so); with
+// Without the binary, SDL3 or a Vulkan device (macOS: Metal, MACAPP): "skipped: <why>" (ci/run.sh full says so); with
 // CCORE_NATIVE_REQUIRED=1 (ci/run.sh native, the CI job ccore-native) that is a failure.
 // NATIVE_WRITE_REF=1 writes the reference picture instead of comparing.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -26,6 +26,7 @@ import { readPng, inkShare, diffShare } from "./lib/png.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.NATIVE_BIN ?? join(CCORE, "out/app/bimble");
 const REQUIRED = process.env.CCORE_NATIVE_REQUIRED === "1";
+const GPU_API = process.platform === "darwin" ? "Metal" : "Vulkan"; // MACAPP: SDL's backend on each system
 const REF = join(CCORE, "results/native/fixture.png");
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
@@ -64,7 +65,8 @@ function inputs(name, r, software) {
   try { rows = readFileSync(join(r.out, "inputs.csv"), "utf8").trim().split("\n").slice(1).map((l) => l.split(",")); } catch {}
   const app = rows.map((x) => Number(x[2])), fr = rows.map((x) => Number(x[3]));
   const maxApp = Math.max(0, ...app), maxFrame = Math.max(0, ...fr), med = fr.sort((a, b) => a - b)[fr.length >> 1] ?? 0;
-  check(`${name}: ${rows.length} inputs, event -> the app's work done within 200 ms (max ${maxApp.toFixed(1)} ms)`, rows.length > 0 && maxApp <= 200);
+  const slow = rows.find((x) => Number(x[2]) === maxApp); // MACAPP: which input, and when (inputs.csv: t_s,what,app_ms,frame_ms)
+  check(`${name}: ${rows.length} inputs, event -> the app's work done within 200 ms (max ${maxApp.toFixed(1)} ms${slow ? `: ${slow[1]} at ${slow[0]} s` : ""})`, rows.length > 0 && maxApp <= 200);
   const limit = software ? 1000 : 200;
   check(`${name}: event -> the frame's GPU fence within ${limit} ms (median ${med.toFixed(1)}, max ${maxFrame.toFixed(1)} ms${software ? ", software rasteriser: 200 ms reported, not asserted" : ""})`, maxFrame <= limit);
 }
@@ -119,7 +121,7 @@ expect_text filemenu.label File
 lang fr
 frames 2
 expect_text filemenu.label Fichier
-expect_report renderer: native (SDL GPU / Vulkan)
+expect_report renderer: native (SDL GPU / ${GPU_API})
 report report.txt
 quit
 `, fixture);
@@ -129,7 +131,7 @@ quit
   const adapter = (/^adapter: (.*)$/m.exec(report) ?? [])[1] ?? "?";
   const software = /llvmpipe|lavapipe|swiftshader|software/i.test(adapter);
   console.log(`adapter: ${adapter}${software ? " (software rasteriser)" : ""}`);
-  check("fixture: the report has the renderer line", report.includes("renderer: native (SDL GPU / Vulkan)"));
+  check("fixture: the report has the renderer line", report.includes(`renderer: native (SDL GPU / ${GPU_API})`));
   let img = null;
   try { img = readPng(join(r1.out, "fixture.png")); } catch (e) { check("fixture: the shot is a PNG", false, String(e)); }
   if (img) {

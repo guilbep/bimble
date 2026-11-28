@@ -667,8 +667,15 @@ void drive_finish(App *a) {
     uint64_t peak = 0, rss = app_rss(&peak);
     nv_render_stats rs = nv_render_get_stats(a->r);
     char load[128] = "?";
+#ifdef __APPLE__
+    { /* MACAPP: no /proc: the same three averages */
+        double la[3];
+        if (getloadavg(la, 3) == 3) snprintf(load, sizeof load, "%.2f %.2f %.2f", la[0], la[1], la[2]);
+    }
+#else
     f = fopen("/proc/loadavg", "r");
     if (f) { if (fgets(load, sizeof load, f)) load[strcspn(load, "\n")] = 0; fclose(f); }
+#endif
     outpath(a, p, sizeof p, "summary.md");
     f = fopen(p, "w");
     if (f) {
@@ -681,7 +688,12 @@ void drive_finish(App *a) {
         fprintf(f, "| input -> frame median / p95 / max | %.1f / %.1f / %.1f ms (n %d) |\n", m3, p3, x3, ni);
         fprintf(f, "| input -> app work done median / p95 / max | %.1f / %.1f / %.1f ms |\n", m4, p4, x4);
         fprintf(f, "| memory peak / now | %.0f / %.0f MB |\n| GPU | %.0f MB |\n", peak / 1e6, rss / 1e6, rs.gpu_bytes / 1e6);
-        fprintf(f, "| triangles / draws (last frame) | %llu / %u |\n| links drawn | %d |\n| /proc/loadavg | %s |\n", (unsigned long long)rs.tris, rs.draws, a->nlinks, load);
+#ifdef __APPLE__
+        const char *load_label = "load average (getloadavg)"; /* MACAPP: no /proc */
+#else
+        const char *load_label = "/proc/loadavg";
+#endif
+        fprintf(f, "| triangles / draws (last frame) | %llu / %u |\n| links drawn | %d |\n| %s | %s |\n", (unsigned long long)rs.tris, rs.draws, a->nlinks, load_label, load);
         fprintf(f, "| expectations failed | %d |\n| SDL assertions | %u |\n", fails, a->sdl_asserts);
         { /* NUI2 */
             double m5, p5, x5, m6, p6, x6, m7, p7, x7, sm[NSTAGE], sp[NSTAGE], sx[NSTAGE];
