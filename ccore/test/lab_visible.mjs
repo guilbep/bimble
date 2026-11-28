@@ -28,7 +28,7 @@ import { CCORE } from "./lib/lab.mjs";
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => { if (ok) passed++; else failed++; console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`); };
 const root = mkdtempSync(join(process.env.VIS1_SCRATCH ?? tmpdir(), "ccore-lab-visible-"));
-const d = new Drive({ links: 6, storeys: 2, georef: process.env.VIS2_GEOREF !== "0", gpu: LAB_GPU, size: "1280x800", dpr: 1, profile: false, quiet: true, scratchRoot: root, lock: process.env.LAB_LOCK === "1",
+const d = new Drive({ links: 6, storeys: 2, georef: process.env.VIS2_GEOREF !== "0", gpu: LAB_GPU, size: "1280x800", dpr: 1, profile: false, quiet: true, scratchRoot: root, lock: process.env.LAB_LOCK === "1", needGb: Number(process.env.LAB_NEED_GB ?? 0), waitMin: 2, // (in the gate: no lock, no memory wait; LAB_LOCK=1 for hand runs on the real GPU, never an unbounded wait)
   hostBin: process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore") }); // (the gate builds the tcc host) // (LAB_LOCK=1: the shared measuring lock, flock -n)
 d.dir = join(root, "out");
 const bye = async (code) => { await d.close(); rmSync(root, { recursive: true, force: true }); process.exit(code); };
