@@ -64,6 +64,21 @@ async function main() {
     if (kind === "wheel") { const nav = await d.ev("window.__bbGl.nav"); check("the wheel's pivot read from the last picture's element attachment (no scan of every element)", nav.pivotPick === "readout", `${nav.pivotPick ?? "not recorded"} (${nav.zoomFrom})`); }
     check(`${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms (${r.length} inputs, worst ${Math.round(Math.max(...r.map((i) => i.ms ?? Infinity)))} ms)` : "no input recorded");
   }
+  // the same with the CPU throttled (CDP Emulation.setCPUThrottlingRate: a slow runner), after a still picture each time
+  for (const rate of (process.env.VIS2_THROTTLE ?? "4,6").split(",").map(Number).filter((x) => x > 1)) {
+    await d.gesture(["fit", ...still]);
+    const at3 = await d.ev(`(() => { const p = window.__bbGl.toScreen(${GEOREF[0] + 18000}, ${GEOREF[1] + 150}, ${GEOREF[2] + 3000}); return p ? [Math.round(p[0]), Math.round(p[1])] : null; })()`);
+    await d.S("Emulation.setCPUThrottlingRate", { rate });
+    try {
+      for (const [name, kind, g] of [["press (a click that selects)", "click", [`click ${at3[0]} ${at3[1]}`]], ["Escape", "key", ["key Escape"]], ["wheel (a zoom step)", "wheel", ["zoom 1 50"]], ["drag (an orbit starts)", "drag", ["orbit 200 0 400"]]]) {
+        const n0 = await d.ev("window.__drv.inputs.length");
+        await d.gesture([...g, ...still]);
+        const r = await d.ev(`(() => { const D = window.__drv, fr = D.frames; return D.inputs.slice(${n0}).filter((i) => i.what !== "release").map((i) => { const f = fr.find((x) => x.end >= i.t); return { what: i.what, ms: f ? f.end - i.t : null }; }); })()`);
+        const first = r.find((i) => kind === "click" ? i.what === "press" : i.what === kind);
+        check(`CPU throttled ${rate}x: ${name}: answered by a frame within ${LIMIT} ms`, !!first && first.ms !== null && first.ms <= LIMIT, first ? `${Math.round(first.ms)} ms` : "no input recorded");
+      }
+    } finally { await d.S("Emulation.setCPUThrottlingRate", { rate: 1 }); }
+  }
   // a click right after a feedback frame (Escape), before the complete picture: answered within 200 ms, the same element
   await d.gesture(["fit", ...still]); // (the home camera again: the pan moved the building)
   const at2 = await d.ev(`(() => { const p = window.__bbGl.toScreen(${GEOREF[0] + 18000}, ${GEOREF[1] + 150}, ${GEOREF[2] + 3000}); return p ? [Math.round(p[0]), Math.round(p[1])] : null; })()`);

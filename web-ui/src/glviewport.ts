@@ -1603,6 +1603,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (rate > 0 && Math.max(lastAllTris, lastRawTris) / rate > FEEDBACK_MS && stats.wholeFeedback !== true) lastCamChangeAt = performance.now(), feedbackPending = true;
   };
   let lastRawTris = 0;
+  /** VIS2: the last frame drawn has finished on the GPU (its own fence): a synchronous pixel read now does not wait behind it
+   *  (with a CPU rasteriser on a slow machine the GPU process may still draw a frame seconds after the page went quiet). */
+  let latestSync: WebGLSync | null = null;
+  const gpuIdle = (): boolean => {
+    if (!latestSync) return true;
+    if (gl.getSyncParameter(latestSync, gl.SYNC_STATUS) !== gl.SIGNALED) return false;
+    gl.deleteSync(latestSync), latestSync = null;
+    return true;
+  };
   // VIS2: the moving frames' size histograms (gl/cull.ts) made while idle, 4 ms a loop at most, so the first moving frame of
   // a gesture finds them (its own key: visGen, listsGen and no pyramid, as frame() makes it)
   let warmAt = 0, warmKey = "";
@@ -3348,6 +3357,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       proxied: prxCells.length + linkCut.reduce((n, c) => n + c.cells.length, 0), outlines: unfinished.length, linkPrxTris, budget, gpu: null, fence: null };
     ftime.end(rec); // VIS1: the frame log
     if (!frameFence) frameFence = { s: gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!, t0: tNow, tris: fTris, whole: !movingNow && !slice && cutT === 0, rec }; // VIS1 (P0-a)
+    if (latestSync) gl.deleteSync(latestSync); // VIS2: every frame's own fence (frameFence is made only when none is pending)
+    latestSync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     perfFrame(motion, tNow, gl, movingNow && fps0); // GPU1 (VIS1: moving = in motion; capped: "draw everything" kept under 100 ms)
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
   };
@@ -4012,8 +4023,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // (VIS2: from the last picture's element attachment, whatever its camera, that element alone, as the readout: the scan
     // of every element ran when that picture was not this camera's complete one, 100 to 600 ms of a wheel step or a press
     // on a project of links; a miss falls back to the plane, as before)
-    const h = pickHit(x, y, true);
-    stats.nav.pivotPick = stats.pickFrom ?? null;
+    // (VIS2: and only when the GPU has finished the last frame: else the plane at once, never a read that waits for the GPU:
+    // a wheel step took 575 ms on a slow runner whose CPU rasteriser was still drawing)
+    const idle = gpuIdle(), h = idle ? pickHit(x, y, true) : null;
+    stats.nav.pivotPick = idle ? stats.pickFrom ?? null : "gpu busy";
     stats.nav.zoomFrom = h ? "hit" : "plane";
     if (h) return h.point;
     const r = rayAt(x, y);
@@ -4040,8 +4053,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** lib.rs orbit_pivot_at: the geometry under the press, else the selection's centre, else null (the target). */
   const orbitPivotAt = (x: number, y: number): V3 | null => {
     stats.nav.picks++;
-    const h = pickHit(x, y, true); // (VIS2: as wheelPivot)
-    stats.nav.pivotPick = stats.pickFrom ?? null;
+    const idle = gpuIdle(), h = idle ? pickHit(x, y, true) : null; // (VIS2: as wheelPivot)
+    stats.nav.pivotPick = idle ? stats.pickFrom ?? null : "gpu busy";
     const p = h ? h.point : selectionCentre();
     stats.nav.orbitFrom = h ? "hit" : p ? "selection" : "target";
     stats.nav.orbitPivot = p ? toWorld(p) : null;
@@ -4314,7 +4327,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // VIS2: not while the GPU still draws the last frame (its fence not signalled) nor with a frame about to be drawn: the
     // readout's one-pixel readPixels waited for the GPU behind that frame, every frame the pointer rested on the canvas
     // (up to 840 ms of a click's 2.6 s on the owner's project: the click's own frame started 660 ms late). Asked again next loop.
-    if (frameFence || dirty) return;
+    if (!gpuIdle() || dirty) return;
     ptrDone = key;
     stats.pointerQueries++;
     const w0 = pointerWorld(ptrAt[0], ptrAt[1]);
@@ -4819,7 +4832,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // VIS1: the last picture's pyramid, when the GPU has it. VIS2: not while a later frame is in flight (its fence pending): the
     // read-back's getBufferSubData waited for the GPU behind that frame (170 to 300 ms after a whole frame on the owner's project)
     // (and not on an input's path: not with a frame to draw, nor within 200 ms of an input; the pyramid before serves meanwhile)
-    if (!frameFence && !dirty && performance.now() - lastInputAt > 200) hiz?.poll();
+    if (gpuIdle() && !dirty && performance.now() - lastInputAt > 200) hiz?.poll();
     if (!dirty && fill === null && !fillEdges && !drag && performance.now() - lastInputAt > 300) warmHists(); // VIS2
     if (!dirty && stillDue && !drag && performance.now() >= stillDue && performance.now() - lastInputAt >= motionWin()) {
       stillDue = 0;
